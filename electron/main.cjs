@@ -8,6 +8,7 @@ const ENC_PREFIX = "enc:v1:";
 const DEFAULT_START_URL = "http://localhost:3000";
 const DEFAULT_SERVER_PORT = 3210;
 const MAX_SERVER_RESTARTS = 5;
+const SERVER_READY_TIMEOUT_MS = 90_000;
 
 let mainWindow = null;
 let serverChild = null;
@@ -15,6 +16,7 @@ let isQuitting = false;
 let serverRestarts = 0;
 let renderCrashes = 0;
 let recoveredFromCrash = false;
+let serverReady = false;
 
 // --- logging ---
 
@@ -76,46 +78,60 @@ function standaloneServerPath() {
   return path.join(__dirname, "..", ".next", "standalone", "server.js");
 }
 
-function waitForServer(url, timeoutMs) {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + timeoutMs;
+function lastLines(text, maxLines) {
+  return String(text)
+    .split("\n")
+    .filter((line) => line.trim().length > 0)
+    .slice(-maxLines)
+    .join("\n");
+}
 
-    const retry = () => {
-      if (Date.now() > deadline) {
-        reject(new Error("Embedded server did not become ready in time"));
-        return;
-      }
-      setTimeout(attempt, 300);
-    };
+function scheduleServerRestart() {
+  serverChild = null;
+  if (isQuitting) return;
 
-    const attempt = () => {
-      const req = http.get(url, (res) => {
-        res.resume();
-        if (res.statusCode && res.statusCode < 500) resolve();
-        else retry();
-      });
-      req.on("error", retry);
-      req.setTimeout(1000, () => {
-        req.destroy();
-        retry();
-      });
-    };
+  if (!serverReady) {
+    log("server", "Not restarting: embedded server never became ready (startup error already reported).");
+    return;
+  }
+  if (serverRestarts >= MAX_SERVER_RESTARTS) {
+    log("server", `Not restarting: reached max restart attempts (${MAX_SERVER_RESTARTS}).`);
+    return;
+  }
 
-    attempt();
-  });
+  serverRestarts += 1;
+  log("server", `Restarting embedded server in 1s (attempt ${serverRestarts}/${MAX_SERVER_RESTARTS})...`);
+  setTimeout(() => {
+    if (!isQuitting) startEmbeddedServer().catch((error) => log("server", `Restart failed: ${error.message}`));
+  }, 1000);
 }
 
 function startEmbeddedServer() {
   const serverPath = standaloneServerPath();
   if (!fs.existsSync(serverPath)) {
-    log("server", `Standalone server not found at ${serverPath}. Run "npm run build:standalone" first.`);
-    return Promise.reject(new Error(`Standalone server not found: ${serverPath}`));
+    const message = `Standalone server not found at ${serverPath}. Run "npm run build:standalone" first.`;
+    log("server", message);
+    return Promise.reject(new Error(message));
   }
 
   const port = Number(process.env.ELECTRON_SERVER_PORT || DEFAULT_SERVER_PORT);
   const dbPath = path.join(userDataDir(), "dev.db");
+  const migrationsDir = path.join(path.dirname(serverPath), "drizzle");
+  const staticDir = path.join(path.dirname(serverPath), ".next", "static");
+
+  // Make sure the data directory exists before the server opens the SQLite file.
+  try {
+    fs.mkdirSync(userDataDir(), { recursive: true });
+  } catch (error) {
+    log("server", `Warning: could not create data dir: ${error.message}`);
+  }
+
   log("server", `Starting embedded Next.js server on 127.0.0.1:${port}`);
   log("server", `Database: ${dbPath}`);
+  log("server", `Migrations dir: ${migrationsDir} (${fs.existsSync(migrationsDir) ? "found" : "MISSING"})`);
+  log("server", `Static dir: ${staticDir} (${fs.existsSync(staticDir) ? "found" : "missing"})`);
+
+  serverReady = false;
 
   serverChild = fork(serverPath, [], {
     env: {
@@ -127,13 +143,27 @@ function startEmbeddedServer() {
       PORT: String(port),
       DATABASE_URL: `file:${dbPath}`,
       ELECTRON_VAULT: "1",
-      DRIZZLE_MIGRATIONS_DIR: path.join(path.dirname(serverPath), "drizzle"),
+      DRIZZLE_MIGRATIONS_DIR: migrationsDir,
     },
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
 
-  serverChild.stdout.on("data", (chunk) => log("server", String(chunk).trimEnd()));
-  serverChild.stderr.on("data", (chunk) => log("server", String(chunk).trimEnd()));
+  let startupOutput = "";
+
+  serverChild.stdout.on("data", (chunk) => {
+    const text = String(chunk).trimEnd();
+    if (text) {
+      startupOutput += `${text}\n`;
+      log("server", text);
+    }
+  });
+  serverChild.stderr.on("data", (chunk) => {
+    const text = String(chunk).trimEnd();
+    if (text) {
+      startupOutput += `${text}\n`;
+      log("server", text);
+    }
+  });
 
   serverChild.on("message", (message) => {
     if (!message || message.type !== "vault:decrypt" || !message.id) return;
@@ -149,19 +179,60 @@ function startEmbeddedServer() {
     }
   });
 
-  serverChild.on("exit", (code, signal) => {
-    log("server", `Server exited (code=${code}, signal=${signal})`);
-    serverChild = null;
-    if (!isQuitting && serverRestarts < MAX_SERVER_RESTARTS) {
-      serverRestarts += 1;
-      log("server", `Restarting server in 1s (attempt ${serverRestarts}/${MAX_SERVER_RESTARTS})...`);
-      setTimeout(() => {
-        if (!isQuitting) startEmbeddedServer().catch((error) => log("server", error.message));
-      }, 1000);
-    }
-  });
+  return new Promise((resolve, reject) => {
+    const healthUrl = `http://127.0.0.1:${port}/api/health`;
+    const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
+    let settled = false;
 
-  return waitForServer(`http://127.0.0.1:${port}/api/health`, 30_000);
+    const settle = (error) => {
+      if (settled) return;
+      settled = true;
+      if (error) reject(error);
+      else {
+        serverReady = true;
+        log("server", "Embedded server is ready.");
+        resolve();
+      }
+    };
+
+    const onExit = (code, signal) => {
+      const tail = startupOutput ? `\nLast server output:\n${lastLines(startupOutput, 40)}` : "";
+      if (!settled) {
+        log("server", `Server process exited before ready (code=${code}, signal=${signal}).${tail}`);
+        settle(new Error(`Embedded server exited before becoming ready (code=${code ?? "null"}, signal=${signal ?? "none"}).${tail}`));
+      } else {
+        log("server", `Server process exited (code=${code}, signal=${signal}).`);
+      }
+      scheduleServerRestart();
+    };
+    serverChild.on("exit", onExit);
+
+    const attempt = () => {
+      if (settled) return;
+      const req = http.get(healthUrl, (res) => {
+        res.resume();
+        if (res.statusCode && res.statusCode < 500) settle();
+        else retry();
+      });
+      req.on("error", retry);
+      req.setTimeout(1000, () => {
+        req.destroy();
+        retry();
+      });
+    };
+
+    const retry = () => {
+      if (settled) return;
+      if (Date.now() > deadline) {
+        const tail = startupOutput ? `\nLast server output:\n${lastLines(startupOutput, 40)}` : "";
+        settle(new Error(`Embedded server did not become ready in time (${SERVER_READY_TIMEOUT_MS}ms).${tail}`));
+        return;
+      }
+      setTimeout(attempt, 300);
+    };
+
+    attempt();
+  });
 }
 
 // --- window ---
