@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog, ipcMain, session, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, session, safeStorage, shell } = require("electron");
 const { fork } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -246,6 +246,7 @@ function createWindow(startUrl) {
     height: bounds.height,
     minWidth: 1100,
     minHeight: 700,
+    title: "Multi-Agent Code Studio",
     backgroundColor: "#1e1e1e",
     show: false,
     webPreferences: {
@@ -266,6 +267,19 @@ function createWindow(startUrl) {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (url.startsWith("https://") || url.startsWith("http://")) shell.openExternal(url);
     return { action: "deny" };
+  });
+
+  mainWindow.webContents.on("console-message", (_event, details) => {
+    const level = ["verbose", "info", "warning", "error"][details.level] ?? details.level;
+    log("renderer", `[${level}] ${details.message} (${details.sourceUrl}:${details.lineNumber})`);
+  });
+
+  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    log("app", `Page failed to load: ${errorDescription} (code=${errorCode}) url=${validatedURL} mainFrame=${isMainFrame}`);
+  });
+
+  mainWindow.webContents.on("did-finish-load", () => {
+    log("app", "Page finished loading.");
   });
 
   let saveTimer = null;
@@ -289,6 +303,30 @@ function createWindow(startUrl) {
   });
 
   mainWindow.loadURL(startUrl);
+}
+
+function installApplicationMenu() {
+  const template = [
+    ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
+    { role: "fileMenu" },
+    { role: "editMenu" },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "forceReload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+    { role: "windowMenu" },
+  ];
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 // --- IPC handlers ---
@@ -341,6 +379,8 @@ app.whenReady().then(async () => {
   }
 
   session.defaultSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+
+  installApplicationMenu();
 
   const embedded = app.isPackaged || process.env.ELECTRON_EMBED_SERVER === "1";
   const port = Number(process.env.ELECTRON_SERVER_PORT || DEFAULT_SERVER_PORT);

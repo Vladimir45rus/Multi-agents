@@ -1,5 +1,5 @@
 {
-  "name": "nextjs-postgresql-template",
+  "name": "multi-agent-code-studio",
   "version": "1.0.0",
   "private": true,
   "main": "electron/main.cjs",
