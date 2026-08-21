@@ -1,0 +1,12 @@
+node_modules/
+.next/
+.env*
+!.env.example
+dev.db
+*.db
+.multi-agent-backups/
+npm-debug.log*
+release/
+dist/
+*.log
+*.tsbuildinfo
