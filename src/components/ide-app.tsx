@@ -442,6 +442,34 @@ export function IdeApp() {
 
   const t = dict[locale];
 
+  // Collapse/expand helpers moved outside via useMemo render functions
+  const renderCollapseButton = (name: PanelName) => {
+    const collapsed = collapsedPanels[name];
+    return (
+      <button
+        key={`collapse-${name}`}
+        type="button"
+        onClick={() => toggleCollapse(name)}
+        title={collapsed ? t.expand : t.collapse}
+        className="rounded px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41] hover:text-white"
+      >
+        {collapsed ? "▸" : "◂"}
+      </button>
+    );
+  };
+
+  const renderExpandButton = (name: string) => (
+    <button
+      key={`expand-${name}`}
+      type="button"
+      onClick={() => toggleFullscreen(name)}
+      title={t.expand}
+      className="rounded px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41] hover:text-white"
+    >
+      □
+    </button>
+  );
+
   const settingsDirty = useMemo(() => {
     const saved = data?.settings;
     if (!saved) return false;
@@ -824,30 +852,6 @@ export function IdeApp() {
       return;
     }
     await loadWorkspace(null, locale);
-  }
-
-  // --- Collapse button component ---
-
-  function CollapseButton({ name, label }: { name: PanelName; label: string }) {
-    const collapsed = collapsedPanels[name];
-    return (
-      <button
-        type="button"
-        onClick={() => toggleCollapse(name)}
-        title={collapsed ? t.expand : t.collapse}
-        className="rounded px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41] hover:text-white"
-      >
-        {collapsed ? "▸" : "◂"}
-      </button>
-    );
-  }
-
-  function ExpandButton({ name }: { name: string }) {
-    return (
-      <button type="button" onClick={() => toggleFullscreen(name)} title={t.expand} className="rounded px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41] hover:text-white">
-        □
-      </button>
-    );
   }
 
   function switchLocale(next: UiLocale) {
@@ -1456,8 +1460,8 @@ export function IdeApp() {
                   <div className="flex items-center gap-0.5">
                     <button type="button" onClick={() => createTreeEntry("file")} title={t.newFile} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📄</button>
                     <button type="button" onClick={() => createTreeEntry("directory")} title={t.newFolder} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📁</button>
-                    <CollapseButton name="explorer" label={t.explorer} />
-                    <ExpandButton name="explorer" />
+                    {renderCollapseButton("explorer")}
+                    {renderExpandButton("explorer")}
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto p-1">
@@ -1511,8 +1515,8 @@ export function IdeApp() {
                     <button type="button" onClick={saveFile} disabled={!selectedFile || !mainAgent || busy || fileStatuses[selectedFile?.path ?? ""] !== "modified"} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">
                       {t.saveMain}
                     </button>
-                    <CollapseButton name="editor" label={t.editor} />
-                    <ExpandButton name="editor" />
+                    {renderCollapseButton("editor")}
+                    {renderExpandButton("editor")}
                   </div>
                 </div>
                 <textarea value={editorText} onChange={(e) => {
@@ -1537,8 +1541,8 @@ export function IdeApp() {
                   <span className="truncate">{t.leadChat}</span>
                   <div className="flex items-center gap-0.5">
                     <span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
-                    <CollapseButton name="lead" label={t.leadChat} />
-                    <ExpandButton name="lead" />
+                    {renderCollapseButton("lead")}
+                    {renderExpandButton("lead")}
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
@@ -1582,8 +1586,8 @@ export function IdeApp() {
                   <span className="truncate">{t.allChat}</span>
                   <div className="flex items-center gap-0.5">
                     <span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
-                    <CollapseButton name="group" label={t.allChat} />
-                    <ExpandButton name="group" />
+                    {renderCollapseButton("group")}
+                    {renderExpandButton("group")}
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
@@ -1649,8 +1653,8 @@ export function IdeApp() {
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.terminal}</span>
                   <div className="flex items-center gap-0.5">
-                    <CollapseButton name="terminal" label={t.terminal} />
-                    <ExpandButton name="terminal" />
+                    {renderCollapseButton("terminal")}
+                    {renderExpandButton("terminal")}
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto bg-[#111214] p-3 font-mono text-xs">
@@ -1676,8 +1680,8 @@ export function IdeApp() {
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.logsTitle}</span>
                   <div className="flex items-center gap-0.5">
-                    <CollapseButton name="logs" label={t.logsTitle} />
-                    <ExpandButton name="logs" />
+                    {renderCollapseButton("logs")}
+                    {renderExpandButton("logs")}
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 text-xs">
