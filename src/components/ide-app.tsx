@@ -140,6 +140,23 @@ const ROLE_COLORS: Record<string, string> = {
   observer: "#9da3b2",
 };
 
+const AGENT_COLOR_PALETTE = [
+  "#4fc1ff", "#6a9955", "#ce9178", "#dcdcaa", "#c586c0",
+  "#f48771", "#9da3b2", "#569cd6", "#d7ba7d", "#b5cea8",
+  "#e8ab53", "#4ec9b0", "#f8c555", "#d16969", "#646695",
+  "#c586c0", "#7cdc8a", "#f97cb5", "#61afef", "#e06c75",
+];
+
+function pickUniqueColor(existingColors: string[], role?: string): string {
+  const used = new Set(existingColors.map((c) => c.toLowerCase()));
+  const roleColor = role ? ROLE_COLORS[role] : undefined;
+  if (roleColor && !used.has(roleColor.toLowerCase())) return roleColor;
+  for (const color of AGENT_COLOR_PALETTE) {
+    if (!used.has(color.toLowerCase())) return color;
+  }
+  return AGENT_COLOR_PALETTE[0];
+}
+
 const ROLE_PRIORITY: Record<string, number> = {
   main: 0,
   architect: 1,
@@ -349,7 +366,7 @@ const dict = {
   },
 };
 
-const emptyNewAgent = (overrides: Partial<NewAgentDraft> = {}): NewAgentDraft => {
+const emptyNewAgent = (overrides: Partial<NewAgentDraft> = {}, existingColors: string[] = []): NewAgentDraft => {
   const preset = getProviderPreset("openrouter");
   const role = overrides.role ?? "advisor";
   return {
@@ -361,7 +378,7 @@ const emptyNewAgent = (overrides: Partial<NewAgentDraft> = {}): NewAgentDraft =>
     description: "",
     skill: "",
     systemPrompt: "",
-    color: ROLE_COLORS[role] ?? "#4fc1ff",
+    color: overrides.color ?? pickUniqueColor(existingColors, role),
     manualModel: false,
     ...overrides,
   };
@@ -957,7 +974,7 @@ export function IdeApp() {
         body: JSON.stringify({ ...newAgent, locale }),
       });
       if (!res.ok) throw new Error("error");
-      setNewAgent(emptyNewAgent());
+      setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? "")));
       await loadWorkspace(selectedFileId, locale);
     } finally {
       setBusy(false);
@@ -1928,7 +1945,7 @@ export function IdeApp() {
 
               {/* Add agent button / form */}
               {!showAddAgent ? (
-                <button type="button" onClick={() => { setShowAddAgent(true); setAddAgentMode(null); setNewAgent(emptyNewAgent()); }} className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-[#3a3d41] bg-[#1e1e1e] px-3 py-2 text-xs text-[#9da3b2] hover:border-[#4fc1ff] hover:text-white">
+                <button type="button" onClick={() => { setShowAddAgent(true); setAddAgentMode(null); setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? ""))); }} className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-[#3a3d41] bg-[#1e1e1e] px-3 py-2 text-xs text-[#9da3b2] hover:border-[#4fc1ff] hover:text-white">
                   + {locale === "ru" ? "Добавить агента" : "Add agent"}
                 </button>
               ) : (
@@ -1946,7 +1963,7 @@ export function IdeApp() {
                           key={role}
                           type="button"
                           onClick={() => {
-                            setNewAgent(emptyNewAgent({ role, color: ROLE_COLORS[role] ?? "#4fc1ff" }));
+                            setNewAgent(emptyNewAgent({ role }, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? "")));
                             setAddAgentMode("template");
                           }}
                           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
@@ -1959,7 +1976,7 @@ export function IdeApp() {
                       <div className="border-t border-[#3a3d41] pt-1">
                         <button
                           type="button"
-                          onClick={() => { setNewAgent(emptyNewAgent()); setAddAgentMode("custom"); }}
+                          onClick={() => { setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? ""))); setAddAgentMode("custom"); }}
                           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
                         >
                           ✨ {locale === "ru" ? "Создать с нуля" : "Create from scratch"}
