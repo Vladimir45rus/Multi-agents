@@ -1,11 +1,13 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallback } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { appendStreamDelta, finishStream, type ChatStreamState } from "@/lib/chat-state";
+
+const CodeEditor = lazy(() => import("@/components/code-editor"));
 
 type ChatMessageStatus = "sending" | "sent" | "error" | "cancelled";
 type ChatRetryRequest = {
@@ -275,6 +277,13 @@ const dict = {
     error429: "⚠️ Ошибка 429 (Превышен лимит запросов). Смените модель или провайдера.",
     errorDefault: "⚠️ Произошла ошибка. Попробуйте ещё раз или смените модель.",
     logsTitle: "ЛОГИ / СИСТЕМНЫЕ СОБЫТИЯ",
+    search: "Поиск по файлам",
+    searchPlaceholder: "Поиск по проекту (Ctrl+P)...",
+    noResults: "Ничего не найдено",
+    exportAgents: "Экспорт агентов",
+    importAgents: "Импорт агентов",
+    importAgentsDesc: "Выберите .json файл с конфигурацией агентов",
+    diff: "Изменения",
   },
   en: {
     loading: "Loading workspace...",
@@ -363,6 +372,13 @@ const dict = {
     error429: "⚠️ Error 429 (Rate limit exceeded). Switch model or provider.",
     errorDefault: "⚠️ An error occurred. Try again or switch models.",
     logsTitle: "LOGS / SYSTEM EVENTS",
+    search: "Search files",
+    searchPlaceholder: "Search project (Ctrl+P)...",
+    noResults: "No results found",
+    exportAgents: "Export agents",
+    importAgents: "Import agents",
+    importAgentsDesc: "Select .json file with agent configuration",
+    diff: "Changes",
   },
 };
 
@@ -417,6 +433,9 @@ export function IdeApp() {
   const [workspaceTreeEntries, setWorkspaceTreeEntries] = useState<WorkspaceTreeEntry[]>([]);
   const [fileStatuses, setFileStatuses] = useState<Record<string, "new" | "modified" | "saved">>({});
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
+  const [openTabs, setOpenTabs] = useState<Array<{ id: number; path: string; content: string }>>([]);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState<Array<{ path: string; line: number; content: string }>>([]);
 
   const [apiKeysDraft, setApiKeysDraft] = useState<Record<string, string>>({});
   const [githubTokenDraft, setGithubTokenDraft] = useState("");
@@ -516,7 +535,10 @@ export function IdeApp() {
       if (contextMenu && !(e.target as HTMLElement).closest(".context-menu")) setContextMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && contextMenu) setContextMenu(null);
+      if (e.key === "Escape" && contextMenu) { setContextMenu(null); return; }
+      if (e.key === "Escape" && searchQuery) { setSearchQuery(""); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === "p") { e.preventDefault(); setSearchQuery(""); setSearchResults([]); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveFile(); return; }
     };
     window.addEventListener("click", close);
     window.addEventListener("keydown", onKey);
@@ -524,7 +546,7 @@ export function IdeApp() {
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [contextMenu]);
+  }, [contextMenu, searchQuery, selectedFile, editorText, mainAgent, busy, fileStatuses]);
 
   function roleLabel(role: string) {
     if (locale === "ru") {
@@ -623,16 +645,96 @@ export function IdeApp() {
     if (file.kind !== "file") return;
     const indexedFile = data?.files.find((candidate) => candidate.path === file.path);
     if (!indexedFile) return;
+    // Add to tabs if not already open
+    setOpenTabs((prev) => {
+      if (prev.some((t) => t.id === indexedFile.id)) return prev;
+      return [...prev, { id: indexedFile.id, path: indexedFile.path, content: indexedFile.content }];
+    });
     setSelectedFileId(indexedFile.id);
     try {
       const response = await fetch(`/api/workspace/file?path=${encodeURIComponent(file.path)}`, { cache: "no-store" });
       const payload = response.ok ? (await response.json()) as { content?: string } : null;
       const content = typeof payload?.content === "string" ? payload.content : indexedFile.content;
       setEditorText(content);
+      setOpenTabs((prev) => prev.map((t) => t.id === indexedFile.id ? { ...t, content } : t));
       setData((previous) => previous ? { ...previous, files: previous.files.map((candidate) => candidate.id === indexedFile.id ? { ...candidate, content } : candidate) } : previous);
       setFileStatuses((previous) => ({ ...previous, [file.path]: "saved" }));
     } catch {
       setEditorText(indexedFile.content);
+    }
+  }
+
+  function closeTab(tabId: number) {
+    setOpenTabs((prev) => {
+      const next = prev.filter((t) => t.id !== tabId);
+      if (selectedFileId === tabId && next.length > 0) {
+        const tab = next[next.length - 1];
+        setSelectedFileId(tab.id);
+        setEditorText(tab.content);
+      } else if (next.length === 0) {
+        setSelectedFileId(null);
+        setEditorText("");
+      }
+      return next;
+    });
+  }
+
+  async function searchFiles() {
+    if (!searchQuery.trim()) { setSearchResults([]); return; }
+    try {
+      const res = await fetch("/api/workspace/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: searchQuery, maxResults: 20 }),
+      });
+      if (!res.ok) return;
+      const payload = (await res.json()) as { results?: Array<{ path: string; line: number; content: string }> };
+      setSearchResults(payload.results ?? []);
+    } catch {
+      setSearchResults([]);
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { if (searchQuery) searchFiles(); }, 200);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchQuery]);
+
+  function quickCommand(cmd: string, channel: ChatChannel) {
+    const target = channel === "lead" ? leadMessage : groupMessage;
+    const setter = channel === "lead" ? setLeadMessage : setGroupMessage;
+    setter(target + cmd + " ");
+  }
+
+  function handleMentionInput(channel: ChatChannel, value: string) {
+    const setter = channel === "lead" ? setLeadMessage : setGroupMessage;
+    setter(value);
+  }
+
+  function exportAgents() {
+    if (!data?.agents) return;
+    const json = JSON.stringify(data.agents.map((a) => ({ name: a.name, provider: a.provider, baseUrl: a.baseUrl, model: a.model, role: a.role, description: a.description, skill: a.skill, systemPrompt: a.systemPrompt, color: a.color ?? ROLE_COLORS[a.role] ?? "#4fc1ff" })), null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "agents-config.json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function importAgentsFromFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const agents = JSON.parse(text) as Array<{ name: string; provider: string; baseUrl: string; model: string; role: string; description: string; skill: string; systemPrompt: string; color: string }>;
+      for (const agent of agents) {
+        await fetch("/api/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...agent, locale }) });
+      }
+      await loadWorkspace(selectedFileId, locale);
+    } catch {
+      setStatus(locale === "ru" ? "Не удалось импортировать агентов" : "Failed to import agents");
     }
   }
 
@@ -1425,7 +1527,36 @@ export function IdeApp() {
   return (
     <main className="relative h-screen overflow-hidden bg-[#1e1e1e] pb-6 text-[#d4d4d4]">
       <header className="flex h-10 items-center justify-between border-b border-[#2d2d30] bg-[#252526] px-3">
-        <div className="text-sm font-semibold">Multi-Agent Code Studio</div>
+        <div className="flex items-center gap-3">
+          <span className="text-sm font-semibold">Multi-Agent Code Studio</span>
+          <div className="relative">
+            <input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder={t.searchPlaceholder}
+              className="w-[200px] rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-[11px] outline-none focus:border-[#007acc]"
+            />
+            {searchQuery && searchResults.length > 0 && (
+              <div className="absolute left-0 top-full z-40 mt-1 max-h-[300px] w-[400px] overflow-y-auto rounded border border-[#3a3d41] bg-[#252526] shadow-lg">
+                {searchResults.map((r, i) => (
+                  <button
+                    key={`${r.path}:${r.line}:${i}`}
+                    type="button"
+                    onClick={() => {
+                      const entry = workspaceTreeEntries.find((e) => e.path === r.path);
+                      if (entry) { selectWorkspaceFile(entry); setSearchQuery(""); setSearchResults([]); }
+                    }}
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[#37373d]"
+                  >
+                    <span className="text-[#6a9955]">{r.path}</span>
+                    <span className="text-[#9da3b2]">:{r.line}</span>
+                    <span className="ml-auto truncate text-[#9da3b2]">{r.content.slice(0, 50)}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
         <div className="flex items-center gap-2">
           <button type="button" onClick={pushToGithub} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white" disabled={busy}>
             {t.pushGithub}
@@ -1519,10 +1650,37 @@ export function IdeApp() {
                     {renderExpandButton("editor")}
                   </div>
                 </div>
-                <textarea value={editorText} onChange={(e) => {
-                  setEditorText(e.target.value);
-                  if (selectedFile) setFileStatuses((previous) => ({ ...previous, [selectedFile.path]: e.target.value === selectedFile.content ? "saved" : "modified" }));
-                }} spellCheck={false} className="min-h-0 flex-1 resize-none bg-[#1e1e1e] p-3 font-mono text-sm outline-none" />
+                {/* Tab bar */}
+                {openTabs.length > 0 && (
+                  <div className="flex items-center border-b border-[#2d2d30] bg-[#1e1e1e] overflow-x-auto">
+                    {openTabs.map((tab) => (
+                      <div
+                        key={tab.id}
+                        onClick={() => { setSelectedFileId(tab.id); setEditorText(tab.content); }}
+                        className={`flex items-center gap-1 shrink-0 cursor-pointer border-r border-[#2d2d30] px-3 py-1 text-[11px] ${tab.id === selectedFileId ? "bg-[#37373d] text-white" : "text-[#9da3b2] hover:bg-[#2a2d2e]"}`}
+                      >
+                        <span className="truncate max-w-[120px]">{tab.path.split("/").pop() || tab.path}</span>
+                        <button type="button" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} className="ml-1 rounded-full px-1 text-[10px] hover:bg-[#555]">✕</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {selectedFile ? (
+                  <Suspense fallback={<div className="flex min-h-0 flex-1 items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">Loading editor...</div>}>
+                    <CodeEditor
+                      filePath={selectedFile.path}
+                      value={editorText}
+                      onChange={(v) => {
+                        setEditorText(v);
+                        if (selectedFile) setFileStatuses((previous) => ({ ...previous, [selectedFile.path]: v === selectedFile.content ? "saved" : "modified" }));
+                        setOpenTabs((prev) => prev.map((t) => t.id === selectedFile.id ? { ...t, content: v } : t));
+                      }}
+                      onSave={saveFile}
+                    />
+                  </Suspense>
+                ) : (
+                  <div className="flex min-h-0 flex-1 items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">{t.noFile}</div>
+                )}
               </section>
             )}
           </div>
@@ -1562,8 +1720,16 @@ export function IdeApp() {
                   <div ref={leadChatEndRef} aria-hidden="true" />
                 </div>
                 <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="border-t border-[#2d2d30] p-3">
+                  <div className="mb-1 flex flex-wrap gap-1">
+                    {["/fix", "/explain", "/test", "/refactor", "/docs"].map((cmd) => (
+                      <button key={cmd} type="button" onClick={() => quickCommand(`${cmd} `, "lead")} className="rounded bg-[#2d2d30] px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41]">{cmd}</button>
+                    ))}
+                    {sortAgents(data?.agents ?? []).map((agent) => (
+                      <button key={`@-lead-${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "lead")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[#2d2d30]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
+                    ))}
+                  </div>
                   <div className="flex gap-2">
-                    <input value={leadMessage} onChange={(e) => setLeadMessage(e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <input value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -1629,8 +1795,16 @@ export function IdeApp() {
                       </button>
                     </div>
                   ) : null}
+                  <div className="mb-1 flex flex-wrap gap-1">
+                    {["/fix", "/explain", "/test", "/refactor", "/docs"].map((cmd) => (
+                      <button key={cmd} type="button" onClick={() => quickCommand(`${cmd} `, "group")} className="rounded bg-[#2d2d30] px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41]">{cmd}</button>
+                    ))}
+                    {sortAgents(data?.agents ?? []).map((agent) => (
+                      <button key={`@${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "group")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[#2d2d30]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
+                    ))}
+                  </div>
                   <div className="flex gap-2">
-                    <input value={groupMessage} onChange={(e) => setGroupMessage(e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <input value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -1843,6 +2017,20 @@ export function IdeApp() {
 
             <button type="button" onClick={saveApiKeys} disabled={busy || !settingsDirty} className="mt-2 rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.saveKeys}</button>
             </> : null}
+          </section>
+
+          <section className="mb-5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs uppercase text-[#9da3b2]">{locale === "ru" ? "ЭКСПОРТ / ИМПОРТ" : "EXPORT / IMPORT"}</span>
+              <div className="flex gap-2">
+                <button type="button" onClick={exportAgents} className="rounded bg-[#3a3d41] px-2 py-1 text-xs text-white">{t.exportAgents}</button>
+                <label className="cursor-pointer rounded bg-[#3a3d41] px-2 py-1 text-xs text-white">
+                  {t.importAgents}
+                  <input type="file" accept=".json" className="hidden" onChange={importAgentsFromFile} />
+                </label>
+              </div>
+            </div>
+            <p className="text-[10px] text-[#9da3b2]">{t.importAgentsDesc}</p>
           </section>
 
           <section>

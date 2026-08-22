@@ -1,0 +1,58 @@
+"use client";
+
+import dynamic from "next/dynamic";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { ComponentType } from "react";
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type MonacoEditorType = ComponentType<any>;
+
+const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default as MonacoEditorType), { ssr: false }) as MonacoEditorType;
+
+function languageFromPath(filePath: string): string {
+  const ext = (filePath.split(".").pop() ?? "").toLowerCase();
+  const map: Record<string, string> = {
+    ts: "typescript", tsx: "typescript", js: "javascript", jsx: "javascript",
+    json: "json", css: "css", scss: "scss", html: "html", htm: "html",
+    md: "markdown", py: "python", rs: "rust", go: "go", java: "java",
+    yml: "yaml", yaml: "yaml", xml: "xml", sql: "sql", sh: "shell",
+    bash: "shell", env: "plaintext", gitignore: "plaintext", dockerfile: "dockerfile",
+    c: "c", cpp: "cpp", h: "c", rb: "ruby", php: "php", swift: "swift",
+    kt: "kotlin", dart: "dart", lua: "lua", r: "r", toml: "toml",
+  };
+  return map[ext] ?? "plaintext";
+}
+
+export default function CodeEditor({ filePath, value, onChange, onSave, readOnly }: {
+  filePath: string; value: string; onChange: (v: string) => void; onSave?: () => void; readOnly?: boolean;
+}) {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => { setMounted(true); }, []);
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handleMount = useCallback((ed: any, mon: any) => {
+    mon.editor.defineTheme("codebuff-dark", {
+      base: "vs-dark", inherit: true, rules: [],
+      colors: { "editor.background": "#1e1e1e", "editor.lineHighlightBackground": "#2a2d2e", "editor.selectionBackground": "#264f78" },
+    });
+    if (onSave) ed.addCommand(mon.KeyMod.CtrlCmd | mon.KeyCode.KeyS, () => onSave());
+  }, [onSave]);
+
+  const language = languageFromPath(filePath);
+  const options = useMemo(() => ({
+    minimap: { enabled: false }, fontSize: 13,
+    fontFamily: "'Cascadia Code', 'Fira Code', 'JetBrains Mono', Consolas, monospace",
+    lineNumbers: "on" as const, renderWhitespace: "selection" as const,
+    scrollBeyondLastLine: false, automaticLayout: true, tabSize: 2,
+    wordWrap: "off" as const, readOnly, padding: { top: 8 },
+  }), [readOnly]);
+
+  if (!mounted) return <div className="flex min-h-0 flex-1 items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">Loading editor...</div>;
+
+  return (
+    <div className="min-h-0 flex-1">
+      <MonacoEditor height="100%" language={language} value={value} onChange={(v: string) => onChange(v ?? "")} theme="codebuff-dark" loading={<div className="flex h-full items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">Loading editor...</div>} options={options} onMount={handleMount} />
+    </div>
+  );
+}
