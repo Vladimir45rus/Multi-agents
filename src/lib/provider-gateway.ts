@@ -24,6 +24,7 @@ export type ProviderGatewayOptions = {
   maxRetries?: number;
   signal?: AbortSignal;
   jsonMode?: boolean;
+  tools?: Array<Record<string, unknown>>;
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -186,12 +187,13 @@ function buildGeminiBody(messages: GatewayMessage[], jsonMode = false) {
   };
 }
 
-function buildOpenAiBody(model: string, messages: GatewayMessage[], jsonMode = false) {
+function buildOpenAiBody(model: string, messages: GatewayMessage[], jsonMode = false, tools?: Array<Record<string, unknown>>) {
   return {
     model,
     messages,
     stream: true,
     ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
+    ...(tools?.length ? { tools, tool_choice: "auto" } : {}),
   };
 }
 
@@ -218,6 +220,7 @@ async function fetchWithRetry(
   request: ReturnType<typeof validateRequest>,
   messages: GatewayMessage[],
   options: ProviderGatewayOptions,
+  tools?: Array<Record<string, unknown>>,
 ) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const maxRetries = Math.max(0, Math.min(options.maxRetries ?? DEFAULT_MAX_RETRIES, 5));
@@ -244,7 +247,7 @@ async function fetchWithRetry(
         ? buildGeminiBody(messages, options.jsonMode)
         : isAnthropic(request.provider)
           ? buildAnthropicBody(request.model, messages)
-          : buildOpenAiBody(request.model, messages, options.jsonMode);
+          : buildOpenAiBody(request.model, messages, options.jsonMode, tools);
       const headers = nativeGemini
         ? { Accept: "text/event-stream", "Content-Type": "application/json", "x-goog-api-key": request.apiKey }
         : headersFor(request.provider, request.apiKey);
@@ -363,7 +366,25 @@ function extractText(provider: string, raw: string) {
   const choices = Array.isArray(value.choices) ? value.choices : [];
   const firstChoice = choices[0] as Record<string, unknown> | undefined;
   const delta = firstChoice?.delta as Record<string, unknown> | undefined;
+
+  // Tool call delta
+  const toolCalls = Array.isArray(delta?.tool_calls) ? delta.tool_calls : [];
+  if (toolCalls.length > 0) {
+    const tc = toolCalls[0] as Record<string, unknown>;
+    const func = tc?.function as Record<string, unknown> | undefined;
+    if (typeof func?.name === "string" && typeof func?.arguments === "string") {
+      return { done: false, text: JSON.stringify({ function: { name: func.name, arguments: func.arguments } }) };
+    }
+    if (typeof func?.arguments === "string") {
+      return { done: false, text: func.arguments };
+    }
+    return { done: false, text: JSON.stringify(tc) };
+  }
+
   if (typeof delta?.content === "string") return { done: false, text: delta.content };
+
+  // Check finish_reason for tool_calls
+  if (firstChoice?.finish_reason === "tool_calls") return { done: true, text: "" };
 
   const candidates = Array.isArray(value.candidates) ? value.candidates : [];
   const firstCandidate = candidates[0] as Record<string, unknown> | undefined;
@@ -382,7 +403,7 @@ export async function* streamProviderResponse(
   options: ProviderGatewayOptions = {},
 ): AsyncGenerator<string> {
   const normalized = validateRequest(request);
-  const { response, cleanup } = await fetchWithRetry(normalized, messages, options);
+  const { response, cleanup } = await fetchWithRetry(normalized, messages, options, options.tools);
 
   try {
     for await (const raw of readSse(response)) {

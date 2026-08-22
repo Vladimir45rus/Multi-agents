@@ -25,6 +25,7 @@ import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
+import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
 
 export type UiLocale = "ru" | "en";
 export type ChatChannel = "group" | "lead";
@@ -818,7 +819,7 @@ export async function saveFileContent(fileId: number, content: string, actorAgen
         [
           {
             role: "system",
-            content: agentSystemPrompt(activeLocale, helper, findings.length),
+            content: agentSystemPrompt(activeLocale, helper, findings.length, false),
           },
           {
             role: "user",
@@ -931,7 +932,7 @@ function attachmentContext(locale: UiLocale, attachments: ChatAttachment[]) {
   return details.length > 0 ? `\\n\\n${t(locale, "Вложения:", "Attachments:")}\\n${details.join("\\n")}` : "";
 }
 
-function agentSystemPrompt(locale: UiLocale, agent: typeof agents.$inferSelect, findingsCount: number) {
+function agentSystemPrompt(locale: UiLocale, agent: typeof agents.$inferSelect, findingsCount: number, isMultiAgent: boolean) {
   const persona = promptPersona(locale, { skill: agent.skill, systemPrompt: agent.systemPrompt });
   const configuredModel = normalizeProviderModel(agent.provider, agent.model);
   const configuredProvider = getProviderPreset(agent.provider).label;
@@ -940,12 +941,53 @@ function agentSystemPrompt(locale: UiLocale, agent: typeof agents.$inferSelect, 
     `Твоя реальная конфигурация: роль «${agent.role}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
     `Your actual configuration: role "${agent.role}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
   );
-  const roleInstruction =
-    agent.role === "main"
-      ? t(locale, "Ты единственный агент, который может принимать и применять решения по коду. Отвечай конкретно и проверяемо.", "You are the only agent allowed to make and apply code decisions. Be concrete and verifiable.")
-      : t(locale, "Ты советник. Не редактируй код и не выдавай себя за Главного. Анализируй и передавай аргументированные рекомендации Главному.", "You are an advisor. Do not edit code or impersonate the Lead. Analyze and send reasoned recommendations to the Lead.");
 
-  return `${identity} ${persona}. ${roleInstruction} ${t(locale, "Работай как IDE-помощник: используй переданный PROJECT CONTEXT как доступный контекст файлов. Не говори, что у тебя нет доступа к локальным файлам, если контекст передан.", "Work as an IDE assistant: use the provided PROJECT CONTEXT as available file context. Do not claim you lack access to local files when context is provided.")} ${t(locale, `Текущих статических находок: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  const collaboration = isMultiAgent
+    ? t(
+        locale,
+        `Ты работаешь в команде агентов. Сначала советники изучают код и дают рекомендации. Главный агент потом применяет правки в код. Твоя роль: высказать своё мнение, проанализировать код, предложить решение. НЕ кодируй — только дай совет.
+
+ПОРЯДОК РАБОТЫ:
+1. Прочитай нужные файлы через read_file
+2. Найди проблему через search_code
+3. Выскажи своё мнение и предложи решение
+4. Главный агент применит правки после общего обсуждения
+
+НЕ ПИШИ КОД. Только анализ и рекомендации.`,
+        `You work in a team of agents. First, advisors study the code and give recommendations. Then the Lead agent applies code changes. Your role: speak up, analyze code, propose a solution. DO NOT code — only advise.
+
+WORKFLOW:
+1. Read relevant files via read_file
+2. Find issues via search_code
+3. Voice your opinion and propose a solution
+4. The Lead agent will apply changes after the team discussion
+
+DO NOT WRITE CODE. Only analysis and recommendations.`,
+      )
+    : t(
+        locale,
+        `Ты — Главный агент. Это твоя очередь кодить. Все советники уже высказались в общем чате. Теперь:
+1. Прочитай нужные файлы через read_file
+2. Напиши код через write_file
+3. Проверь работу через run_command (npm test, npx tsc --noEmit)
+4. Если тесты упали — найди ошибку, исправь, проверь снова
+
+У тебя есть ВСЕ инструменты: read_file, write_file, create_file, delete_file, search_code, run_command. Используй их чтобы довести задачу до конца.`,
+        `You are the Lead Agent. It is your turn to code. All advisors have shared their analysis in the group chat. Now:
+1. Read relevant files via read_file
+2. Write code via write_file
+3. Verify with run_command (npm test, npx tsc --noEmit)
+4. If tests fail — debug, fix, re-verify
+
+You have ALL tools: read_file, write_file, create_file, delete_file, search_code, run_command. Use them to get the task done.`,
+      );
+
+  const fileContext = t(
+    locale,
+    "Используй переданный PROJECT CONTEXT и инструменты вместо гадания. Не говори «нет доступа к файлам» — используй read_file.",
+    "Use the provided PROJECT CONTEXT and your tools instead of guessing. Do not claim 'no file access' — use read_file.");
+
+  return `${identity} ${persona}. ${collaboration} ${fileContext} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
 }
 
 async function* streamAgentReply(
@@ -955,14 +997,17 @@ async function* streamAgentReply(
   locale: UiLocale,
   attachments: ChatAttachment[],
   findingsCount: number,
-  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput },
+  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean },
 ): AsyncGenerator<ChatStreamEvent> {
   const apiKey = await getStoredProviderApiKey(agent.provider);
-  const messages = await gatewayHistory(channel);
-  const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${await buildProjectContext(options.projectContext)}`;
+  const history = await gatewayHistory(channel);
+  const projectContext = await buildProjectContext(options.projectContext);
+  const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${projectContext}`;
+  const isMulti = Boolean(options.isMultiAgent);
+
   const gatewayMessages: GatewayMessage[] = [
-    { role: "system", content: agentSystemPrompt(locale, agent, findingsCount) },
-    ...messages,
+    { role: "system", content: agentSystemPrompt(locale, agent, findingsCount, isMulti) },
+    ...history,
   ];
 
   const latest = gatewayMessages[gatewayMessages.length - 1];
@@ -978,25 +1023,53 @@ async function* streamAgentReply(
     provider: agent.provider,
     model: agent.model,
   });
-  let response = "";
+  const tools = getToolDefinitions(agent.role);
+  const mainAgentId = (await db.select({ id: agents.id }).from(agents).where(eq(agents.role, "main")).limit(1))[0]?.id ?? agent.id;
+
   yield { type: "agent_start", channel, identity };
 
-  for await (const chunk of streamProviderResponse(request, gatewayMessages, options)) {
-    response += chunk;
-    yield { type: "delta", channel, identity, text: chunk };
+  let fullResponse = "";
+  const MAX_TOOL_ROUNDS = agent.role === "main" ? 10 : 3;
+
+  for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
+    if (options.signal?.aborted) throw new Error("Chat request cancelled");
+
+    let chunkText = "";
+    for await (const chunk of streamProviderResponse(request, gatewayMessages, { ...options, tools: tools.length ? tools : undefined })) {
+      chunkText += chunk;
+      yield { type: "delta", channel, identity, text: chunk };
+    }
+
+    fullResponse += chunkText;
+
+    // Check for tool calls
+    const toolCall = parseToolCall(chunkText);
+    if (!toolCall) break; // No tool call — agent is done talking
+
+    // Execute tool
+    const toolResult = await executeToolCall(toolCall.name, toolCall.arguments, agent.role, mainAgentId);
+
+    // Feed result back and continue loop
+    gatewayMessages.push({ role: "assistant", content: chunkText });
+    gatewayMessages.push(toolResultMessage(toolCall.name, toolResult));
+
+    if (round >= MAX_TOOL_ROUNDS) {
+      fullResponse += `\n\n[Max tool rounds reached (${MAX_TOOL_ROUNDS}).]`;
+      break;
+    }
   }
 
-  if (!response.trim()) throw new Error(`${agent.name} returned an empty response`);
+  if (!fullResponse.trim()) throw new Error(`${agent.name} returned an empty response`);
 
   await pushMessage({
     chatChannel: channel,
     senderType: agent.role === "main" ? "main" : "advisor",
     agentName: agent.name,
-    content: response,
+    content: fullResponse,
     metadata: { identity },
   });
 
-  yield { type: "agent_done", channel, identity, content: response };
+  yield { type: "agent_done", channel, identity, content: fullResponse };
 }
 
 export async function* streamWorkspaceMessage(
@@ -1042,11 +1115,20 @@ export async function* streamWorkspaceMessage(
     ? [mainAgent]
     : [mainAgent, ...(await db.select().from(agents).where(and(ne(agents.role, "main"), eq(agents.isActive, true))))];
 
-  for (const agent of agentRows) {
+  const isMultiAgent = agentRows.length > 1;
+
+  for (let agentIndex = 0; agentIndex < agentRows.length; agentIndex++) {
+    const agent = agentRows[agentIndex];
     if (options?.signal?.aborted) throw new Error("Chat request cancelled");
 
     try {
-      for await (const event of streamAgentReply(agent, channel, userText, activeLocale, attachments, findingsCount, { signal: options?.signal })) {
+      // Advisors speak first (read-only mode), main agent codes last (with full tools)
+      const ctxIsMulti = isMultiAgent && agent.role !== "main"; // true for advisors in multi-agent mode
+
+      for await (const event of streamAgentReply(agent, channel, userText, activeLocale, attachments, findingsCount, {
+        signal: options?.signal,
+        isMultiAgent: ctxIsMulti,
+      })) {
         yield event;
       }
 
