@@ -182,8 +182,8 @@ function sortAgents(agents: Agent[]): Agent[] {
   });
 }
 
-const COLLAPSED_SIDE = 38;
-const COLLAPSED_BOTTOM = 38;
+const COLLAPSED_SIDE = 32;
+const COLLAPSED_BOTTOM = 32;
 
 type PanelName = "explorer" | "editor" | "lead" | "group" | "terminal" | "logs";
 
@@ -411,7 +411,7 @@ export function IdeApp() {
   const [editorText, setEditorText] = useState("");
   const [leadMessage, setLeadMessage] = useState("");
   const [groupMessage, setGroupMessage] = useState("");
-  const [duplicateToLead, setDuplicateToLead] = useState(true);
+  const [duplicateToLead, setDuplicateToLead] = useState(false);
   const [terminalCommand, setTerminalCommand] = useState("");
   const [status, setStatus] = useState(dict.ru.loading);
   const [busy, setBusy] = useState(false);
@@ -475,7 +475,8 @@ export function IdeApp() {
         type="button"
         onClick={() => toggleCollapse(name)}
         title={collapsed ? t.expand : t.collapse}
-        className="rounded px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41] hover:text-white"
+        className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10"
+        style={{ color: "var(--text-secondary)" }}
       >
         {collapsed ? "▸" : "◂"}
       </button>
@@ -488,7 +489,8 @@ export function IdeApp() {
       type="button"
       onClick={() => toggleFullscreen(name)}
       title={t.expand}
-      className="rounded px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41] hover:text-white"
+      className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10"
+      style={{ color: "var(--text-secondary)" }}
     >
       □
     </button>
@@ -518,10 +520,17 @@ export function IdeApp() {
 
   const selectedFile = useMemo(() => data?.files.find((f) => f.id === selectedFileId) ?? null, [data, selectedFileId]);
   const mainAgent = useMemo(() => data?.agents.find((a) => a.role === "main") ?? null, [data?.agents]);
-  const leadMessages = useMemo(
-    () => [...(data?.messages.filter((m) => m.chatChannel === "lead" && m.senderType !== "system") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "lead")],
-    [data?.messages, optimisticMessages],
-  );
+  const leadMessages = useMemo(() => {
+    const mainAgentId = data?.agents?.find((a) => a.role === "main")?.id ?? -1;
+    const existing = data?.messages.filter((m) =>
+      m.chatChannel === "lead"
+      && m.senderType !== "system"
+      // Lead chat: only user messages + main agent messages. Advisors filtered out.
+      && (m.senderType !== "agent" || !m.metadata?.identity?.agentId || m.metadata.identity.agentId === mainAgentId)
+    ) ?? [];
+    const optimistic = optimisticMessages.filter((m) => m.chatChannel === "lead" && m.senderType === "user");
+    return [...existing, ...optimistic];
+  }, [data?.messages, data?.agents, optimisticMessages]);
   const groupMessages = useMemo(
     () => [...(data?.messages.filter((m) => m.chatChannel === "group" && m.senderType !== "system") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")],
     [data?.messages, optimisticMessages],
@@ -1457,7 +1466,20 @@ export function IdeApp() {
 
   async function copyMessage(messageId: number | string, content: string) {
     try {
-      await navigator.clipboard.writeText(content);
+      // Try modern clipboard API first
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(content);
+      } else {
+        // Fallback for Electron / older environments
+        const textarea = document.createElement("textarea");
+        textarea.value = content;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        document.body.removeChild(textarea);
+      }
       setCopiedMessageId(messageId);
       window.setTimeout(() => setCopiedMessageId((current) => current === messageId ? null : current), 1500);
     } catch {
@@ -1516,8 +1538,8 @@ export function IdeApp() {
     if (!collapsed) return null;
     if (vertical) {
       return (
-        <div className="flex items-center justify-center gap-1" style={{ background: "var(--bg-panel)", width: COLLAPSED_SIDE }}>
-          <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-[10px] hover:text-white" style={{ color: "var(--text-secondary)" }}>
+        <div className="flex flex-col items-center justify-center gap-1" style={{ background: "var(--bg-panel)", width: COLLAPSED_SIDE, minHeight: 32 }}>
+          <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10" style={{ color: "var(--text-secondary)" }}>
             ▸
           </button>
           <span className="text-[9px] select-none" style={{ color: "var(--text-secondary)", writingMode: "vertical-rl" }}>{label}</span>
@@ -1525,8 +1547,8 @@ export function IdeApp() {
       );
     }
     return (
-      <div className="flex items-center justify-center gap-1" style={{ background: "var(--bg-panel)", height: COLLAPSED_BOTTOM }}>
-        <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-[10px] hover:text-white" style={{ color: "var(--text-secondary)" }}>
+      <div className="flex items-center justify-center gap-1" style={{ background: "var(--bg-panel)", height: COLLAPSED_BOTTOM, minHeight: 32 }}>
+        <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10" style={{ color: "var(--text-secondary)" }}>
           ▴
         </button>
         <span className="text-[9px] select-none" style={{ color: "var(--text-secondary)" }}>{label}</span>
@@ -1788,9 +1810,10 @@ export function IdeApp() {
                   <div ref={groupChatEndRef} aria-hidden="true" />
                 </div>
                 <form onSubmit={(e) => { e.preventDefault(); void sendChat("group", groupMessage, duplicateToLead); }} className="border-t border-[#2d2d30] p-3">
-                  <div className="mb-2 flex items-center gap-2 text-xs">
+                              <div className="mb-2 flex items-center gap-2 text-xs">
                     <input id="dup" type="checkbox" checked={duplicateToLead} onChange={(e) => setDuplicateToLead(e.target.checked)} />
                     <label htmlFor="dup">{t.duplicate}</label>
+                    {duplicateToLead ? <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>⚠️ {locale === "ru" ? "Только Главный агент виден в чате с Главным" : "Only Lead Agent visible in Lead Chat"}</span> : null}
                   </div>
                   <div className="mb-2 flex gap-2">
                     <input value={attachmentLink} onChange={(e) => setAttachmentLink(e.target.value)} placeholder={t.attachLink} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-2 py-1 text-xs" />

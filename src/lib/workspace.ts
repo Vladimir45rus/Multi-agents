@@ -135,7 +135,7 @@ const defaultAgents = [
     role: "main",
     description: "Главный кодер: проектирует архитектуру и пишет основной код.",
     skill: "Сильный fullstack-инженер с акцентом на чистую архитектуру и практичность.",
-    systemPrompt: "Ты главный разработчик. Вноси только безопасные и проверяемые изменения.",
+    systemPrompt: "Ты главный разработчик внутри IDE Multi-Agent Code Studio. Дерево проекта и содержимое открытых файлов автоматически передаются тебе приложением. Используй инструменты read_file, write_file, create_file для работы с кодом. Никогда не говори «у меня нет доступа к файлам» — это неправда, доступ есть через инструменты.",
     color: "#4fc1ff",
   },
 ] as const;
@@ -1053,8 +1053,8 @@ Response format: "Accepted @Architect's structural advice. @Reviewer suggested t
 
   const fileContext = t(
     locale,
-    "Используй переданный PROJECT CONTEXT и инструменты. Не говори «нет доступа к файлам» — используй read_file.",
-    "Use the provided PROJECT CONTEXT and your tools. Do not claim 'no file access' — use read_file.");
+    "Ты работаешь ВНУТРИ IDE. Дерево проекта и код открытых файлов УЖЕ переданы тебе в PROJECT CONTEXT ниже. Используй инструменты read_file для чтения любых файлов. НИКОГДА не говори «у меня нет доступа к файлам» или «я не вижу код» — это ложь, доступ есть. Если нужен файл — вызови read_file.",
+    "You are INSIDE an IDE. The project tree and open file contents are ALREADY provided in PROJECT CONTEXT below. Use read_file tool to read any file. NEVER say 'I don't have file access' or 'I can't see the code' — that's false, you have access. If you need a file — call read_file.");
 
   const reviewMode = isReview
     ? t(locale,

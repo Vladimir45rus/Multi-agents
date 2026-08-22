@@ -5,9 +5,11 @@ describe("OpenRouter model presets", () => {
   it("exposes valid fallback models for agent settings", () => {
     const preset = getProviderPreset("openrouter");
 
-    expect(preset.defaultModel).toBe("anthropic/claude-3.5-sonnet");
+    expect(preset.defaultModel).toBe("google/gemini-2.0-flash-lite-001:free");
     expect(preset.fallbackModels).toEqual([...OPENROUTER_MODEL_IDS]);
     expect(preset.fallbackModels).toEqual([
+      "google/gemini-2.0-flash-lite-001:free",
+      "qwen/qwen-2.5-coder-32b-instruct:free",
       "anthropic/claude-3.5-sonnet",
       "openai/gpt-4o",
       "deepseek/deepseek-chat",
