@@ -1,13 +1,15 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import type { ComponentType } from "react";
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type MonacoEditorType = ComponentType<any>;
+type MonacoEditorType = ComponentType<Record<string, unknown>>;
 
-const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default as MonacoEditorType), { ssr: false }) as MonacoEditorType;
+const MonacoEditor = dynamic(() => import("@monaco-editor/react").then((mod) => mod.default as MonacoEditorType), {
+  ssr: false,
+  loading: () => <div className="flex min-h-0 flex-1 items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">Loading editor...</div>,
+}) as MonacoEditorType;
 
 function languageFromPath(filePath: string): string {
   const ext = (filePath.split(".").pop() ?? "").toLowerCase();
@@ -26,11 +28,6 @@ function languageFromPath(filePath: string): string {
 export default function CodeEditor({ filePath, value, onChange, onSave, readOnly }: {
   filePath: string; value: string; onChange: (v: string) => void; onSave?: () => void; readOnly?: boolean;
 }) {
-  const [mounted, setMounted] = useState(false);
-
-  useEffect(() => { setMounted(true); }, []);
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleMount = useCallback((ed: any, mon: any) => {
     mon.editor.defineTheme("codebuff-dark", {
       base: "vs-dark", inherit: true, rules: [],
@@ -48,11 +45,9 @@ export default function CodeEditor({ filePath, value, onChange, onSave, readOnly
     wordWrap: "off" as const, readOnly, padding: { top: 8 },
   }), [readOnly]);
 
-  if (!mounted) return <div className="flex min-h-0 flex-1 items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">Loading editor...</div>;
-
   return (
     <div className="min-h-0 flex-1">
-      <MonacoEditor height="100%" language={language} value={value} onChange={(v: string) => onChange(v ?? "")} theme="codebuff-dark" loading={<div className="flex h-full items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">Loading editor...</div>} options={options} onMount={handleMount} />
+      <MonacoEditor height="100%" language={language} value={value} onChange={(v: string) => onChange(v ?? "")} theme="codebuff-dark" options={options} onMount={handleMount} />
     </div>
   );
 }

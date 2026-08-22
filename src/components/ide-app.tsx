@@ -538,7 +538,7 @@ export function IdeApp() {
       if (e.key === "Escape" && contextMenu) { setContextMenu(null); return; }
       if (e.key === "Escape" && searchQuery) { setSearchQuery(""); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === "p") { e.preventDefault(); setSearchQuery(""); setSearchResults([]); return; }
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveFile(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveFileRef.current(); return; }
     };
     window.addEventListener("click", close);
     window.addEventListener("keydown", onKey);
@@ -546,7 +546,7 @@ export function IdeApp() {
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [contextMenu, searchQuery, selectedFile, editorText, mainAgent, busy, fileStatuses]);
+  }, [contextMenu, searchQuery]);
 
   function roleLabel(role: string) {
     if (locale === "ru") {
@@ -1101,6 +1101,7 @@ export function IdeApp() {
     }
   }
 
+  const saveFileRef = useRef<() => void>(() => {});
   async function saveFile() {
     if (!selectedFile || !mainAgent) return;
     setBusy(true);
@@ -1122,6 +1123,7 @@ export function IdeApp() {
       setBusy(false);
     }
   }
+  saveFileRef.current = saveFile;
 
   async function rollbackFile() {
     if (!selectedFile || !mainAgent) return;
@@ -1409,7 +1411,10 @@ export function IdeApp() {
           att.type === "image" ? (
             <div key={`img-${index}`} className="rounded border border-[#3a3d41] p-2">
               {att.name ? <p className="mb-1 text-[11px] text-[#9da3b2]">{att.name}</p> : null}
-              {att.url ? <img src={att.url} alt={att.name ?? "attachment"} className="max-h-44 rounded object-contain" /> : null}
+              {att.url ? (
+                // eslint-disable-next-line @next/next/no-img-element -- user-uploaded data URLs
+                <img src={att.url} alt={att.name ?? "attachment"} className="max-h-44 rounded object-contain" />
+              ) : null}
             </div>
           ) : (
             <div key={`link-${index}`} className="rounded border border-[#3a3d41] bg-[#1e1e1e] p-2 text-xs">
