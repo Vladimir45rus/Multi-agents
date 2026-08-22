@@ -65,6 +65,8 @@ type WorkspaceSnapshot = {
     githubAutoPush: boolean;
     autoApprove: boolean;
     mobileAuthToken: string;
+    ngrokToken: string;
+    ngrokUrl: string;
     vaultAvailable: boolean;
   };
   agents: Array<{
@@ -308,7 +310,7 @@ async function pushMessage(payload: {
   });
 }
 
-async function getWorkspaceSettingsRow() {
+export async function getWorkspaceSettingsRow() {
   const [row] = await db.select().from(workspaceSettings).limit(1);
   return row;
 }
@@ -534,6 +536,8 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       githubAutoPush: settingsRow.githubAutoPush,
       autoApprove: Boolean(settingsRow.autoApprove),
       mobileAuthToken: settingsRow.mobileAuthToken ?? "",
+      ngrokToken: "",
+      ngrokUrl: settingsRow.ngrokUrl ?? "",
       vaultAvailable: hasElectronVault(),
     },
     agents: agentRows,
@@ -585,6 +589,8 @@ export async function updateWorkspaceSettings(payload: {
   githubAutoPush?: boolean;
   autoApprove?: boolean;
   mobileAuthToken?: string;
+  ngrokToken?: string;
+  ngrokUrl?: string;
   removeApiKeys?: string[];
 }) {
   await ensureWorkspaceBootstrap();
@@ -602,6 +608,8 @@ export async function updateWorkspaceSettings(payload: {
       githubAutoPush: payload.githubAutoPush === undefined ? current.githubAutoPush : Boolean(payload.githubAutoPush),
       autoApprove: payload.autoApprove === undefined ? current.autoApprove : Boolean(payload.autoApprove),
       mobileAuthToken: payload.mobileAuthToken === undefined ? current.mobileAuthToken : compact(payload.mobileAuthToken),
+      ngrokToken: payload.ngrokToken === undefined ? current.ngrokToken : compact(payload.ngrokToken),
+      ngrokUrl: payload.ngrokUrl === undefined ? current.ngrokUrl : compact(payload.ngrokUrl),
       updatedAt: new Date(),
     });
   await recordSystemEvent("success", "settings", "Workspace settings saved");

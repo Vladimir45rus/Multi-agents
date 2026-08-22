@@ -88,6 +88,8 @@ type WorkspaceData = {
     githubAutoPush: boolean;
     autoApprove: boolean;
     mobileAuthToken: string;
+    ngrokToken: string;
+    ngrokUrl: string;
     vaultAvailable: boolean;
   };
   agents: Agent[];
@@ -448,6 +450,9 @@ export function IdeApp() {
   const [githubAutoPushDraft, setGithubAutoPushDraft] = useState(false);
   const [autoApproveDraft, setAutoApproveDraft] = useState(false);
   const [mobileTokenDraft, setMobileTokenDraft] = useState("");
+  const [ngrokTokenDraft, setNgrokTokenDraft] = useState("");
+  const [ngrokUrl, setNgrokUrl] = useState("");
+  const [ngrokLoading, setNgrokLoading] = useState(false);
   const [agentDrafts, setAgentDrafts] = useState<Record<number, AgentDraft>>({});
   const [newAgent, setNewAgent] = useState<NewAgentDraft>(emptyNewAgent());
   const [modelOptions, setModelOptions] = useState<Record<string, string[]>>({});
@@ -506,8 +511,9 @@ export function IdeApp() {
       || githubRepoDraft !== saved.githubRepo
       || githubAutoPushDraft !== saved.githubAutoPush
       || autoApproveDraft !== saved.autoApprove
-      || mobileTokenDraft !== (saved.mobileAuthToken ?? "");
-  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft, mobileTokenDraft]);
+      || mobileTokenDraft !== (saved.mobileAuthToken ?? "")
+      || ngrokTokenDraft !== "";
+  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft, mobileTokenDraft, ngrokTokenDraft]);
   const newAgentDirty = useMemo(() => Boolean(
     newAgent.name.trim()
       || newAgent.description.trim()
@@ -796,6 +802,7 @@ export function IdeApp() {
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
     setMobileTokenDraft(payload.settings.mobileAuthToken ?? "");
+    setNgrokUrl(payload.settings.ngrokUrl ?? "");
     setAgentDrafts(toDrafts(payload.agents));
 
     const target = nextFileId ?? selectedFileId ?? payload.files[0]?.id ?? null;
@@ -1055,6 +1062,7 @@ export function IdeApp() {
           githubAutoPush: githubAutoPushDraft,
           autoApprove: autoApproveDraft,
           mobileAuthToken: mobileTokenDraft,
+          ...(ngrokTokenDraft ? { ngrokToken: ngrokTokenDraft } : {}),
         }),
       });
       if (!res.ok) {
@@ -2068,8 +2076,47 @@ export function IdeApp() {
                 <p className="text-xs text-[#9da3b2]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>
                 <div className="flex gap-2 mt-1">
                   <input value={mobileTokenDraft} onChange={(e) => setMobileTokenDraft(e.target.value)} placeholder={locale === "ru" ? "Оставьте пустым чтобы отключить" : "Leave empty to disable"} className="flex-1 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-                  {mobileTokenDraft ? <span className="text-[10px] self-center" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:3210/mobile?token={mobileTokenDraft}</span> : null}
+                {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:3210/mobile?token={mobileTokenDraft}</span> : null}
+              </div>
+              <div className="mt-3 border-t border-[#2d2d30] pt-3">
+                <p className="text-xs text-[#9da3b2]">{locale === "ru" ? "🌍 Ngrok туннель (доступ из интернета)" : "🌍 Ngrok tunnel (worldwide access)"}</p>
+                <div className="flex gap-2 mt-1">
+                  <input value={ngrokTokenDraft} onChange={(e) => setNgrokTokenDraft(e.target.value)} type="password" placeholder={locale === "ru" ? "Токен из ngrok.com" : "Token from ngrok.com"} className="flex-1 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                  {!ngrokUrl ? (
+                    <button type="button" disabled={ngrokLoading || !ngrokTokenDraft}
+                      onClick={async () => {
+                        setNgrokLoading(true);
+                        try {
+                          await fetch("/api/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ngrokToken: ngrokTokenDraft }) });
+                          const r = await fetch("/api/ngrok", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "start", port: 3210 }) });
+                          const d = await r.json();
+                          if (d.url) setNgrokUrl(d.url);
+                          else setStatus(d.error || (locale === "ru" ? "Ошибка запуска туннеля" : "Tunnel start failed"));
+                        } catch { setStatus(locale === "ru" ? "Ошибка туннеля" : "Tunnel error"); }
+                        finally { setNgrokLoading(false); }
+                      }} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:opacity-40 whitespace-nowrap">
+                      {ngrokLoading ? "..." : locale === "ru" ? "Запустить" : "Start"}
+                    </button>
+                  ) : (
+                    <button type="button"
+                      onClick={async () => {
+                        try { await fetch("/api/ngrok", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stop" }) }); }
+                        catch { /* ok */ }
+                        setNgrokUrl("");
+                      }} className="rounded bg-[#a12828] px-2 py-1 text-xs text-white whitespace-nowrap">
+                      {locale === "ru" ? "Остановить" : "Stop"}
+                    </button>
+                  )}
                 </div>
+                {ngrokUrl ? (
+                  <div className="mt-1 flex items-center gap-2 rounded bg-[#1e3323] p-2 text-xs">
+                    <span className="text-[#6a9955]">🟢</span>
+                    <a href={ngrokUrl + "/mobile?token=" + mobileTokenDraft} target="_blank" rel="noopener noreferrer" className="text-[#4fc1ff] underline truncate">{ngrokUrl}/mobile?token={mobileTokenDraft}</a>
+                    <button type="button" onClick={() => { const link = ngrokUrl + "/mobile?token=" + mobileTokenDraft; navigator.clipboard?.writeText(link); setStatus(locale === "ru" ? "🔗 Ссылка скопирована!" : "🔗 Link copied!"); }} className="text-[10px] text-[#9da3b2] hover:text-white whitespace-nowrap">{locale === "ru" ? "Копировать" : "Copy"}</button>
+                  </div>
+                ) : null}
+                <p className="mt-1 text-[10px]" style={{ color: "var(--text-muted)" }}>{locale === "ru" ? "Бесплатный токен → ngrok.com. Туннель доступен из любой сети мира." : "Free token → ngrok.com. Tunnel works from anywhere in the world."}</p>
+              </div>
               </div>
             </div>
 

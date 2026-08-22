@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
+    "@ngrok/ngrok": "^1.7.0",
     "dotenv": "17.3.1",
     "drizzle-orm": "0.45.2",
     "monaco-editor": "^0.56.0",
