@@ -10,6 +10,7 @@ export const workspaceSettings = sqliteTable("workspace_settings", {
   githubToken: text("github_token").notNull().default(""),
   githubRepo: text("github_repo").notNull().default(""),
   githubAutoPush: integer("github_auto_push", { mode: "boolean" }).notNull().default(false),
+  autoApprove: integer("auto_approve", { mode: "boolean" }).notNull().default(false),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
   updatedAt: integer("updated_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
 });

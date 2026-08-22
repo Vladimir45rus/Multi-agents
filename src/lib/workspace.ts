@@ -63,6 +63,7 @@ type WorkspaceSnapshot = {
     githubTokenConfigured: boolean;
     githubRepo: string;
     githubAutoPush: boolean;
+    autoApprove: boolean;
     vaultAvailable: boolean;
   };
   agents: Array<{
@@ -530,6 +531,7 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       githubTokenConfigured: Boolean(compact(settingsRow.githubToken)),
       githubRepo: settingsRow.githubRepo,
       githubAutoPush: settingsRow.githubAutoPush,
+      autoApprove: Boolean(settingsRow.autoApprove),
       vaultAvailable: hasElectronVault(),
     },
     agents: agentRows,
@@ -579,6 +581,7 @@ export async function updateWorkspaceSettings(payload: {
   githubToken?: string;
   githubRepo?: string;
   githubAutoPush?: boolean;
+  autoApprove?: boolean;
   removeApiKeys?: string[];
 }) {
   await ensureWorkspaceBootstrap();
@@ -594,6 +597,7 @@ export async function updateWorkspaceSettings(payload: {
       githubToken,
       githubRepo,
       githubAutoPush: payload.githubAutoPush === undefined ? current.githubAutoPush : Boolean(payload.githubAutoPush),
+      autoApprove: payload.autoApprove === undefined ? current.autoApprove : Boolean(payload.autoApprove),
       updatedAt: new Date(),
     });
   await recordSystemEvent("success", "settings", "Workspace settings saved");
@@ -821,7 +825,7 @@ export async function saveFileContent(fileId: number, content: string, actorAgen
         [
           {
             role: "system",
-            content: agentSystemPrompt(activeLocale, helper, findings.length, false, allAgentNamesReview),
+            content: agentSystemPrompt(activeLocale, helper, findings.length, false, allAgentNamesReview, false, false),
           },
           {
             role: "user",
@@ -940,6 +944,8 @@ function agentSystemPrompt(
   findingsCount: number,
   isMultiAgent: boolean,
   allAgents: Array<{ name: string; role: string; color: string }>,
+  isReview = false,
+  isFix = false,
 ) {
   const persona = promptPersona(locale, { skill: agent.skill, systemPrompt: agent.systemPrompt });
   const configuredModel = normalizeProviderModel(agent.provider, agent.model);
@@ -1050,15 +1056,33 @@ Response format: "Accepted @Architect's structural advice. @Reviewer suggested t
     "Используй переданный PROJECT CONTEXT и инструменты. Не говори «нет доступа к файлам» — используй read_file.",
     "Use the provided PROJECT CONTEXT and your tools. Do not claim 'no file access' — use read_file.");
 
-  return `${identity} ${persona}.${collaboration} ${fileContext} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  const reviewMode = isReview
+    ? t(locale,
+        `\n\n=== РЕЖИМ РЕВЬЮ ===\nЭто цикл проверки. Прочитай последние изменения в коде. Найди ошибки, баги, проблемы с типами, версткой, дизайном. Если всё идеально — ответь ТОЛЬКО: "[STATUS: RELEASE_READY] Проверка пройдена." Если есть проблемы — укажи файл, строку и конкретное описание что не так. Будь строгим и внимательным.`,
+        `\n\n=== REVIEW MODE ===\nThis is a review cycle. Check latest code changes. Find bugs, type issues, UI problems. If perfect — reply ONLY: "[STATUS: RELEASE_READY] Review passed." If issues found — specify file, line, and exact problem. Be strict and thorough.`)
+    : "";
+
+  const fixModePrompt = isFix
+    ? t(locale,
+        `\n\n=== РЕЖИМ ИСПРАВЛЕНИЯ ===\nСоветники нашли ошибки (читай их сообщения выше). Исправь ВСЕ найденные проблемы. Проверь тестами. Если всё исправлено — ответь: "[STATUS: RELEASE_READY] Все ошибки исправлены."`,
+        `\n\n=== FIX MODE ===\nAdvisors found issues (read their messages above). Fix ALL found problems. Verify with tests. If fixed — reply: "[STATUS: RELEASE_READY] All issues fixed."`)
+    : "";
+
+  const releaseProtocol = isReview || isFix
+    ? t(locale,
+        `\n\n=== ПРОТОКОЛ RELEASE_READY ===\nЕсли ты считаешь что код готов к релизу, ответь СТРОГО: "[STATUS: RELEASE_READY] <твой комментарий>." Только так система поймёт что цикл завершён. Без этого флага цикл будет продолжаться.`,
+        `\n\n=== RELEASE_READY PROTOCOL ===\nIf you believe code is release-ready, reply EXACTLY: "[STATUS: RELEASE_READY] <your comment>." Only this flag tells the system to stop. Without it the cycle continues.`)
+    : "";
+
+  return `${identity} ${persona}.${collaboration} ${fileContext}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
 }
 
 function roleDisplay(role: string, lang: "ru" | "en"): string {
   if (lang === "ru") {
-    const map: Record<string, string> = { main: "Главный", advisor: "Советник", reviewer: "Ревьюер", tester: "Тестировщик", architect: "Архитектор", security: "Секурити", observer: "Наблюдатель" };
+    const map: Record<string, string> = { main: "Главный", advisor: "Советник", reviewer: "Ревьюер", tester: "Тестировщик", architect: "Архитектор", uiux: "UI/UX Дизайнер", security: "Секурити", observer: "Наблюдатель" };
     return map[role] ?? role;
   }
-  const map: Record<string, string> = { main: "Lead", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", security: "Security", observer: "Observer" };
+  const map: Record<string, string> = { main: "Lead", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", uiux: "UI/UX Designer", security: "Security", observer: "Observer" };
   return map[role] ?? role;
 }
 
@@ -1069,19 +1093,21 @@ async function* streamAgentReply(
   locale: UiLocale,
   attachments: ChatAttachment[],
   findingsCount: number,
-  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean },
+  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean; reviewOnly?: boolean; fixMode?: boolean },
 ): AsyncGenerator<ChatStreamEvent> {
   const apiKey = await getStoredProviderApiKey(agent.provider);
   const history = await gatewayHistory(channel);
   const projectContext = await buildProjectContext(options.projectContext);
   const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${projectContext}`;
   const isMulti = Boolean(options.isMultiAgent);
+  const isReview = Boolean(options.reviewOnly);
+  const isFix = Boolean(options.fixMode);
 
   const agentRows = await db.select({ name: agents.name, role: agents.role, color: agents.color }).from(agents).where(eq(agents.isActive, true));
   const allAgentNames = agentRows.map((a) => ({ name: a.name, role: a.role, color: a.color ?? "" }));
 
   const gatewayMessages: GatewayMessage[] = [
-    { role: "system", content: agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames) },
+    { role: "system", content: agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix) },
     ...history,
   ];
 
@@ -1182,81 +1208,184 @@ export async function* streamWorkspaceMessage(
     });
   }
 
+  // Run initial agent round
+  for await (const event of runAgentRound(channel, userText, activeLocale, attachments, {
+    signal: options?.signal,
+    projectContext: options?.projectContext,
+  })) {
+    yield event;
+  }
+
+  // Check if auto-approve mode is enabled for autonomous self-correction
+  const [settingsRow] = await db.select({ autoApprove: workspaceSettings.autoApprove }).from(workspaceSettings).limit(1);
+  const autoApprove = Boolean(settingsRow?.autoApprove);
+
+  if (channel === "group" && autoApprove && !options?.signal?.aborted) {
+    for (let iteration = 0; iteration < 15; iteration += 1) {
+      if (options?.signal?.aborted) break;
+
+      // Check if all agents voted RELEASE_READY
+      const recentMessages = await db.select().from(chatMessages)
+        .where(eq(chatMessages.chatChannel, "group"))
+        .orderBy(desc(chatMessages.id))
+        .limit(20);
+
+      const activeAgents = await db.select().from(agents).where(eq(agents.isActive, true));
+      const readyVotes = recentMessages.filter((m) =>
+        m.senderType !== "user" && m.senderType !== "system" && m.content.includes("[STATUS: RELEASE_READY]"),
+      );
+
+      // Require ALL active agents to signal ready (or at least 3 if single-agent)
+      const requiredVotes = Math.min(activeAgents.length, 4);
+      if (readyVotes.length >= requiredVotes) {
+        const finalIdentity = createAgentIdentity({
+          agentId: activeAgents[0]?.id ?? 0,
+          displayName: activeAgents[0]?.name ?? "Main",
+          role: "main",
+          provider: activeAgents[0]?.provider ?? "",
+          model: activeAgents[0]?.model ?? "",
+        });
+        const doneMsg = t(activeLocale,
+          `[STATUS: RELEASE_READY] ✅ Все ${readyVotes.length} агентов подтвердили готовность. Цикл завершён.`,
+          `[STATUS: RELEASE_READY] ✅ All ${readyVotes.length} agents confirmed readiness. Cycle complete.`);
+        yield { type: "delta", channel, identity: finalIdentity, text: doneMsg };
+        yield { type: "agent_done", channel, identity: finalIdentity, content: doneMsg };
+        break;
+      }
+
+      // Run review cycle: ask reviewer + tester to check latest code
+      const reviewText = t(activeLocale,
+        `Проверь текущий код после последних правок. Найди ошибки, баги, проблемы. Если всё идеально — ответь "[STATUS: RELEASE_READY] Код готов." Если есть проблемы — укажи конкретный файл, строку и что исправить.`,
+        `Review the current code after latest changes. Find bugs, errors, issues. If perfect — reply "[STATUS: RELEASE_READY] Code ready." If issues — specify file, line, and fix needed.`);
+
+      try {
+        for await (const event of runAgentRound(channel, reviewText, activeLocale, [], {
+          signal: options?.signal,
+          projectContext: options?.projectContext,
+          reviewOnly: true,
+        })) {
+          yield event;
+        }
+      } catch {
+        // Continue to next iteration even if review round fails
+      }
+
+      // Check if main needs to fix something (messages contain error mentions)
+      const lastRoundMessages = await db.select().from(chatMessages)
+        .where(eq(chatMessages.chatChannel, "group"))
+        .orderBy(desc(chatMessages.id))
+        .limit(10);
+      const hasIssues = lastRoundMessages.some((m) =>
+        m.content.includes("ошибка") || m.content.includes("баг") || m.content.includes("error") || m.content.includes("bug"),
+      );
+
+      if (hasIssues) {
+        const fixText = t(activeLocale,
+          `Исправь найденные ошибки. Выше в чате — конкретные замечания от советников. Примени исправления и проверь тестами. Если всё работает — ответь "[STATUS: RELEASE_READY] Исправлено."`,
+          `Fix the issues found. Above in chat — specific feedback from advisors. Apply fixes and verify with tests. If everything works — reply "[STATUS: RELEASE_READY] Fixed."`);
+
+        try {
+          for await (const event of runAgentRound(channel, fixText, activeLocale, [], {
+            signal: options?.signal,
+            projectContext: options?.projectContext,
+            fixMode: true,
+          })) {
+            yield event;
+          }
+        } catch {
+          // Continue
+        }
+      }
+
+      // Prevent infinite loops
+      if (iteration >= 14) {
+        const limitMsg = t(activeLocale,
+          `[STATUS: MAX_ITERATIONS] Достигнут лимит итераций автономного цикла.`,
+          `[STATUS: MAX_ITERATIONS] Autonomous cycle iteration limit reached.`);
+        yield { type: "delta", channel, identity: createAgentIdentity({ agentId: 0, displayName: "System", role: "system", provider: "", model: "" }), text: limitMsg };
+        break;
+      }
+    }
+  }
+
+  // Post clean summary to lead chat
+  if (channel === "group" && !options?.signal?.aborted) {
+    const allGroupMessages = await db.select().from(chatMessages).where(eq(chatMessages.chatChannel, "group")).orderBy(desc(chatMessages.id)).limit(30);
+    const [mainAgent] = await db.select().from(agents).where(eq(agents.role, "main")).limit(1);
+    const summary = allGroupMessages
+      .filter((m) => m.senderType !== "user" && m.senderType !== "system")
+      .slice(0, 8)
+      .reverse()
+      .map((m) => `${m.agentName ?? m.senderType}: ${m.content.slice(0, 200)}`)
+      .join("\n\n");
+
+    if (mainAgent && summary) {
+      await pushMessage({
+        chatChannel: "lead",
+        senderType: "main",
+        agentName: mainAgent.name,
+        content: t(activeLocale,
+          `📋 ИТОГОВЫЙ ОТЧЁТ\n\n${summary}\n\n=== КОНЕЦ ОТЧЁТА ===`,
+          `📋 FINAL REPORT\n\n${summary}\n\n=== END OF REPORT ===`),
+        metadata: { identity: createAgentIdentity({ agentId: mainAgent.id, displayName: mainAgent.name, role: "main", provider: mainAgent.provider, model: mainAgent.model }) },
+      });
+    }
+  }
+
+  if (options?.signal?.aborted) throw new Error("Chat request cancelled");
+  yield { type: "done", channel };
+}
+
+async function* runAgentRound(
+  channel: ChatChannel,
+  userText: string,
+  activeLocale: UiLocale,
+  attachments: ChatAttachment[],
+  options: { signal?: AbortSignal; projectContext?: ProjectContextInput; reviewOnly?: boolean; fixMode?: boolean },
+): AsyncGenerator<ChatStreamEvent> {
   const [mainAgent] = await db.select().from(agents).where(eq(agents.role, "main")).limit(1);
   if (!mainAgent) throw new Error(t(activeLocale, "Главный агент не назначен.", "No Lead agent is assigned."));
 
   const findingsCount = (await db.select().from(analysisFindings)).length;
-  const agentRows = channel === "lead"
+  const activeAgents = await db.select().from(agents).where(eq(agents.isActive, true));
+  const agentRows = channel === "lead" && !options.reviewOnly
     ? [mainAgent]
-    : [mainAgent, ...(await db.select().from(agents).where(and(ne(agents.role, "main"), eq(agents.isActive, true))))];
+    : options.fixMode
+      ? [mainAgent]
+      : options.reviewOnly
+        ? activeAgents.filter((a) => a.role !== "main")
+        : [mainAgent, ...activeAgents.filter((a) => a.role !== "main")];
 
-  const isMultiAgent = agentRows.length > 1;
+  const uniqueAgents = agentRows.filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i);
+  const isMultiAgent = uniqueAgents.length > 1;
 
-  for (let agentIndex = 0; agentIndex < agentRows.length; agentIndex++) {
-    const agent = agentRows[agentIndex];
-    if (options?.signal?.aborted) throw new Error("Chat request cancelled");
-
+  for (const agent of uniqueAgents) {
+    if (options.signal?.aborted) throw new Error("Chat request cancelled");
     try {
-      // Advisors speak first (read-only mode), main agent codes last (with full tools)
-      const ctxIsMulti = isMultiAgent && agent.role !== "main"; // true for advisors in multi-agent mode
-
+      const ctxIsMulti = isMultiAgent && agent.role !== "main";
       for await (const event of streamAgentReply(agent, channel, userText, activeLocale, attachments, findingsCount, {
-        signal: options?.signal,
+        signal: options.signal,
         isMultiAgent: ctxIsMulti,
+        reviewOnly: Boolean(options.reviewOnly),
+        fixMode: Boolean(options.fixMode),
       })) {
         yield event;
       }
-
-      if (agent.role === "main" && channel === "group" && duplicateToLead) {
-        const [latest] = await db.select().from(chatMessages).where(and(eq(chatMessages.chatChannel, "group"), eq(chatMessages.agentName, agent.name))).orderBy(desc(chatMessages.id)).limit(1);
-        if (latest) {
-          await pushMessage({
-            chatChannel: "lead",
-            senderType: "main",
-            agentName: agent.name,
-            content: latest.content,
-            metadata: { identity: createAgentIdentity({
-              agentId: agent.id,
-              displayName: agent.name,
-              role: agent.role,
-              provider: agent.provider,
-              model: agent.model,
-            }) },
-          });
-        }
-      }
     } catch (error) {
-      if (options?.signal?.aborted) throw error;
+      if (options.signal?.aborted) throw error;
       const message = agentFailureMessage(activeLocale, agent, error);
       try {
-        await pushMessage({
-          chatChannel: channel,
-          senderType: "system",
-          agentName: "System",
-          content: message,
-        });
-      } catch {
-        // Persisting the notification is best-effort; never stop other agents.
-      }
+        await pushMessage({ chatChannel: channel, senderType: "system", agentName: "System", content: message });
+      } catch { /* best-effort */ }
       yield {
-        type: "agent_error",
-        channel,
-        identity: createAgentIdentity({
-          agentId: agent.id,
-          displayName: agent.name,
-          role: agent.role,
-          provider: agent.provider,
-          model: agent.model,
-        }),
+        type: "agent_error", channel,
+        identity: createAgentIdentity({ agentId: agent.id, displayName: agent.name, role: agent.role, provider: agent.provider, model: agent.model }),
         message,
         status: error instanceof ProviderGatewayError ? error.status : undefined,
         rateLimited: error instanceof ProviderGatewayError && error.status === 429,
       };
     }
   }
-
-  if (options?.signal?.aborted) throw new Error("Chat request cancelled");
-  yield { type: "done", channel };
 }
 
 export async function postGroupMessage(

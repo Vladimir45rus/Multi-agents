@@ -1,0 +1,1 @@
+ALTER TABLE `workspace_settings` ADD `auto_approve` integer DEFAULT false NOT NULL;

@@ -8,6 +8,7 @@ export async function PUT(request: Request) {
       githubToken?: string;
       githubRepo?: string;
       githubAutoPush?: boolean;
+      autoApprove?: boolean;
       removeApiKeys?: string[];
     };
     await updateWorkspaceSettings(body);

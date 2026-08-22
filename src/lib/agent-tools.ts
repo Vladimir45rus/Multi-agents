@@ -45,6 +45,7 @@ const OBSERVER_TOOLS = new Set([
 export function allowedToolNames(role: string): Set<string> {
   if (role === "main") return MAIN_TOOLS as Set<string>;
   if (role === "observer") return OBSERVER_TOOLS as Set<string>;
+  if (role === "uiux") return OBSERVER_TOOLS as Set<string>;
   return ADVISOR_TOOLS as Set<string>;
 }
 

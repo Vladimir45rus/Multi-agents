@@ -85,6 +85,7 @@ type WorkspaceData = {
     githubTokenConfigured: boolean;
     githubRepo: string;
     githubAutoPush: boolean;
+    autoApprove: boolean;
     vaultAvailable: boolean;
   };
   agents: Agent[];
@@ -130,7 +131,7 @@ type DesktopBridge = {
   wasRecoveredFromCrash?: () => Promise<boolean>;
 };
 
-const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "security", "observer"];
+const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "uiux", "security", "observer"];
 
 const ROLE_COLORS: Record<string, string> = {
   main: "#4fc1ff",
@@ -138,6 +139,7 @@ const ROLE_COLORS: Record<string, string> = {
   reviewer: "#ce9178",
   tester: "#dcdcaa",
   architect: "#c586c0",
+  uiux: "#e8ab53",
   security: "#f48771",
   observer: "#9da3b2",
 };
@@ -162,11 +164,12 @@ function pickUniqueColor(existingColors: string[], role?: string): string {
 const ROLE_PRIORITY: Record<string, number> = {
   main: 0,
   architect: 1,
-  advisor: 2,
-  reviewer: 3,
-  tester: 4,
-  security: 5,
-  observer: 6,
+  uiux: 2,
+  advisor: 3,
+  reviewer: 4,
+  tester: 5,
+  security: 6,
+  observer: 7,
 };
 
 function sortAgents(agents: Agent[]): Agent[] {
@@ -441,6 +444,7 @@ export function IdeApp() {
   const [githubTokenDraft, setGithubTokenDraft] = useState("");
   const [githubRepoDraft, setGithubRepoDraft] = useState("");
   const [githubAutoPushDraft, setGithubAutoPushDraft] = useState(false);
+  const [autoApproveDraft, setAutoApproveDraft] = useState(false);
   const [agentDrafts, setAgentDrafts] = useState<Record<number, AgentDraft>>({});
   const [newAgent, setNewAgent] = useState<NewAgentDraft>(emptyNewAgent());
   const [modelOptions, setModelOptions] = useState<Record<string, string[]>>({});
@@ -495,8 +499,9 @@ export function IdeApp() {
     return Object.values(apiKeysDraft).some((value) => Boolean(value.trim()))
       || githubTokenDraft.trim() !== ""
       || githubRepoDraft !== saved.githubRepo
-      || githubAutoPushDraft !== saved.githubAutoPush;
-  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft]);
+      || githubAutoPushDraft !== saved.githubAutoPush
+      || autoApproveDraft !== saved.autoApprove;
+  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft]);
   const newAgentDirty = useMemo(() => Boolean(
     newAgent.name.trim()
       || newAgent.description.trim()
@@ -555,6 +560,7 @@ export function IdeApp() {
       if (role === "reviewer") return "Ревьюер";
       if (role === "tester") return "Тестировщик";
       if (role === "architect") return "Архитектор";
+      if (role === "uiux") return "UI/UX Дизайнер";
       if (role === "security") return "Секурити";
       if (role === "observer") return "Наблюдатель";
     }
@@ -775,6 +781,7 @@ export function IdeApp() {
     setGithubTokenDraft(payload.settings?.githubToken ?? "");
     setGithubRepoDraft(payload.settings?.githubRepo ?? "");
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
+    setAutoApproveDraft(Boolean(payload.settings.autoApprove));
     setAgentDrafts(toDrafts(payload.agents));
 
     const target = nextFileId ?? selectedFileId ?? payload.files[0]?.id ?? null;
@@ -1032,6 +1039,7 @@ export function IdeApp() {
           githubToken: githubTokenPayload,
           githubRepo: githubRepoDraft,
           githubAutoPush: githubAutoPushDraft,
+          autoApprove: autoApproveDraft,
         }),
       });
       if (!res.ok) {
@@ -2017,6 +2025,14 @@ export function IdeApp() {
                   onChange={(e) => setGithubAutoPushDraft(e.target.checked)}
                 />
                 {t.githubAutoPush}
+              </label>
+              <label className="mt-2 flex items-center gap-2 text-xs text-[#c6ced8]">
+                <input
+                  type="checkbox"
+                  checked={autoApproveDraft}
+                  onChange={(e) => setAutoApproveDraft(e.target.checked)}
+                />
+                {locale === "ru" ? "Авто-утверждение (автономный цикл)" : "Auto-Approve (autonomous cycle)"}
               </label>
             </div>
 
