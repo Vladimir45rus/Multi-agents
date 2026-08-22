@@ -8,6 +8,7 @@ import {
   fileHistory,
   projectFiles,
   terminalEntries,
+  systemEvents,
   workspaceSettings,
 } from "@/db/schema";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
@@ -16,11 +17,14 @@ import {
   completeProviderResponse,
   providerRequestFromAgent,
   streamProviderResponse,
+  ProviderGatewayError,
   type GatewayMessage,
   type ProviderGatewayOptions,
 } from "@/lib/provider-gateway";
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
+import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
+import { recordSystemEvent } from "@/lib/system-events";
 
 export type UiLocale = "ru" | "en";
 export type ChatChannel = "group" | "lead";
@@ -42,7 +46,7 @@ export type ChatStreamEvent =
   | { type: "agent_start"; channel: ChatChannel; identity: AgentIdentity }
   | { type: "delta"; channel: ChatChannel; identity: AgentIdentity; text: string }
   | { type: "agent_done"; channel: ChatChannel; identity: AgentIdentity; content: string }
-  | { type: "agent_error"; channel: ChatChannel; identity: AgentIdentity; message: string }
+  | { type: "agent_error"; channel: ChatChannel; identity: AgentIdentity; message: string; status?: number; rateLimited?: boolean }
   | { type: "done"; channel: ChatChannel }
   | { type: "error"; channel: ChatChannel; message: string };
 
@@ -100,6 +104,14 @@ type WorkspaceSnapshot = {
     command: string;
     output: string;
     status: string;
+    createdAt: string;
+  }>;
+  systemEvents: Array<{
+    id: number;
+    level: string;
+    source: string;
+    message: string;
+    details: string;
     createdAt: string;
   }>;
   findings: Array<{
@@ -289,6 +301,10 @@ async function pushMessage(payload: {
   content: string;
   metadata?: ChatMessageMetadata;
 }) {
+  if (payload.senderType === "system") {
+    await db.insert(systemEvents).values({ level: "info", source: "workspace", message: payload.content, details: "" });
+    return;
+  }
   await db.insert(chatMessages).values({
     chatChannel: payload.chatChannel,
     senderType: payload.senderType,
@@ -507,6 +523,7 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   const historyRows = await db.select().from(fileHistory).orderBy(desc(fileHistory.id)).limit(100);
   const messageRows = await db.select().from(chatMessages).orderBy(asc(chatMessages.id));
   const terminalRows = await db.select().from(terminalEntries).orderBy(desc(terminalEntries.id)).limit(30);
+  const systemEventRows = await db.select().from(systemEvents).orderBy(desc(systemEvents.id)).limit(100);
   const findingRows = await db.select().from(analysisFindings).orderBy(desc(analysisFindings.id)).limit(80);
 
   return {
@@ -535,6 +552,7 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       createdAt: nowIso(row.createdAt),
     })),
     terminal: terminalRows.reverse().map((row) => ({ ...row, createdAt: nowIso(row.createdAt) })),
+    systemEvents: systemEventRows.map((row) => ({ ...row, createdAt: nowIso(row.createdAt) })),
     findings: findingRows.reverse().map((row) => ({ ...row, createdAt: nowIso(row.createdAt) })),
   };
 }
@@ -586,6 +604,7 @@ export async function updateWorkspaceSettings(payload: {
       githubAutoPush: payload.githubAutoPush === undefined ? current.githubAutoPush : Boolean(payload.githubAutoPush),
       updatedAt: new Date(),
     });
+  await recordSystemEvent("success", "settings", "Workspace settings saved");
 }
 
 export async function importProjectFiles(files: Array<{ path: string; content: string }>, locale?: string) {
@@ -611,12 +630,7 @@ export async function importProjectFiles(files: Array<{ path: string; content: s
     imported += 1;
   }
 
-  await pushMessage({
-    chatChannel: "group",
-    senderType: "system",
-    agentName: "System",
-    content: t(activeLocale, `Импортировано файлов: ${imported}.`, `Imported files: ${imported}.`),
-  });
+  await recordSystemEvent("success", "files", t(activeLocale, `Импортировано файлов: ${imported}.`, `Imported files: ${imported}.`));
 
   return { imported };
 }
@@ -936,7 +950,7 @@ function agentSystemPrompt(locale: UiLocale, agent: typeof agents.$inferSelect, 
       ? t(locale, "Ты единственный агент, который может принимать и применять решения по коду. Отвечай конкретно и проверяемо.", "You are the only agent allowed to make and apply code decisions. Be concrete and verifiable.")
       : t(locale, "Ты советник. Не редактируй код и не выдавай себя за Главного. Анализируй и передавай аргументированные рекомендации Главному.", "You are an advisor. Do not edit code or impersonate the Lead. Analyze and send reasoned recommendations to the Lead.");
 
-  return `${identity} ${persona}. ${roleInstruction} ${t(locale, `Текущих статических находок: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  return `${identity} ${persona}. ${roleInstruction} ${t(locale, "Работай как IDE-помощник: используй переданный PROJECT CONTEXT как доступный контекст файлов. Не говори, что у тебя нет доступа к локальным файлам, если контекст передан.", "Work as an IDE assistant: use the provided PROJECT CONTEXT as available file context. Do not claim you lack access to local files when context is provided.")} ${t(locale, `Текущих статических находок: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
 }
 
 async function* streamAgentReply(
@@ -946,11 +960,11 @@ async function* streamAgentReply(
   locale: UiLocale,
   attachments: ChatAttachment[],
   findingsCount: number,
-  options: ProviderGatewayOptions,
+  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput },
 ): AsyncGenerator<ChatStreamEvent> {
   const apiKey = await getStoredProviderApiKey(agent.provider);
   const messages = await gatewayHistory(channel);
-  const prompt = `${userText}${attachmentContext(locale, attachments)}`;
+  const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${await buildProjectContext(options.projectContext)}`;
   const gatewayMessages: GatewayMessage[] = [
     { role: "system", content: agentSystemPrompt(locale, agent, findingsCount) },
     ...messages,
@@ -993,7 +1007,7 @@ async function* streamAgentReply(
 export async function* streamWorkspaceMessage(
   content: string,
   locale?: string,
-  options?: { channel?: ChatChannel; duplicateToLead?: boolean; attachments?: ChatAttachment[]; signal?: AbortSignal },
+  options?: { channel?: ChatChannel; duplicateToLead?: boolean; attachments?: ChatAttachment[]; signal?: AbortSignal; projectContext?: ProjectContextInput },
 ): AsyncGenerator<ChatStreamEvent> {
   const activeLocale = normalizeLocale(locale);
   const channel: ChatChannel = options?.channel === "lead" ? "lead" : "group";
@@ -1083,6 +1097,8 @@ export async function* streamWorkspaceMessage(
           model: agent.model,
         }),
         message,
+        status: error instanceof ProviderGatewayError ? error.status : undefined,
+        rateLimited: error instanceof ProviderGatewayError && error.status === 429,
       };
     }
   }

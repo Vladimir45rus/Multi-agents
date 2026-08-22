@@ -11,6 +11,7 @@ import { completeProviderResponse, providerRequestFromAgent, type GatewayMessage
 import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction } from "@/lib/patch-parser";
 import { ensureWorkspaceBootstrap, getStoredProviderApiKey } from "@/lib/workspace";
+import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { applyWorkspacePatch, getWorkspaceRoot, type WorkspacePatchFile } from "@/lib/workspace-files";
 import { runSandboxCommand } from "@/lib/terminal-sandbox";
 import type {
@@ -314,13 +315,28 @@ function agentFailureMessage(locale: Locale, agent: typeof agents.$inferSelect, 
   );
 }
 
+function sanitizeAgentPrompt(value: string) {
+  return compact(value)
+    .replace(/(?:\b(?:you are|you're|i am|i'm|identify as|call yourself|present yourself as)\b|\b(?:ты|я|представляйся|называй себя)\b)[^.!?\n]*(?:gpt|claude|liquid|lfm|foundation model)[^.!?\n]*[.!?]?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function basePersona(locale: Locale, agent: typeof agents.$inferSelect) {
   const skill = compact(agent.skill);
-  const prompt = compact(agent.systemPrompt);
+  const prompt = sanitizeAgentPrompt(agent.systemPrompt);
   if (skill && prompt) return `${skill}. ${prompt}`;
   if (skill) return skill;
   if (prompt) return prompt;
   return t(locale, "Ты агент в мультиагентной IDE.", "You are an agent in a multi-agent IDE.");
+}
+
+function ideIdentityInstruction(locale: Locale, agent: typeof agents.$inferSelect) {
+  return t(
+    locale,
+    `Твоя реальная роль: ${agent.role}. Провайдер: ${getProviderPreset(agent.provider).label}. Модель: ${agent.model}. Не выдумывай другое имя и не утверждай, что у тебя нет доступа к локальным файлам: используй переданный IDE PROJECT CONTEXT.`,
+    `Your actual role is ${agent.role}. Provider: ${getProviderPreset(agent.provider).label}. Model: ${agent.model}. Do not invent another name or claim that you lack access to local files: use the provided IDE PROJECT CONTEXT.`,
+  );
 }
 
 function mainSystemPrompt(locale: Locale, agent: typeof agents.$inferSelect) {
@@ -330,7 +346,7 @@ function mainSystemPrompt(locale: Locale, agent: typeof agents.$inferSelect) {
     "Ты Главный агент — единственный, кто фиксирует итоговое решение и применяет изменения. Отвечай конкретно и проверяемо.",
     "You are the Lead agent — the only one who fixes the final decision and applies changes. Be concrete and verifiable.",
   );
-  return `${persona} ${instruction}`;
+  return `${ideIdentityInstruction(locale, agent)} ${persona} ${instruction}`;
 }
 
 function advisorSystemPrompt(locale: Locale, agent: typeof agents.$inferSelect, role: OrchestratorRole) {
@@ -341,7 +357,7 @@ function advisorSystemPrompt(locale: Locale, agent: typeof agents.$inferSelect, 
     "Ты советник. Не редактируй код и не выдавай себя за Главного. Анализируй и передавай рекомендации.",
     "You are an advisor. Do not edit code or impersonate the Lead. Analyze and send recommendations.",
   );
-  return `${persona} ${instruction} ${locale === "en" ? scope.en : scope.ru}`;
+  return `${ideIdentityInstruction(locale, agent)} ${persona} ${instruction} ${locale === "en" ? scope.en : scope.ru}`;
 }
 
 function planPrompt(locale: Locale, task: string) {
@@ -460,13 +476,15 @@ async function completeAgent(
   signal?: AbortSignal,
   jsonMode = false,
   locale: Locale = "ru",
+  projectContext?: ProjectContextInput,
 ) {
   try {
     const apiKey = await getStoredProviderApiKey(agent.provider);
     const request = providerRequestFromAgent(agent, apiKey);
+    const context = await buildProjectContext(projectContext);
     const messages: GatewayMessage[] = [
       { role: "system", content: systemPrompt },
-      { role: "user", content: userPrompt },
+      { role: "user", content: `${userPrompt}\n\n${context}` },
     ];
     return await completeProviderResponse(request, messages, { signal, jsonMode });
   } catch (error) {
@@ -574,6 +592,7 @@ export async function* runOrchestrator(options: {
   maxIterations?: number;
   mode?: string;
   signal?: AbortSignal;
+  projectContext?: ProjectContextInput;
 }): AsyncGenerator<OrchestratorStreamEvent> {
   const locale = normalizeLocale(options.locale);
   const signal = options.signal;
@@ -618,7 +637,7 @@ export async function* runOrchestrator(options: {
     };
 
     yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "started" };
-    const plan = await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), planPrompt(locale, task), signal, false, locale);
+    const plan = await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), planPrompt(locale, task), signal, false, locale, options.projectContext);
     yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
     yield {
       type: "event",
@@ -661,6 +680,7 @@ export async function* runOrchestrator(options: {
                 signal,
                 false,
                 locale,
+                options.projectContext,
               );
               return { agent: entry.agent, role: entry.role, advice, stance: classifyStance(advice) };
             } catch (error) {
@@ -714,6 +734,7 @@ export async function* runOrchestrator(options: {
           signal,
           true,
           locale,
+          options.projectContext,
         );
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
         const decisionInstruction = parsePatchInstruction(rawDecision);
@@ -737,7 +758,7 @@ export async function* runOrchestrator(options: {
         yield { type: "step", step: "fix" };
 
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "started" };
-        const rawFix = await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), fixPrompt(locale, task, lastCheckFailure), signal, true);
+        const rawFix = await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), fixPrompt(locale, task, lastCheckFailure), signal, true, locale, options.projectContext);
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
         const fixInstruction = parsePatchInstruction(rawFix);
         lastDecision = fixInstruction.decision || rawFix.trim();

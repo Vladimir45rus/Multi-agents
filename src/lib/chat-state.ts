@@ -11,6 +11,7 @@ export type ChatStreamState = {
   startedAt: string;
   finishedAt?: string;
   error?: string;
+  rateLimited?: boolean;
 };
 
 export function appendStreamDelta(
@@ -37,6 +38,7 @@ export function finishStream(
   status: "done" | "error" | "cancelled",
   error?: string,
   now = new Date().toISOString(),
+  rateLimited = false,
 ): ChatStreamState {
   return {
     channel,
@@ -46,5 +48,6 @@ export function finishStream(
     startedAt: previous?.startedAt ?? now,
     finishedAt: now,
     error,
+    rateLimited,
   };
 }

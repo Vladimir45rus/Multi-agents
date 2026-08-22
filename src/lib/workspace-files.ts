@@ -1,7 +1,7 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, readdir, realpath, stat, lstat, mkdir, writeFile, unlink } from "node:fs/promises";
+import { readFile, readdir, realpath, stat, lstat, mkdir, writeFile, unlink, rename, rm } from "node:fs/promises";
 import path from "node:path";
 import { desc, eq } from "drizzle-orm";
 import { db } from "@/db";
@@ -30,6 +30,10 @@ export type WorkspaceTreeFile = {
   language: string;
   size: number;
   updatedAt: string;
+};
+
+export type WorkspaceTreeEntry = WorkspaceTreeFile & {
+  kind: "file" | "directory";
 };
 
 export type WorkspacePatchFile = {
@@ -105,38 +109,43 @@ async function readTextState(root: string, relativePath: string): Promise<Worksp
   }
 }
 
-async function walkDirectory(root: string, current: string, result: WorkspaceTreeFile[]) {
-  if (result.length >= MAX_TREE_FILES) return;
-  const entries = await readdir(current, { withFileTypes: true });
+async function walkDirectory(root: string, current: string, files: WorkspaceTreeFile[], entries: WorkspaceTreeEntry[]) {
+  if (files.length >= MAX_TREE_FILES) return;
+  const directoryEntries = await readdir(current, { withFileTypes: true });
 
-  for (const entry of entries) {
-    if (result.length >= MAX_TREE_FILES) return;
+  for (const entry of directoryEntries) {
+    if (files.length >= MAX_TREE_FILES) return;
     if (entry.name.startsWith(".") && IGNORED_DIRECTORIES.has(entry.name)) continue;
 
     const absolutePath = path.join(current, entry.name);
     if (entry.isSymbolicLink()) continue;
     if (entry.isDirectory()) {
       if (IGNORED_DIRECTORIES.has(entry.name)) continue;
-      await walkDirectory(root, absolutePath, result);
+      const info = await stat(absolutePath);
+      const relativePath = toPosix(path.relative(root, absolutePath));
+      entries.push({ path: relativePath, language: "directory", size: 0, updatedAt: info.mtime.toISOString(), kind: "directory" });
+      await walkDirectory(root, absolutePath, files, entries);
       continue;
     }
     if (!entry.isFile() || isIgnoredFile(absolutePath)) continue;
 
     const info = await stat(absolutePath);
     const relativePath = toPosix(path.relative(root, absolutePath));
-    result.push({
-      path: relativePath,
-      language: languageFromPath(relativePath),
-      size: info.size,
-      updatedAt: info.mtime.toISOString(),
-    });
+    const file = { path: relativePath, language: languageFromPath(relativePath), size: info.size, updatedAt: info.mtime.toISOString() };
+    files.push(file);
+    entries.push({ ...file, kind: "file" });
   }
 }
 
 async function scanTree(root: string) {
-  const result: WorkspaceTreeFile[] = [];
-  await walkDirectory(root, root, result);
-  return result.sort((left, right) => left.path.localeCompare(right.path));
+  const files: WorkspaceTreeFile[] = [];
+  const entries: WorkspaceTreeEntry[] = [];
+  await walkDirectory(root, root, files, entries);
+  const sortEntries = (left: WorkspaceTreeEntry, right: WorkspaceTreeEntry) => left.path.localeCompare(right.path);
+  return {
+    files: files.sort((left, right) => left.path.localeCompare(right.path)),
+    entries: entries.sort(sortEntries),
+  };
 }
 
 export async function connectWorkspaceDirectory(directory: string) {
@@ -146,12 +155,12 @@ export async function connectWorkspaceDirectory(directory: string) {
   const info = await stat(resolved);
   if (!info.isDirectory()) throw new Error("Selected project path is not a directory");
 
-  const files = await scanTree(resolved);
+  const tree = await scanTree(resolved);
   await db.update(workspaceSettings).set({ projectRoot: resolved, updatedAt: new Date() });
   await db.delete(projectFiles);
 
   let imported = 0;
-  for (const file of files) {
+  for (const file of tree.files) {
     if (!isTextPath(file.path) || file.size > MAX_FILE_BYTES) continue;
     const state = await readTextState(resolved, file.path);
     if (!state.exists) continue;
@@ -164,12 +173,71 @@ export async function connectWorkspaceDirectory(directory: string) {
     imported += 1;
   }
 
-  return { root: resolved, files: files.length, imported };
+  return { root: resolved, files: tree.files.length, imported };
 }
 
 export async function listWorkspaceTree() {
   const root = await getWorkspaceRoot();
-  return { root, files: await scanTree(root) };
+  return { root, ...(await scanTree(root)) };
+}
+
+async function assertMainWorkspaceActor(actorAgentId: number) {
+  await assertMainAgent(actorAgentId);
+}
+
+export async function createWorkspaceEntry(actorAgentId: number, relativePath: string, kind: "file" | "directory", content = "") {
+  await assertMainWorkspaceActor(actorAgentId);
+  const root = await getWorkspaceRoot();
+  const target = await safeAbsolutePath(root, relativePath);
+  if (kind === "directory") {
+    await mkdir(target.absolutePath, { recursive: false });
+  } else {
+    await mkdir(path.dirname(target.absolutePath), { recursive: true });
+    await writeFile(target.absolutePath, content, { encoding: "utf8", flag: "wx" });
+    await db.insert(projectFiles).values({ path: target.relativePath, language: languageFromPath(target.relativePath), content, updatedAt: new Date() });
+  }
+  return { path: target.relativePath, kind };
+}
+
+export async function renameWorkspaceEntry(actorAgentId: number, relativePath: string, nextRelativePath: string) {
+  await assertMainWorkspaceActor(actorAgentId);
+  const root = await getWorkspaceRoot();
+  const source = await safeAbsolutePath(root, relativePath);
+  const target = await safeAbsolutePath(root, nextRelativePath);
+  try {
+    await lstat(target.absolutePath);
+    throw new Error("Target path already exists");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+
+  await mkdir(path.dirname(target.absolutePath), { recursive: true });
+  await rename(source.absolutePath, target.absolutePath);
+  const indexedFiles = await db.select().from(projectFiles);
+  const prefix = `${source.relativePath}/`;
+  const affected = indexedFiles.filter((file) => file.path === source.relativePath || file.path.startsWith(prefix));
+  for (const file of affected) {
+    const nextPath = file.path === source.relativePath ? target.relativePath : `${target.relativePath}/${file.path.slice(prefix.length)}`;
+    await db.delete(projectFiles).where(eq(projectFiles.path, file.path));
+    await db.insert(projectFiles).values({ path: nextPath, language: languageFromPath(nextPath), content: file.content, updatedAt: new Date() });
+  }
+  return { path: source.relativePath, nextPath: target.relativePath };
+}
+
+export async function deleteWorkspaceEntry(actorAgentId: number, relativePath: string) {
+  await assertMainWorkspaceActor(actorAgentId);
+  const root = await getWorkspaceRoot();
+  const target = await safeAbsolutePath(root, relativePath);
+  const info = await lstat(target.absolutePath);
+  await rm(target.absolutePath, { recursive: info.isDirectory(), force: false });
+  const indexedFiles = await db.select().from(projectFiles);
+  const prefix = `${target.relativePath}/`;
+  for (const file of indexedFiles) {
+    if (file.path === target.relativePath || (info.isDirectory() && file.path.startsWith(prefix))) {
+      await db.delete(projectFiles).where(eq(projectFiles.path, file.path));
+    }
+  }
+  return { path: target.relativePath };
 }
 
 export async function readWorkspaceFile(relativePath: string) {
@@ -188,7 +256,7 @@ export async function searchWorkspaceFiles(query: string) {
   const tree = await scanTree(root);
   const matches: Array<{ path: string; line: number; text: string }> = [];
 
-  for (const file of tree) {
+  for (const file of tree.files) {
     if (matches.length >= MAX_SEARCH_RESULTS || !isTextPath(file.path) || file.size > MAX_FILE_BYTES) continue;
     const state = await readTextState(root, file.path);
     if (!state.exists) continue;

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { registerTaskController, releaseTaskController, runOrchestrator } from "@/lib/orchestrator";
 import type { OrchestratorStreamEvent } from "@/lib/orchestrator-types";
+import type { ProjectContextInput } from "@/lib/project-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -13,6 +14,7 @@ export async function POST(request: Request) {
     maxIterations?: number;
     mode?: "autonomous" | "controlled";
     locale?: "ru" | "en";
+    projectContext?: ProjectContextInput;
   };
 
   try {
@@ -35,7 +37,7 @@ export async function POST(request: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(streamController) {
       try {
-        for await (const event of runOrchestrator({ task, taskId, maxIterations, mode: body.mode, locale: body.locale, signal: controller.signal })) {
+        for await (const event of runOrchestrator({ task, taskId, maxIterations, mode: body.mode, locale: body.locale, signal: controller.signal, projectContext: body.projectContext })) {
           streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         }
       } catch (error) {

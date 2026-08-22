@@ -17,6 +17,8 @@ type OrchestratorPanelProps = {
   open: boolean;
   onClose: () => void;
   locale: UiLocale;
+  activeFilePath?: string;
+  activeFileContent?: string;
 };
 
 const dict = {
@@ -155,7 +157,7 @@ function statusLabel(status: string, locale: UiLocale) {
   return labels[status] ?? status;
 }
 
-export function OrchestratorPanel({ open, onClose, locale }: OrchestratorPanelProps) {
+export function OrchestratorPanel({ open, onClose, locale, activeFilePath, activeFileContent }: OrchestratorPanelProps) {
   const t = dict[locale];
 
   const [task, setTask] = useState("");
@@ -274,7 +276,7 @@ export function OrchestratorPanel({ open, onClose, locale }: OrchestratorPanelPr
       const res = await fetch("/api/orchestrate/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-        body: JSON.stringify({ task, taskId: nextTaskId, maxIterations, mode, locale }),
+        body: JSON.stringify({ task, taskId: nextTaskId, maxIterations, mode, locale, projectContext: { activeFilePath, activeFileContent } }),
         signal: controller.signal,
       });
 

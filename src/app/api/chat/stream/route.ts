@@ -1,4 +1,5 @@
 import { streamWorkspaceMessage, type ChatAttachment, type ChatChannel, type ChatStreamEvent, type UiLocale } from "@/lib/workspace";
+import type { ProjectContextInput } from "@/lib/project-context";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -14,6 +15,7 @@ export async function POST(request: Request) {
     duplicateToLead?: boolean;
     attachments?: ChatAttachment[];
     locale?: UiLocale;
+    projectContext?: ProjectContextInput;
   };
 
   try {
@@ -39,6 +41,7 @@ export async function POST(request: Request) {
           duplicateToLead: body.duplicateToLead,
           attachments,
           signal: request.signal,
+          projectContext: body.projectContext,
         })) {
           controller.enqueue(encodeEvent(encoder, event));
         }

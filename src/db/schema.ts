@@ -52,6 +52,15 @@ export const chatMessages = sqliteTable("chat_messages", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
 });
 
+export const systemEvents = sqliteTable("system_events", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  level: text("level").notNull().default("info"),
+  source: text("source").notNull(),
+  message: text("message").notNull(),
+  details: text("details").notNull().default(""),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
+});
+
 export const terminalEntries = sqliteTable("terminal_entries", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   command: text("command").notNull(),

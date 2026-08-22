@@ -45,7 +45,7 @@ type ChatStreamEvent =
   | { type: "agent_start"; channel: ChatChannel; identity: AgentIdentity }
   | { type: "delta"; channel: ChatChannel; identity: AgentIdentity; text: string }
   | { type: "agent_done"; channel: ChatChannel; identity: AgentIdentity; content: string }
-  | { type: "agent_error"; channel: ChatChannel; identity: AgentIdentity; message: string }
+  | { type: "agent_error"; channel: ChatChannel; identity: AgentIdentity; message: string; status?: number; rateLimited?: boolean }
   | { type: "done"; channel: ChatChannel }
   | { type: "error"; channel: ChatChannel; message: string };
 
@@ -60,6 +60,14 @@ type Agent = {
   skill: string;
   systemPrompt: string;
   isActive: boolean;
+};
+
+type WorkspaceTreeEntry = {
+  path: string;
+  language: string;
+  size: number;
+  updatedAt: string;
+  kind: "file" | "directory";
 };
 
 type WorkspaceData = {
@@ -80,6 +88,7 @@ type WorkspaceData = {
   files: Array<{ id: number; path: string; language: string; content: string; updatedAt: string }>;
   messages: WorkspaceMessage[];
   terminal: Array<{ id: number; command: string; output: string; status: string; createdAt: string }>;
+  systemEvents: Array<{ id: number; level: string; source: string; message: string; details: string; createdAt: string }>;
   findings: Array<{ id: number; filePath: string; severity: string; message: string; line: number | null; createdAt: string }>;
 };
 
@@ -306,6 +315,13 @@ export function IdeApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const [orchestratorOpen, setOrchestratorOpen] = useState(false);
+  const [providersOpen, setProvidersOpen] = useState(true);
+  const [agentsOpen, setAgentsOpen] = useState(true);
+  const [fullscreenPanel, setFullscreenPanel] = useState<string | null>(null);
+  const [columnWidths, setColumnWidths] = useState([260, 420, 360, 360]);
+  const [bottomRowHeight, setBottomRowHeight] = useState(220);
+  const [workspaceTreeEntries, setWorkspaceTreeEntries] = useState<WorkspaceTreeEntry[]>([]);
+  const [fileStatuses, setFileStatuses] = useState<Record<string, "new" | "modified" | "saved">>({});
 
   const [apiKeysDraft, setApiKeysDraft] = useState<Record<string, string>>({});
   const [githubTokenDraft, setGithubTokenDraft] = useState("");
@@ -331,14 +347,34 @@ export function IdeApp() {
 
   const t = dict[locale];
 
+  const settingsDirty = useMemo(() => {
+    const saved = data?.settings;
+    if (!saved) return false;
+    return Object.values(apiKeysDraft).some((value) => Boolean(value.trim()))
+      || githubTokenDraft.trim() !== ""
+      || githubRepoDraft !== saved.githubRepo
+      || githubAutoPushDraft !== saved.githubAutoPush;
+  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft]);
+  const newAgentDirty = useMemo(() => Boolean(
+    newAgent.name.trim()
+      || newAgent.description.trim()
+      || newAgent.skill.trim()
+      || newAgent.systemPrompt.trim()
+      || newAgent.provider !== getProviderPreset("openrouter").id
+      || newAgent.baseUrl !== getProviderPreset("openrouter").baseUrl
+      || newAgent.model !== getProviderPreset("openrouter").defaultModel
+      || newAgent.role !== "advisor"
+      || newAgent.manualModel,
+  ), [newAgent]);
+
   const selectedFile = useMemo(() => data?.files.find((f) => f.id === selectedFileId) ?? null, [data, selectedFileId]);
   const mainAgent = useMemo(() => data?.agents.find((a) => a.role === "main") ?? null, [data?.agents]);
   const leadMessages = useMemo(
-    () => [...(data?.messages.filter((m) => m.chatChannel === "lead") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "lead")],
+    () => [...(data?.messages.filter((m) => m.chatChannel === "lead" && m.senderType !== "system") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "lead")],
     [data?.messages, optimisticMessages],
   );
   const groupMessages = useMemo(
-    () => [...(data?.messages.filter((m) => m.chatChannel === "group") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")],
+    () => [...(data?.messages.filter((m) => m.chatChannel === "group" && m.senderType !== "system") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")],
     [data?.messages, optimisticMessages],
   );
   const liveMessages = useMemo(() => Object.values(streamingMessages), [streamingMessages]);
@@ -424,6 +460,23 @@ export function IdeApp() {
     );
   }
 
+  async function selectWorkspaceFile(file: WorkspaceTreeEntry) {
+    if (file.kind !== "file") return;
+    const indexedFile = data?.files.find((candidate) => candidate.path === file.path);
+    if (!indexedFile) return;
+    setSelectedFileId(indexedFile.id);
+    try {
+      const response = await fetch(`/api/workspace/file?path=${encodeURIComponent(file.path)}`, { cache: "no-store" });
+      const payload = response.ok ? (await response.json()) as { content?: string } : null;
+      const content = typeof payload?.content === "string" ? payload.content : indexedFile.content;
+      setEditorText(content);
+      setData((previous) => previous ? { ...previous, files: previous.files.map((candidate) => candidate.id === indexedFile.id ? { ...candidate, content } : candidate) } : previous);
+      setFileStatuses((previous) => ({ ...previous, [file.path]: "saved" }));
+    } catch {
+      setEditorText(indexedFile.content);
+    }
+  }
+
   async function fetchModels(providerId: string, baseUrl?: string, apiKey?: string, force = false) {
     const preset = getProviderPreset(providerId);
 
@@ -446,10 +499,15 @@ export function IdeApp() {
 
   async function loadWorkspace(nextFileId?: number | null, activeLocale?: UiLocale) {
     const l = activeLocale ?? locale;
-    const res = await fetch("/api/workspace", { cache: "no-store" });
-    if (!res.ok) throw new Error(dict[l].errLoad);
+    const [workspaceResponse, treeResponse] = await Promise.all([
+      fetch("/api/workspace", { cache: "no-store" }),
+      fetch("/api/workspace/tree", { cache: "no-store" }),
+    ]);
+    if (!workspaceResponse.ok) throw new Error(dict[l].errLoad);
 
-    const payload = (await res.json()) as WorkspaceData;
+    const payload = (await workspaceResponse.json()) as WorkspaceData;
+    const treePayload = treeResponse.ok ? (await treeResponse.json()) as { entries?: WorkspaceTreeEntry[] } : null;
+    setWorkspaceTreeEntries(treePayload?.entries ?? payload.files.map((file) => ({ path: file.path, language: file.language, size: file.content.length, updatedAt: file.updatedAt, kind: "file" })));
     setData(payload);
     setWorkspaceRootDraft(payload.settings?.projectRoot ?? "");
     setApiKeysDraft(payload.settings?.apiKeys ?? {});
@@ -463,6 +521,7 @@ export function IdeApp() {
     if (target != null) localStorage.setItem("ui-selected-file", String(target));
     const file = payload.files.find((f) => f.id === target) ?? payload.files[0];
     setEditorText(file?.content ?? "");
+    setFileStatuses((previous) => Object.fromEntries(payload.files.map((item) => [item.path, previous[item.path] === "modified" || previous[item.path] === "new" ? previous[item.path] : "saved"])));
     setStatus(dict[l].synced);
 
     void fetchModels("openrouter", getProviderPreset("openrouter").baseUrl, payload.settings?.apiKeys?.openrouter);
@@ -492,6 +551,97 @@ export function IdeApp() {
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newAgent.provider]);
+
+  function startColumnResize(index: number, event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidths = [...columnWidths];
+    const onMove = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      setColumnWidths((current) => {
+        const next = [...startWidths];
+        next[index] = Math.max(180, startWidths[index] + delta);
+        next[index + 1] = Math.max(220, startWidths[index + 1] - delta);
+        return next;
+      });
+    };
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }
+
+  function startRowResize(event: React.PointerEvent<HTMLDivElement>) {
+    event.preventDefault();
+    const startY = event.clientY;
+    const startHeight = bottomRowHeight;
+    const onMove = (moveEvent: PointerEvent) => setBottomRowHeight(Math.max(140, Math.min(520, startHeight - (moveEvent.clientY - startY))));
+    const onUp = () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp, { once: true });
+  }
+
+  async function createTreeEntry(kind: "file" | "directory") {
+
+    if (!mainAgent) return;
+    const path = window.prompt(kind === "file" ? "Новый файл" : "Новая папка");
+    if (!path?.trim()) return;
+    const response = await fetch("/api/workspace/entry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actorAgentId: mainAgent.id, path: path.trim(), kind }),
+    });
+    if (!response.ok) {
+      setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "File operation failed");
+      return;
+    }
+    await loadWorkspace(selectedFileId, locale);
+    if (kind === "file") setFileStatuses((previous) => ({ ...previous, [path.trim()]: "new" }));
+  }
+
+  async function renameTreeEntry(filePath: string) {
+    if (!mainAgent) return;
+    const nextPath = window.prompt("Новое имя или путь", filePath);
+    if (!nextPath?.trim() || nextPath.trim() === filePath) return;
+    const response = await fetch("/api/workspace/entry", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actorAgentId: mainAgent.id, path: filePath, nextPath: nextPath.trim() }),
+    });
+    if (!response.ok) {
+      setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Rename failed");
+      return;
+    }
+    await loadWorkspace(null, locale);
+  }
+
+  async function deleteTreeEntry(filePath: string) {
+    if (!mainAgent || !window.confirm(`Удалить ${filePath}?`)) return;
+    const response = await fetch("/api/workspace/entry", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ actorAgentId: mainAgent.id, path: filePath }),
+    });
+    if (!response.ok) {
+      setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Delete failed");
+      return;
+    }
+    await loadWorkspace(null, locale);
+  }
+
+  function panelClass(name: string) {
+    if (!fullscreenPanel) return "";
+    return fullscreenPanel === name ? "fixed inset-0 z-50 bg-[#1e1e1e]" : "hidden";
+  }
+
+  function toggleFullscreen(name: string) {
+    setFullscreenPanel((current) => current === name ? null : name);
+  }
 
   function switchLocale(next: UiLocale) {
     setLocale(next);
@@ -535,6 +685,7 @@ export function IdeApp() {
   }
 
   async function saveApiKeys() {
+    if (!settingsDirty) return;
     setBusy(true);
     try {
       let apiKeysPayload = apiKeysDraft;
@@ -575,6 +726,8 @@ export function IdeApp() {
         throw new Error(payload?.error ?? "Settings update failed");
       }
       await loadWorkspace(selectedFileId, locale);
+      setApiKeysDraft({});
+      setGithubTokenDraft("");
     } finally {
       setBusy(false);
     }
@@ -649,6 +802,7 @@ export function IdeApp() {
         throw new Error(payload?.error ?? "save error");
       }
       await loadWorkspace(selectedFile.id, locale);
+      setFileStatuses((previous) => ({ ...previous, [selectedFile.path]: "saved" }));
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Error");
     } finally {
@@ -670,6 +824,7 @@ export function IdeApp() {
         throw new Error(payload?.error ?? "rollback error");
       }
       await loadWorkspace(selectedFile.id, locale);
+      setFileStatuses((previous) => ({ ...previous, [selectedFile.path]: "saved" }));
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Error");
     } finally {
@@ -746,6 +901,10 @@ export function IdeApp() {
           channel,
           duplicateToLead: duplicate,
           attachments: outgoingAttachments,
+          projectContext: {
+            activeFilePath: selectedFile?.path,
+            activeFileContent: editorText,
+          },
         }),
         signal: controller.signal,
       });
@@ -818,7 +977,7 @@ export function IdeApp() {
             const current = previous[identity.agentId];
             return {
               ...previous,
-              [identity.agentId]: finishStream(current, event.channel as ChatChannel, identity, "", "error", event.message),
+              [identity.agentId]: finishStream(current, event.channel as ChatChannel, identity, "", "error", event.message, new Date().toISOString(), event.rateLimited ?? event.status === 429),
             };
           });
           setStatus(event.message);
@@ -1009,13 +1168,14 @@ export function IdeApp() {
     return liveMessages
       .filter((message) => message.channel === channel)
       .map((message) => (
-        <article key={`stream-${message.identity.agentId}`} className="rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
+        <article key={`stream-${message.identity.agentId}`} className="mr-auto w-fit max-w-[92%] rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
           <div className="flex items-center justify-between gap-2">
             <p className="text-[11px] text-[#4fc1ff]">{agentHeader(message.identity, message.identity.displayName)}</p>
             <span className={`text-[10px] ${statusClass(message.status)}`}>{statusLabel(message.status)}</span>
           </div>
           <p className="mt-1 whitespace-pre-wrap">{message.content || "…"}</p>
           {message.error ? <p className="mt-1 text-xs text-[#f48771]">{message.error}</p> : null}
+          {message.rateLimited ? <p className="mt-1 rounded bg-[#5a3c2b] px-2 py-1 text-xs text-[#f4c7a1]">Превышен лимит (429), смените модель</p> : null}
           {renderMessageActions(`stream-${message.identity.agentId}`, message.content, false)}
         </article>
       ));
@@ -1045,46 +1205,77 @@ export function IdeApp() {
         </div>
       </header>
 
-      <div className="grid h-[calc(100%-40px)] grid-cols-[260px_minmax(0,1.1fr)_minmax(0,0.9fr)_minmax(0,0.9fr)] grid-rows-[minmax(0,1fr)_220px]">
-        <section className="panel row-span-2 border-r border-[#2d2d30]">
-          <div className="panel-header">{t.explorer}</div>
+      <div
+        className="relative grid h-[calc(100%-40px)] overflow-auto"
+        style={{
+          gridTemplateColumns: columnWidths.map((width) => `${width}px`).join(" "),
+          gridTemplateRows: `minmax(0, 1fr) ${bottomRowHeight}px`,
+        }}
+      >
+        {columnWidths.slice(0, -1).map((_, index) => (
+          <div key={`column-resizer-${index}`} className="absolute inset-y-0 z-10 w-1 cursor-col-resize bg-transparent hover:bg-[#007acc]" style={{ left: `${columnWidths.slice(0, index + 1).reduce((sum, width) => sum + width, 0) - 2}px` }} onPointerDown={(event) => startColumnResize(index, event)} />
+        ))}
+        <div className="absolute inset-x-0 z-10 h-1 cursor-row-resize bg-transparent hover:bg-[#007acc]" style={{ bottom: `${bottomRowHeight - 2}px` }} onPointerDown={startRowResize} />
+        <section className={`panel row-span-2 border-r border-[#2d2d30] ${panelClass("explorer")}`}>
+          <div className="panel-header flex items-center justify-between">
+            <span>{t.explorer}</span>
+            <div className="flex gap-1">
+              <button type="button" onClick={() => void createTreeEntry("file")} title="Создать файл" className="rounded bg-[#3a3d41] px-2 py-1 text-xs">+F</button>
+              <button type="button" onClick={() => void createTreeEntry("directory")} title="Создать папку" className="rounded bg-[#3a3d41] px-2 py-1 text-xs">+D</button>
+              <button type="button" onClick={() => toggleFullscreen("explorer")} title="Развернуть" className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button>
+            </div>
+          </div>
           <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {data?.files?.map((file) => (
-              <button
-                key={file.id}
-                type="button"
-                onClick={() => {
-                  setSelectedFileId(file.id);
-                  setEditorText(file.content);
-                }}
-                className={`mb-1 block w-full rounded px-2 py-1 text-left text-sm ${selectedFileId === file.id ? "bg-[#37373d] text-white" : "hover:bg-[#2a2d2e]"}`}
-              >
-                {file.path}
-              </button>
-            ))}
+            {workspaceTreeEntries.map((entry) => {
+              const file = entry.kind === "file" ? data?.files.find((candidate) => candidate.path === entry.path) : null;
+              const fileStatus = fileStatuses[entry.path];
+              return (
+                <div key={`${entry.kind}-${entry.path}`} className="group mb-1 flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={entry.kind === "directory"}
+                    onClick={() => {
+                      void selectWorkspaceFile(entry);
+                    }}
+                    style={{ paddingLeft: `${8 + entry.path.split("/").length * 8}px` }}
+                    className={`block min-w-0 flex-1 truncate rounded px-2 py-1 text-left text-sm ${entry.kind === "directory" ? "text-[#9da3b2]" : selectedFileId === file?.id ? "bg-[#37373d] text-white" : "hover:bg-[#2a2d2e]"}`}
+                  >
+                    <span className="mr-1 text-[#4fc1ff]">{entry.kind === "directory" ? "▾" : "◆"}</span>{entry.path}
+                    {entry.kind === "file" && fileStatus ? <span className={`ml-2 text-[10px] ${fileStatus === "modified" ? "text-amber-300" : fileStatus === "new" ? "text-[#4fc1ff]" : "text-[#6a9955]"}`}>{fileStatus === "modified" ? "●" : fileStatus === "new" ? "＋" : "✓"}</span> : null}
+                  </button>
+                  <button type="button" onClick={() => void renameTreeEntry(entry.path)} className="invisible rounded bg-[#3a3d41] px-1 text-[10px] group-hover:visible">R</button>
+                  <button type="button" onClick={() => void deleteTreeEntry(entry.path)} className="invisible rounded bg-[#5a3c2b] px-1 text-[10px] group-hover:visible">X</button>
+                </div>
+              );
+            })}
           </div>
         </section>
 
-        <section className="panel border-r border-[#2d2d30]">
+        <section className={`panel border-r border-[#2d2d30] ${panelClass("editor")}`}>
           <div className="panel-header flex items-center justify-between">
             <span>{t.editor} — {selectedFile?.path ?? t.noFile}</span>
+            <button type="button" onClick={() => toggleFullscreen("editor")} title="Развернуть" className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button>
             <div className="flex items-center gap-2">
               <button type="button" onClick={rollbackFile} disabled={!selectedFile || !mainAgent || busy} className="rounded bg-[#5a3c2b] px-2 py-1 text-xs text-white disabled:opacity-60">
                 {t.rollback}
               </button>
-              <button type="button" onClick={saveFile} disabled={!selectedFile || !mainAgent || busy} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:opacity-60">
+              <button type="button" onClick={saveFile} disabled={!selectedFile || !mainAgent || busy || fileStatuses[selectedFile?.path ?? ""] !== "modified"} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">
                 {t.saveMain}
               </button>
             </div>
           </div>
-          <textarea value={editorText} onChange={(e) => setEditorText(e.target.value)} spellCheck={false} className="min-h-0 flex-1 resize-none bg-[#1e1e1e] p-3 font-mono text-sm outline-none" />
+          <textarea value={editorText} onChange={(e) => {
+            setEditorText(e.target.value);
+            if (selectedFile) setFileStatuses((previous) => ({ ...previous, [selectedFile.path]: e.target.value === selectedFile.content ? "saved" : "modified" }));
+          }} spellCheck={false} className="min-h-0 flex-1 resize-none bg-[#1e1e1e] p-3 font-mono text-sm outline-none" />
         </section>
 
-        <section className="panel row-span-2 border-r border-[#2d2d30]">
-          <div className="panel-header">{t.leadChat}</div>
+        <section className={`panel row-span-2 border-r border-[#2d2d30] ${panelClass("lead")}`}>
+
+          <div className="panel-header flex items-center justify-between"><span>{t.leadChat}</span><span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span><button type="button" onClick={() => toggleFullscreen("lead")} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button></div>
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {leadMessages?.map((msg) => (
-              <article key={msg.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2 text-sm">
+              <article key={msg.id} className={`w-fit max-w-[92%] rounded border border-[#3a3d41] p-2 text-sm ${msg.senderType === "user" ? "ml-auto bg-[#0e639c] text-white" : "mr-auto bg-[#252526]"}`}>
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                   {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
@@ -1107,11 +1298,11 @@ export function IdeApp() {
           </form>
         </section>
 
-        <section className="panel">
-          <div className="panel-header">{t.allChat}</div>
+        <section className={`panel ${panelClass("group")}`}>
+          <div className="panel-header flex items-center justify-between"><span>{t.allChat}</span><span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span><button type="button" onClick={() => toggleFullscreen("group")} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button></div>
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {groupMessages?.map((msg) => (
-              <article key={msg.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2 text-sm">
+              <article key={msg.id} className={`w-fit max-w-[92%] rounded border border-[#3a3d41] p-2 text-sm ${msg.senderType === "user" ? "ml-auto bg-[#0e639c] text-white" : "mr-auto bg-[#252526]"}`}>
                 <div className="flex items-center justify-between gap-2">
                   <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                   {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
@@ -1156,8 +1347,8 @@ export function IdeApp() {
           </form>
         </section>
 
-        <section className="panel border-r border-t border-[#2d2d30]">
-          <div className="panel-header">{t.terminal}</div>
+        <section className={`panel border-r border-t border-[#2d2d30] ${panelClass("terminal")}`}>
+          <div className="panel-header flex items-center justify-between"><span>{t.terminal}</span><button type="button" onClick={() => toggleFullscreen("terminal")} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button></div>
           <div className="min-h-0 flex-1 overflow-y-auto bg-[#111214] p-3 font-mono text-xs">
             {data?.terminal?.map((entry) => (
               <div key={entry.id} className="mb-3">
@@ -1171,9 +1362,17 @@ export function IdeApp() {
           </form>
         </section>
 
-        <section className="panel border-t border-[#2d2d30]">
-          <div className="panel-header">{t.checks}</div>
+        <section className={`panel border-t border-[#2d2d30] ${panelClass("checks")}`}>
+          <div className="panel-header flex items-center justify-between"><span>{locale === "ru" ? "ЛОГИ / СИСТЕМНЫЕ СОБЫТИЯ" : "LOGS / SYSTEM EVENTS"}</span><button type="button" onClick={() => toggleFullscreen("checks")} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button></div>
+          <div className="border-b border-[#2d2d30] px-3 py-1 text-[10px] uppercase text-[#9da3b2]">{t.checks}</div>
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 text-xs">
+            {data?.systemEvents?.map((event) => (
+              <article key={`event-${event.id}`} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
+                <p className="text-[10px] text-[#9da3b2]">{event.source} · {new Date(event.createdAt).toLocaleTimeString(locale)}</p>
+                <p>{event.message}</p>
+                {event.details ? <pre className="mt-1 whitespace-pre-wrap text-[10px] text-[#9da3b2]">{event.details}</pre> : null}
+              </article>
+            ))}
             {data?.findings?.map((finding) => (
               <article key={finding.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
                 <p className="text-[#9da3b2]">[{finding.severity.toUpperCase()}] {finding.filePath}{finding.line ? `:${finding.line}` : ""}</p>
@@ -1229,7 +1428,8 @@ export function IdeApp() {
           </section>
 
           <section className="mb-5">
-            <h3 className="mb-2 text-xs uppercase text-[#9da3b2]">{t?.apiKeys}</h3>
+            <button type="button" onClick={() => setProvidersOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t?.apiKeys}</span><span>{providersOpen ? "−" : "+"}</span></button>
+            {providersOpen ? <>
             <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="mb-2 inline-block text-xs text-[#4fc1ff] underline">
               {t.freeOpenRouter}
             </a>
@@ -1280,7 +1480,8 @@ export function IdeApp() {
               </label>
             </div>
 
-            <button type="button" onClick={saveApiKeys} className="mt-2 rounded bg-[#0e639c] px-3 py-1 text-xs text-white">{t.saveKeys}</button>
+            <button type="button" onClick={saveApiKeys} disabled={busy || !settingsDirty} className="mt-2 rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.saveKeys}</button>
+            </> : null}
           </section>
 
           <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
@@ -1333,12 +1534,12 @@ export function IdeApp() {
             <input value={newAgent.description} onChange={(e) => setNewAgent((p) => ({ ...p, description: e.target.value }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
             <textarea value={newAgent.skill} onChange={(e) => setNewAgent((p) => ({ ...p, skill: e.target.value }))} placeholder={t.skill} className="mb-1 min-h-12 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
             <textarea value={newAgent.systemPrompt} onChange={(e) => setNewAgent((p) => ({ ...p, systemPrompt: e.target.value }))} placeholder={t.prompt} className="mb-1 min-h-12 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-            <button type="button" onClick={createAgent} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white">{t.createAgent}</button>
+            <button type="button" onClick={createAgent} disabled={busy || !newAgentDirty} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.createAgent}</button>
           </section>
 
           <section>
-            <h3 className="mb-2 text-xs uppercase text-[#9da3b2]">{t.agents}</h3>
-            <div className="space-y-2">
+            <button type="button" onClick={() => setAgentsOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t.agents}</span><span>{agentsOpen ? "−" : "+"}</span></button>
+            {agentsOpen ? <div className="space-y-2">
               {data?.agents?.map((agent) => {
                 const draft =
                   agentDrafts[agent.id] ??
@@ -1423,7 +1624,7 @@ export function IdeApp() {
                   </article>
                 );
               })}
-            </div>
+            </div> : null}
           </section>
         </div>
       </aside>
@@ -1472,7 +1673,7 @@ export function IdeApp() {
         </div>
       ) : null}
 
-      <OrchestratorPanel open={orchestratorOpen} onClose={() => setOrchestratorOpen(false)} locale={locale} />
+      <OrchestratorPanel open={orchestratorOpen} onClose={() => setOrchestratorOpen(false)} locale={locale} activeFilePath={selectedFile?.path} activeFileContent={editorText} />
 
       <div className="status-bar">
         <span>{status}</span>
