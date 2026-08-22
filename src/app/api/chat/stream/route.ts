@@ -43,8 +43,10 @@ export async function POST(request: Request) {
           controller.enqueue(encodeEvent(encoder, event));
         }
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : "Chat stream failed";
-        controller.enqueue(encodeEvent(encoder, { type: "error", channel, message: errorMessage }));
+        if (!request.signal.aborted) {
+          const errorMessage = error instanceof Error ? error.message : "Chat stream failed";
+          controller.enqueue(encodeEvent(encoder, { type: "error", channel, message: errorMessage }));
+        }
       } finally {
         controller.close();
       }

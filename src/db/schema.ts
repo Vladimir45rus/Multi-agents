@@ -1,4 +1,5 @@
 import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import type { AgentIdentity } from "@/lib/agent-identity";
 
 export const workspaceSettings = sqliteTable("workspace_settings", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -44,9 +45,7 @@ export const chatMessages = sqliteTable("chat_messages", {
   metadata: text("metadata", { mode: "json" })
     .$type<{
       attachments?: Array<{ type: "image" | "link"; url?: string; title?: string; previewText?: string; name?: string }>;
-      agentId?: number;
-      provider?: string;
-      model?: string;
+      identity?: AgentIdentity;
     }>()
     .notNull()
     .default({}),

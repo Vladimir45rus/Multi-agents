@@ -20,6 +20,7 @@ import {
   type ProviderGatewayOptions,
 } from "@/lib/provider-gateway";
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
+import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 
 export type UiLocale = "ru" | "en";
 export type ChatChannel = "group" | "lead";
@@ -34,16 +35,14 @@ export type ChatAttachment = {
 
 export type ChatMessageMetadata = {
   attachments?: ChatAttachment[];
-  agentId?: number;
-  provider?: string;
-  model?: string;
+  identity?: AgentIdentity;
 };
 
 export type ChatStreamEvent =
-  | { type: "agent_start"; channel: ChatChannel; agentId: number; agentName: string; role: string; provider: string; model: string }
-  | { type: "delta"; channel: ChatChannel; agentId: number; agentName: string; role: string; provider: string; model: string; text: string }
-  | { type: "agent_done"; channel: ChatChannel; agentId: number; agentName: string; role: string; provider: string; model: string; content: string }
-  | { type: "agent_error"; channel: ChatChannel; agentId: number; agentName: string; role: string; provider: string; model: string; message: string }
+  | { type: "agent_start"; channel: ChatChannel; identity: AgentIdentity }
+  | { type: "delta"; channel: ChatChannel; identity: AgentIdentity; text: string }
+  | { type: "agent_done"; channel: ChatChannel; identity: AgentIdentity; content: string }
+  | { type: "agent_error"; channel: ChatChannel; identity: AgentIdentity; message: string }
   | { type: "done"; channel: ChatChannel }
   | { type: "error"; channel: ChatChannel; message: string };
 
@@ -221,7 +220,7 @@ type AgentPromptContext = { skill: string; systemPrompt: string };
 
 function cleanAgentSystemPrompt(value: string) {
   return compact(value)
-    .replace(/(?:\b(?:you are|you're|identify as|call yourself|present yourself as)\b|\b(?:ты|представляйся|называй себя)\b)[^.!?\n]*(?:gpt|claude|liquid|lfm)[^.!?\n]*[.!?]?/gi, "")
+    .replace(/(?:\b(?:you are|you're|i am|i'm|identify as|call yourself|present yourself as)\b|\b(?:ты|я|представляйся|называй себя)\b)[^.!?\n]*(?:gpt|claude|liquid|lfm|foundation model)[^.!?\n]*[.!?]?/gi, "")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
@@ -436,19 +435,47 @@ export async function ensureWorkspaceBootstrap() {
     if (main) await db.update(workspaceSettings).set({ mainCoderAgentId: main.id, updatedAt: new Date() });
   }
 
-  // Migrate model ids saved by older releases before they are used for requests.
+  // Migrate model ids and legacy model-based slot names before they are used.
   const agentRows = await db.select().from(agents);
   for (const agent of agentRows) {
     const model = normalizeProviderModel(agent.provider, agent.model);
     const systemPrompt = cleanAgentSystemPrompt(agent.systemPrompt);
-    if (model !== agent.model || systemPrompt !== agent.systemPrompt) {
-      await db.update(agents).set({ model, systemPrompt }).where(eq(agents.id, agent.id));
+    const name = agent.name === "GPT-4.1 Lead" || agent.name === "Claude Sonnet Reviewer"
+      ? agent.role === "main" ? "Главный агент" : "Советник"
+      : agent.name;
+    if (model !== agent.model || systemPrompt !== agent.systemPrompt || name !== agent.name) {
+      await db.update(agents).set({ model, systemPrompt, name }).where(eq(agents.id, agent.id));
     }
   }
 
   const existingFiles = await db.select().from(projectFiles).limit(1);
   if (existingFiles.length === 0) {
     await db.insert(projectFiles).values(defaultFiles.map((file) => ({ ...file, updatedAt: new Date() })));
+  }
+
+  const currentAgentRows = await db.select().from(agents);
+  const messageRowsForIdentity = await db.select().from(chatMessages);
+  for (const message of messageRowsForIdentity) {
+    if (message.senderType === "user" || message.senderType === "system" || message.metadata?.identity) continue;
+    const matchingAgent = currentAgentRows.find((agent) =>
+      agent.name === message.agentName ||
+      (agent.role === "main" && message.agentName === "GPT-4.1 Lead") ||
+      (agent.role !== "main" && message.agentName === "Claude Sonnet Reviewer"),
+    );
+    if (matchingAgent) {
+      await db.update(chatMessages).set({
+        metadata: {
+          ...(message.metadata ?? {}),
+          identity: createAgentIdentity({
+            agentId: matchingAgent.id,
+            displayName: matchingAgent.name,
+            role: matchingAgent.role,
+            provider: matchingAgent.provider,
+            model: matchingAgent.model,
+          }),
+        },
+      }).where(eq(chatMessages.id, message.id));
+    }
   }
 
   const existingMessages = await db.select().from(chatMessages).limit(1);
@@ -935,13 +962,19 @@ async function* streamAgentReply(
   }
 
   const request = providerRequestFromAgent(agent, apiKey);
-  const configuredModel = normalizeProviderModel(agent.provider, agent.model);
+  const identity = createAgentIdentity({
+    agentId: agent.id,
+    displayName: agent.name,
+    role: agent.role,
+    provider: agent.provider,
+    model: agent.model,
+  });
   let response = "";
-  yield { type: "agent_start", channel, agentId: agent.id, agentName: agent.name, role: agent.role, provider: agent.provider, model: configuredModel };
+  yield { type: "agent_start", channel, identity };
 
   for await (const chunk of streamProviderResponse(request, gatewayMessages, options)) {
     response += chunk;
-    yield { type: "delta", channel, agentId: agent.id, agentName: agent.name, role: agent.role, provider: agent.provider, model: configuredModel, text: chunk };
+    yield { type: "delta", channel, identity, text: chunk };
   }
 
   if (!response.trim()) throw new Error(`${agent.name} returned an empty response`);
@@ -951,10 +984,10 @@ async function* streamAgentReply(
     senderType: agent.role === "main" ? "main" : "advisor",
     agentName: agent.name,
     content: response,
-    metadata: { agentId: agent.id, provider: agent.provider, model: configuredModel },
+    metadata: { identity },
   });
 
-  yield { type: "agent_done", channel, agentId: agent.id, agentName: agent.name, role: agent.role, provider: agent.provider, model: configuredModel, content: response };
+  yield { type: "agent_done", channel, identity, content: response };
 }
 
 export async function* streamWorkspaceMessage(
@@ -1011,10 +1044,23 @@ export async function* streamWorkspaceMessage(
       if (agent.role === "main" && channel === "group" && duplicateToLead) {
         const [latest] = await db.select().from(chatMessages).where(and(eq(chatMessages.chatChannel, "group"), eq(chatMessages.agentName, agent.name))).orderBy(desc(chatMessages.id)).limit(1);
         if (latest) {
-          await pushMessage({ chatChannel: "lead", senderType: "main", agentName: agent.name, content: latest.content });
+          await pushMessage({
+            chatChannel: "lead",
+            senderType: "main",
+            agentName: agent.name,
+            content: latest.content,
+            metadata: { identity: createAgentIdentity({
+              agentId: agent.id,
+              displayName: agent.name,
+              role: agent.role,
+              provider: agent.provider,
+              model: agent.model,
+            }) },
+          });
         }
       }
     } catch (error) {
+      if (options?.signal?.aborted) throw error;
       const message = agentFailureMessage(activeLocale, agent, error);
       try {
         await pushMessage({
@@ -1026,10 +1072,22 @@ export async function* streamWorkspaceMessage(
       } catch {
         // Persisting the notification is best-effort; never stop other agents.
       }
-      yield { type: "agent_error", channel, agentId: agent.id, agentName: agent.name, role: agent.role, provider: agent.provider, model: normalizeProviderModel(agent.provider, agent.model), message };
+      yield {
+        type: "agent_error",
+        channel,
+        identity: createAgentIdentity({
+          agentId: agent.id,
+          displayName: agent.name,
+          role: agent.role,
+          provider: agent.provider,
+          model: agent.model,
+        }),
+        message,
+      };
     }
   }
 
+  if (options?.signal?.aborted) throw new Error("Chat request cancelled");
   yield { type: "done", channel };
 }
 

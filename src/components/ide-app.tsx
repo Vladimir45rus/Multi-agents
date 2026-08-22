@@ -4,6 +4,17 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "re
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
+import type { AgentIdentity } from "@/lib/agent-identity";
+import { appendStreamDelta, finishStream, type ChatStreamState } from "@/lib/chat-state";
+
+type ChatMessageStatus = "sending" | "sent" | "error" | "cancelled";
+type ChatRetryRequest = {
+  channel: ChatChannel;
+  message: string;
+  duplicate: boolean;
+  attachments: ChatAttachment[];
+  optimisticIds: number[];
+};
 
 type UiLocale = "ru" | "en";
 type ChatChannel = "group" | "lead";
@@ -24,25 +35,19 @@ type WorkspaceMessage = {
   content: string;
   metadata: {
     attachments?: ChatAttachment[];
-    agentId?: number;
-    provider?: string;
-    model?: string;
+    identity?: AgentIdentity;
   };
   createdAt: string;
+  status?: ChatMessageStatus;
 };
 
-type ChatStreamEvent = {
-  type: "agent_start" | "delta" | "agent_done" | "agent_error" | "done" | "error";
-  channel?: ChatChannel;
-  agentId?: number;
-  agentName?: string;
-  role?: string;
-  provider?: string;
-  model?: string;
-  text?: string;
-  content?: string;
-  message?: string;
-};
+type ChatStreamEvent =
+  | { type: "agent_start"; channel: ChatChannel; identity: AgentIdentity }
+  | { type: "delta"; channel: ChatChannel; identity: AgentIdentity; text: string }
+  | { type: "agent_done"; channel: ChatChannel; identity: AgentIdentity; content: string }
+  | { type: "agent_error"; channel: ChatChannel; identity: AgentIdentity; message: string }
+  | { type: "done"; channel: ChatChannel }
+  | { type: "error"; channel: ChatChannel; message: string };
 
 type Agent = {
   id: number;
@@ -181,6 +186,16 @@ const dict = {
     mockHint: "Для реального ответа агенту нужен API-ключ выбранного провайдера.",
     ready: "✅ Готово",
     busy: "⏳ Выполняется...",
+    stop: "Остановить",
+    retry: "Повторить",
+    copy: "Копировать",
+    copied: "Скопировано",
+    sending: "Отправляется",
+    streaming: "Генерация",
+    sent: "Готово",
+    cancelled: "Остановлено",
+    errorStatus: "Ошибка",
+    unsaved: "● Не сохранено",
   },
   en: {
     loading: "Loading workspace...",
@@ -249,6 +264,16 @@ const dict = {
     mockHint: "A real provider API key is required for an agent to answer.",
     ready: "✅ Ready",
     busy: "⏳ Processing...",
+    stop: "Stop",
+    retry: "Retry",
+    copy: "Copy",
+    copied: "Copied",
+    sending: "Sending",
+    streaming: "Generating",
+    sent: "Done",
+    cancelled: "Stopped",
+    errorStatus: "Error",
+    unsaved: "● Unsaved",
   },
 };
 
@@ -298,14 +323,11 @@ export function IdeApp() {
   const optimisticMessageIdRef = useRef(-1);
   const leadChatEndRef = useRef<HTMLDivElement>(null);
   const groupChatEndRef = useRef<HTMLDivElement>(null);
-  const [streamingMessage, setStreamingMessage] = useState<{
-    channel: ChatChannel;
-    agentName: string;
-    role: string;
-    provider: string;
-    model: string;
-    content: string;
-  } | null>(null);
+  const [streamingMessages, setStreamingMessages] = useState<Record<number, ChatStreamState>>({});
+  const [chatRunning, setChatRunning] = useState(false);
+  const [retryRequest, setRetryRequest] = useState<ChatRetryRequest | null>(null);
+  const [copiedMessageId, setCopiedMessageId] = useState<number | string | null>(null);
+  const chatAbortRef = useRef<AbortController | null>(null);
 
   const t = dict[locale];
 
@@ -319,11 +341,15 @@ export function IdeApp() {
     () => [...(data?.messages.filter((m) => m.chatChannel === "group") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")],
     [data?.messages, optimisticMessages],
   );
+  const liveMessages = useMemo(() => Object.values(streamingMessages), [streamingMessages]);
+  const liveMessagesVersion = liveMessages.map((message) => `${message.identity.agentId}:${message.content.length}:${message.status}`).join("|");
 
   useEffect(() => {
     leadChatEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
     groupChatEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
-  }, [leadMessages.length, groupMessages.length, streamingMessage?.agentName, streamingMessage?.content]);
+  }, [leadMessages.length, groupMessages.length, liveMessagesVersion]);
+
+  useEffect(() => () => chatAbortRef.current?.abort(), []);
 
   function roleLabel(role: string) {
     if (locale === "ru") {
@@ -342,11 +368,15 @@ export function IdeApp() {
     return `${getProviderPreset(provider).label} / ${normalizeProviderModel(provider, model)}`;
   }
 
-  function agentHeader(role: string, provider?: string, model?: string, fallbackName?: string | null) {
-    if (provider && model) {
-      return `${roleLabel(role)} (${getProviderPreset(provider).label}: ${normalizeProviderModel(provider, model)})`;
+  function isAgentDraftDirty(agent: Agent, draft: AgentDraft) {
+    return agent.provider !== draft.provider || agent.baseUrl !== draft.baseUrl || agent.model !== draft.model || agent.role !== draft.role || agent.description !== draft.description || agent.skill !== draft.skill || agent.systemPrompt !== draft.systemPrompt;
+  }
+
+  function agentHeader(identity?: AgentIdentity, fallbackName?: string | null) {
+    if (identity?.provider && identity.model) {
+      return `${roleLabel(identity.role)} (${getProviderPreset(identity.provider).label}: ${normalizeProviderModel(identity.provider, identity.model)})`;
     }
-    return fallbackName ?? roleLabel(role);
+    return fallbackName ?? roleLabel(identity?.role ?? "agent");
   }
 
   function messageHeader(message: WorkspaceMessage) {
@@ -355,13 +385,25 @@ export function IdeApp() {
       return locale === "ru" ? "Пользователь" : "User";
     }
 
-    const agent = data?.agents.find((candidate) => candidate.id === message.metadata?.agentId || candidate.name === message.agentName);
+    const storedIdentity = message.metadata?.identity;
+    if (storedIdentity) return agentHeader(storedIdentity, message.agentName);
+
+    const agent = data?.agents.find((candidate) => candidate.name === message.agentName);
     if (agent) {
       const draft = agentDrafts[agent.id];
-      return agentHeader(draft?.role ?? agent.role, draft?.provider ?? agent.provider, draft?.model ?? agent.model, agent.name);
+      return agentHeader(
+        {
+          agentId: agent.id,
+          displayName: agent.name,
+          role: draft?.role ?? agent.role,
+          provider: draft?.provider ?? agent.provider,
+          model: draft?.model ?? agent.model,
+        },
+        agent.name,
+      );
     }
 
-    return agentHeader(message.senderType, message.metadata?.provider, message.metadata?.model, message.agentName);
+    return agentHeader(undefined, message.agentName);
   }
 
   function toDrafts(agents: Agent[]) {
@@ -655,10 +697,12 @@ export function IdeApp() {
     }
   }
 
-  async function sendChat(channel: ChatChannel, message: string, duplicate = false) {
-    if (!message.trim() && pendingAttachments.length === 0) return;
+  async function sendChat(channel: ChatChannel, message: string, duplicate = false, attachmentsOverride?: ChatAttachment[]) {
+    const outgoingAttachments = attachmentsOverride ?? pendingAttachments;
+    if (chatAbortRef.current || (!message.trim() && outgoingAttachments.length === 0)) return;
 
-    const outgoingAttachments = pendingAttachments;
+    const controller = new AbortController();
+    chatAbortRef.current = controller;
     const optimisticContent = message.trim() || (locale === "ru" ? "[прикреплены материалы]" : "[materials attached]");
     const optimisticMetadata = outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {};
     const optimisticIds: number[] = [];
@@ -682,8 +726,11 @@ export function IdeApp() {
       ...(channel === "group" && duplicate ? [addOptimisticMessage("lead")] : []),
     ];
     setOptimisticMessages((previous) => [...previous, ...optimisticMessagesToAdd]);
+    setRetryRequest(null);
+    setChatRunning(true);
     setBusy(true);
-    setStreamingMessage(null);
+    setStatus(t.sending);
+    setStreamingMessages({});
     setPendingAttachments([]);
     setAttachmentLink("");
     if (channel === "lead") setLeadMessage("");
@@ -700,6 +747,7 @@ export function IdeApp() {
           duplicateToLead: duplicate,
           attachments: outgoingAttachments,
         }),
+        signal: controller.signal,
       });
 
       if (!res.ok) {
@@ -726,34 +774,54 @@ export function IdeApp() {
           streamError = new Error(event.message ?? "Chat error");
           return;
         }
-        if (event.type === "agent_error") {
-          setStatus(event.message ?? "Agent error");
+        if (event.type === "agent_start" && event.channel && event.identity) {
+          const identity = event.identity;
+          setStreamingMessages((previous) => ({
+            ...previous,
+            [identity.agentId]: {
+              channel: event.channel as ChatChannel,
+              identity,
+              content: "",
+              status: "streaming",
+              startedAt: new Date().toISOString(),
+            },
+          }));
           return;
         }
-        if (event.type === "agent_start" && event.channel && event.agentName) {
-          const configuredAgent = data?.agents.find((agent) => agent.id === event.agentId || agent.name === event.agentName);
-          setStreamingMessage({
-            channel: event.channel,
-            agentName: event.agentName,
-            role: event.role ?? configuredAgent?.role ?? "agent",
-            provider: event.provider ?? configuredAgent?.provider ?? "",
-            model: event.model ?? configuredAgent?.model ?? "",
-            content: "",
+        if (event.type === "delta" && event.channel && event.identity && typeof event.text === "string" && event.text) {
+          const eventText = event.text;
+          const eventChannel = event.channel as ChatChannel;
+          const identity = event.identity;
+          setStreamingMessages((previous) => {
+            const current = previous[identity.agentId];
+            return {
+              ...previous,
+              [identity.agentId]: appendStreamDelta(current, eventChannel, identity, eventText),
+            };
           });
           return;
         }
-        if (event.type === "delta" && event.channel && event.agentName && typeof event.text === "string" && event.text) {
-          const eventText = event.text;
-          const eventChannel = event.channel as ChatChannel;
-          const eventAgentName = event.agentName as string;
-          setStreamingMessage((previous) => ({
-            channel: eventChannel,
-            agentName: eventAgentName,
-            role: event.role ?? previous?.role ?? "agent",
-            provider: event.provider ?? previous?.provider ?? "",
-            model: event.model ?? previous?.model ?? "",
-            content: previous && previous.agentName === eventAgentName && previous.channel === eventChannel ? previous.content + eventText : eventText,
-          }));
+        if (event.type === "agent_done" && event.identity) {
+          const identity = event.identity;
+          setStreamingMessages((previous) => {
+            const current = previous[identity.agentId];
+            return {
+              ...previous,
+              [identity.agentId]: finishStream(current, event.channel as ChatChannel, identity, event.content, "done"),
+            };
+          });
+          return;
+        }
+        if (event.type === "agent_error" && event.identity) {
+          const identity = event.identity;
+          setStreamingMessages((previous) => {
+            const current = previous[identity.agentId];
+            return {
+              ...previous,
+              [identity.agentId]: finishStream(current, event.channel as ChatChannel, identity, "", "error", event.message),
+            };
+          });
+          setStatus(event.message);
         }
       };
 
@@ -777,12 +845,24 @@ export function IdeApp() {
 
       await loadWorkspace(selectedFileId, locale);
       setOptimisticMessages((previous) => previous.filter((message) => !optimisticIds.includes(message.id)));
-    } catch (e) {
-      setStatus(e instanceof Error ? e.message : "Chat error");
+    } catch (error) {
+      const cancelled = controller.signal.aborted;
+      const messageText = cancelled ? t.cancelled : error instanceof Error ? error.message : "Chat error";
+      setOptimisticMessages((previous) => previous.map((chatMessage) => optimisticIds.includes(chatMessage.id) ? { ...chatMessage, status: cancelled ? "cancelled" : "error" } : chatMessage));
+      setStreamingMessages((previous) => Object.fromEntries(Object.entries(previous).map(([id, streamMessage]) => [id,
+        finishStream(streamMessage, streamMessage.channel, streamMessage.identity, "", cancelled ? "cancelled" : "error", cancelled ? undefined : messageText),
+      ])));
+      setRetryRequest({ channel, message, duplicate, attachments: outgoingAttachments, optimisticIds });
+      setStatus(messageText);
     } finally {
-      setStreamingMessage(null);
+      if (chatAbortRef.current === controller) chatAbortRef.current = null;
+      setChatRunning(false);
       setBusy(false);
     }
+  }
+
+  function stopChat() {
+    chatAbortRef.current?.abort();
   }
 
   async function runTerminal(event: FormEvent) {
@@ -860,7 +940,7 @@ export function IdeApp() {
               {att.url ? <img src={att.url} alt={att.name ?? "attachment"} className="max-h-44 rounded object-contain" /> : null}
             </div>
           ) : (
-            <div key={`link-${index}`} className="rounded border border-[#3a3d41] p-2 text-xs">
+            <div key={`link-${index}`} className="rounded border border-[#3a3d41] bg-[#1e1e1e] p-2 text-xs">
               {att.url ? (
                 <a href={att.url} target="_blank" rel="noreferrer" className="text-[#4fc1ff] underline">
                   {att.title || att.url}
@@ -872,6 +952,73 @@ export function IdeApp() {
         )}
       </div>
     );
+  }
+
+  function statusLabel(messageStatus: ChatMessageStatus | ChatStreamState["status"]) {
+    if (messageStatus === "sending") return t.sending;
+    if (messageStatus === "streaming") return t.streaming;
+    if (messageStatus === "sent" || messageStatus === "done") return t.sent;
+    if (messageStatus === "cancelled") return t.cancelled;
+    return t.errorStatus;
+  }
+
+  function statusClass(messageStatus: ChatMessageStatus | ChatStreamState["status"]) {
+    if (messageStatus === "error") return "text-[#f48771]";
+    if (messageStatus === "cancelled") return "text-[#dcdcaa]";
+    if (messageStatus === "sending" || messageStatus === "streaming") return "text-[#4fc1ff]";
+    return "text-[#9cdcfe]";
+  }
+
+  async function copyMessage(messageId: number | string, content: string) {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMessageId(messageId);
+      window.setTimeout(() => setCopiedMessageId((current) => current === messageId ? null : current), 1500);
+    } catch {
+      setStatus(locale === "ru" ? "Не удалось скопировать сообщение" : "Failed to copy message");
+    }
+  }
+
+  function renderMessageActions(messageId: number | string, content: string, canRetry = false, showCopy = true) {
+    return (
+      <div className="mt-2 flex items-center gap-2 text-[11px]">
+        {showCopy ? (
+          <button type="button" onClick={() => void copyMessage(messageId, content)} className="rounded bg-[#3a3d41] px-2 py-0.5 text-[#c6ced8] hover:bg-[#4b4e54]">
+            {copiedMessageId === messageId ? t.copied : t.copy}
+          </button>
+        ) : null}
+        {canRetry ? (
+          <button
+            type="button"
+            onClick={() => {
+              if (!retryRequest) return;
+              const request = retryRequest;
+              setOptimisticMessages((previous) => previous.filter((message) => !request.optimisticIds.includes(message.id)));
+              void sendChat(request.channel, request.message, request.duplicate, request.attachments);
+            }}
+            className="rounded bg-[#5a3c2b] px-2 py-0.5 text-[#f4c7a1] hover:bg-[#704936]"
+          >
+            {t.retry}
+          </button>
+        ) : null}
+      </div>
+    );
+  }
+
+  function renderStreamingMessages(channel: ChatChannel) {
+    return liveMessages
+      .filter((message) => message.channel === channel)
+      .map((message) => (
+        <article key={`stream-${message.identity.agentId}`} className="rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[11px] text-[#4fc1ff]">{agentHeader(message.identity, message.identity.displayName)}</p>
+            <span className={`text-[10px] ${statusClass(message.status)}`}>{statusLabel(message.status)}</span>
+          </div>
+          <p className="mt-1 whitespace-pre-wrap">{message.content || "…"}</p>
+          {message.error ? <p className="mt-1 text-xs text-[#f48771]">{message.error}</p> : null}
+          {renderMessageActions(`stream-${message.identity.agentId}`, message.content, false)}
+        </article>
+      ));
   }
 
   return (
@@ -938,23 +1085,24 @@ export function IdeApp() {
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {leadMessages?.map((msg) => (
               <article key={msg.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2 text-sm">
-                <p className="mb-1 text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
-                <p className="whitespace-pre-wrap">{msg.content}</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                  {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
+                </div>
+                <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
                 {renderAttachments(msg.metadata?.attachments)}
+                {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
+                {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
               </article>
             ))}
-            {streamingMessage?.channel === "lead" ? (
-              <article className="rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
-                <p className="mb-1 text-[11px] text-[#4fc1ff]">{agentHeader(streamingMessage.role, streamingMessage.provider, streamingMessage.model, streamingMessage.agentName)} · {t.busy}</p>
-                <p className="whitespace-pre-wrap">{streamingMessage.content || "…"}</p>
-              </article>
-            ) : null}
+            {renderStreamingMessages("lead")}
             <div ref={leadChatEndRef} aria-hidden="true" />
           </div>
           <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="border-t border-[#2d2d30] p-3">
             <div className="flex gap-2">
-              <input value={leadMessage} onChange={(e) => setLeadMessage(e.target.value)} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none" />
-              <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white" type="submit">{t.send}</button>
+              <input value={leadMessage} onChange={(e) => setLeadMessage(e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+              <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
+              {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
             </div>
           </form>
         </section>
@@ -964,17 +1112,17 @@ export function IdeApp() {
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {groupMessages?.map((msg) => (
               <article key={msg.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2 text-sm">
-                <p className="mb-1 text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
-                <p className="whitespace-pre-wrap">{msg.content}</p>
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                  {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
+                </div>
+                <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
                 {renderAttachments(msg.metadata?.attachments)}
+                {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
+                {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
               </article>
             ))}
-            {streamingMessage?.channel === "group" ? (
-              <article className="rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
-                <p className="mb-1 text-[11px] text-[#4fc1ff]">{agentHeader(streamingMessage.role, streamingMessage.provider, streamingMessage.model, streamingMessage.agentName)} · {t.busy}</p>
-                <p className="whitespace-pre-wrap">{streamingMessage.content || "…"}</p>
-              </article>
-            ) : null}
+            {renderStreamingMessages("group")}
             <div ref={groupChatEndRef} aria-hidden="true" />
           </div>
           <form onSubmit={(e) => { e.preventDefault(); void sendChat("group", groupMessage, duplicateToLead); }} className="border-t border-[#2d2d30] p-3">
@@ -1001,8 +1149,9 @@ export function IdeApp() {
               </div>
             ) : null}
             <div className="flex gap-2">
-              <input value={groupMessage} onChange={(e) => setGroupMessage(e.target.value)} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none" />
-              <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white" type="submit">{t.send}</button>
+              <input value={groupMessage} onChange={(e) => setGroupMessage(e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+              <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
+              {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
             </div>
           </form>
         </section>
@@ -1037,7 +1186,10 @@ export function IdeApp() {
 
       <aside className={`absolute inset-y-0 right-0 z-30 flex h-full min-h-0 w-[460px] flex-col border-l border-[#2d2d30] bg-[#1b1b1c] transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="panel-header flex items-center justify-between">
-          <span>{t.settings}</span>
+          <span className="flex items-center gap-2">{t.settings}{Object.entries(agentDrafts).some(([agentId, draft]) => {
+            const agent = data?.agents.find((candidate) => candidate.id === Number(agentId));
+            return agent ? isAgentDraftDirty(agent, draft) : false;
+          }) ? <span className="text-[10px] text-amber-300">{t.unsaved}</span> : null}</span>
           <button type="button" onClick={() => setSettingsOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
         </div>
 
@@ -1202,6 +1354,7 @@ export function IdeApp() {
                   } as AgentDraft);
 
                 const isMain = agent.role === "main";
+                const draftDirty = isAgentDraftDirty(agent, draft);
 
                 return (
                   <article key={agent.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
@@ -1210,7 +1363,7 @@ export function IdeApp() {
                         <span className="text-sm">{agent.name}</span>
                         <p className="text-[10px] text-[#4fc1ff]">{providerModelLabel(draft.provider, draft.model)}</p>
                       </div>
-                      <span className="text-[10px] text-[#9da3b2]">{roleLabel(agent.role)}</span>
+                      <span className="text-[10px] text-[#9da3b2]">{draftDirty ? t.unsaved : roleLabel(agent.role)}</span>
                     </div>
 
                     <select
@@ -1265,7 +1418,7 @@ export function IdeApp() {
                     <textarea value={draft.systemPrompt} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, systemPrompt: e.target.value } }))} placeholder={t.prompt} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
                     <div className="flex gap-2">
                       {!isMain ? <button type="button" onClick={() => setMainCoder(agent.id)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.setMain}</button> : null}
-                      <button type="button" onClick={() => saveAgentProfile(agent.id)} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white">{t.saveProfile}</button>
+                      <button type="button" onClick={() => saveAgentProfile(agent.id)} disabled={busy || !draftDirty} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:opacity-60">{t.saveProfile}</button>
                     </div>
                   </article>
                 );
