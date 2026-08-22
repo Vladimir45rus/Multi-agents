@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { PROVIDER_PRESETS, getProviderPreset } from "@/lib/providers";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
@@ -14,6 +14,16 @@ type ChatAttachment = {
   name?: string;
   title?: string;
   previewText?: string;
+};
+
+type WorkspaceMessage = {
+  id: number;
+  chatChannel: ChatChannel;
+  senderType: string;
+  agentName: string | null;
+  content: string;
+  metadata: { attachments?: ChatAttachment[] };
+  createdAt: string;
 };
 
 type ChatStreamEvent = {
@@ -56,15 +66,7 @@ type WorkspaceData = {
   };
   agents: Agent[];
   files: Array<{ id: number; path: string; language: string; content: string; updatedAt: string }>;
-  messages: Array<{
-    id: number;
-    chatChannel: ChatChannel;
-    senderType: string;
-    agentName: string | null;
-    content: string;
-    metadata: { attachments?: ChatAttachment[] };
-    createdAt: string;
-  }>;
+  messages: WorkspaceMessage[];
   terminal: Array<{ id: number; command: string; output: string; status: string; createdAt: string }>;
   findings: Array<{ id: number; filePath: string; severity: string; message: string; line: number | null; createdAt: string }>;
 };
@@ -285,6 +287,10 @@ export function IdeApp() {
   const [workspaceRootDraft, setWorkspaceRootDraft] = useState("");
   const [attachmentLink, setAttachmentLink] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
+  const [optimisticMessages, setOptimisticMessages] = useState<WorkspaceMessage[]>([]);
+  const optimisticMessageIdRef = useRef(-1);
+  const leadChatEndRef = useRef<HTMLDivElement>(null);
+  const groupChatEndRef = useRef<HTMLDivElement>(null);
   const [streamingMessage, setStreamingMessage] = useState<{
     channel: ChatChannel;
     agentName: string;
@@ -296,8 +302,19 @@ export function IdeApp() {
 
   const selectedFile = useMemo(() => data?.files.find((f) => f.id === selectedFileId) ?? null, [data, selectedFileId]);
   const mainAgent = useMemo(() => data?.agents.find((a) => a.role === "main") ?? null, [data?.agents]);
-  const leadMessages = useMemo(() => data?.messages.filter((m) => m.chatChannel === "lead") ?? [], [data?.messages]);
-  const groupMessages = useMemo(() => data?.messages.filter((m) => m.chatChannel === "group") ?? [], [data?.messages]);
+  const leadMessages = useMemo(
+    () => [...(data?.messages.filter((m) => m.chatChannel === "lead") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "lead")],
+    [data?.messages, optimisticMessages],
+  );
+  const groupMessages = useMemo(
+    () => [...(data?.messages.filter((m) => m.chatChannel === "group") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")],
+    [data?.messages, optimisticMessages],
+  );
+
+  useEffect(() => {
+    leadChatEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
+    groupChatEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
+  }, [leadMessages.length, groupMessages.length, streamingMessage?.agentName, streamingMessage?.content]);
 
   function roleLabel(role: string) {
     if (locale === "ru") {
@@ -615,9 +632,33 @@ export function IdeApp() {
 
   async function sendChat(channel: ChatChannel, message: string, duplicate = false) {
     if (!message.trim() && pendingAttachments.length === 0) return;
+
+    const outgoingAttachments = pendingAttachments;
+    const optimisticContent = message.trim() || (locale === "ru" ? "[прикреплены материалы]" : "[materials attached]");
+    const optimisticMetadata = outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {};
+    const optimisticIds: number[] = [];
+    const addOptimisticMessage = (chatChannel: ChatChannel) => {
+      const id = optimisticMessageIdRef.current;
+      optimisticMessageIdRef.current -= 1;
+      optimisticIds.push(id);
+      return {
+        id,
+        chatChannel,
+        senderType: "user",
+        agentName: locale === "ru" ? "Пользователь" : "User",
+        content: optimisticContent,
+        metadata: optimisticMetadata,
+        createdAt: new Date().toISOString(),
+      } satisfies WorkspaceMessage;
+    };
+
+    const optimisticMessagesToAdd = [
+      addOptimisticMessage(channel),
+      ...(channel === "group" && duplicate ? [addOptimisticMessage("lead")] : []),
+    ];
+    setOptimisticMessages((previous) => [...previous, ...optimisticMessagesToAdd]);
     setBusy(true);
     setStreamingMessage(null);
-    const outgoingAttachments = pendingAttachments;
     setPendingAttachments([]);
     setAttachmentLink("");
     if (channel === "lead") setLeadMessage("");
@@ -685,12 +726,12 @@ export function IdeApp() {
         const { done, value } = await reader.read();
         buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
 
-        let separator = buffer.search(/\\r?\\n\\r?\\n/);
+        let separator = buffer.search(/\r?\n\r?\n/);
         while (separator >= 0) {
           const block = buffer.slice(0, separator);
-          buffer = buffer.slice(separator).replace(/^\\r?\\n\\r?\\n/, "");
+          buffer = buffer.slice(separator).replace(/^\r?\n\r?\n/, "");
           consumeBlock(block);
-          separator = buffer.search(/\\r?\\n\\r?\\n/);
+          separator = buffer.search(/\r?\n\r?\n/);
         }
 
         if (done) break;
@@ -700,6 +741,7 @@ export function IdeApp() {
       if (streamError) throw streamError;
 
       await loadWorkspace(selectedFileId, locale);
+      setOptimisticMessages((previous) => previous.filter((message) => !optimisticIds.includes(message.id)));
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Chat error");
     } finally {
@@ -872,6 +914,7 @@ export function IdeApp() {
                 <p className="whitespace-pre-wrap">{streamingMessage.content || "…"}</p>
               </article>
             ) : null}
+            <div ref={leadChatEndRef} aria-hidden="true" />
           </div>
           <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="border-t border-[#2d2d30] p-3">
             <div className="flex gap-2">
@@ -897,6 +940,7 @@ export function IdeApp() {
                 <p className="whitespace-pre-wrap">{streamingMessage.content || "…"}</p>
               </article>
             ) : null}
+            <div ref={groupChatEndRef} aria-hidden="true" />
           </div>
           <form onSubmit={(e) => { e.preventDefault(); void sendChat("group", groupMessage, duplicateToLead); }} className="border-t border-[#2d2d30] p-3">
             <div className="mb-2 flex items-center gap-2 text-xs">

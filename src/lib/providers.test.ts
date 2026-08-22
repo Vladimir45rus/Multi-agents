@@ -10,12 +10,16 @@ describe("OpenRouter model presets", () => {
     expect(preset.fallbackModels).toEqual([
       "anthropic/claude-3.5-sonnet",
       "openai/gpt-4o",
-      "deepseek/deepseek-r1",
+      "deepseek/deepseek-chat",
     ]);
   });
 
   it("migrates the retired Claude model id", () => {
     expect(normalizeProviderModel("openrouter", "anthropic/claude-3.7-sonnet")).toBe("anthropic/claude-3.5-sonnet");
+  });
+
+  it("migrates the retired DeepSeek model id", () => {
+    expect(normalizeProviderModel("openrouter", "deepseek/deepseek-r1")).toBe("deepseek/deepseek-chat");
   });
 
   it("does not rewrite models belonging to another provider", () => {

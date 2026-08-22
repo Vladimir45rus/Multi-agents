@@ -10,11 +10,12 @@ export type ProviderPreset = {
 export const OPENROUTER_MODEL_IDS = [
   "anthropic/claude-3.5-sonnet",
   "openai/gpt-4o",
-  "deepseek/deepseek-r1",
+  "deepseek/deepseek-chat",
 ] as const;
 
 const OPENROUTER_MODEL_ALIASES: Record<string, string> = {
   "anthropic/claude-3.7-sonnet": "anthropic/claude-3.5-sonnet",
+  "deepseek/deepseek-r1": "deepseek/deepseek-chat",
 };
 
 export function normalizeProviderModel(providerId: string | undefined, model: string | undefined) {
