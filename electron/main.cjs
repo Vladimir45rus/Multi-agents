@@ -126,7 +126,7 @@ function startEmbeddedServer() {
     log("server", `Warning: could not create data dir: ${error.message}`);
   }
 
-  log("server", `Starting embedded Next.js server on 127.0.0.1:${port}`);
+  log("server", `Starting embedded Next.js server on 0.0.0.0:${port}`);
   log("server", `Database: ${dbPath}`);
   log("server", `Migrations dir: ${migrationsDir} (${fs.existsSync(migrationsDir) ? "found" : "MISSING"})`);
   log("server", `Static dir: ${staticDir} (${fs.existsSync(staticDir) ? "found" : "missing"})`);
@@ -139,7 +139,7 @@ function startEmbeddedServer() {
       // Run the child as plain Node.js (not a second Electron instance).
       ELECTRON_RUN_AS_NODE: "1",
       NODE_ENV: "production",
-      HOSTNAME: process.env.MOBILE_ACCESS === "1" ? "0.0.0.0" : "127.0.0.1",
+      HOSTNAME: "0.0.0.0",
       PORT: String(port),
       DATABASE_URL: `file:${dbPath}`,
       ELECTRON_VAULT: "1",
@@ -180,7 +180,7 @@ function startEmbeddedServer() {
   });
 
   return new Promise((resolve, reject) => {
-    const healthUrl = `http://127.0.0.1:${port}/api/health`;
+    const healthUrl = `http://0.0.0.0:${port}/api/health`;
     const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
     let settled = false;
 

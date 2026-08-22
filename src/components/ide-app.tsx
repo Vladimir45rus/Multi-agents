@@ -2109,10 +2109,14 @@ export function IdeApp() {
                   )}
                 </div>
                 {ngrokUrl ? (
-                  <div className="mt-1 flex items-center gap-2 rounded bg-[#1e3323] p-2 text-xs">
-                    <span className="text-[#6a9955]">🟢</span>
-                    <a href={ngrokUrl + "/mobile?token=" + mobileTokenDraft} target="_blank" rel="noopener noreferrer" className="text-[#4fc1ff] underline truncate">{ngrokUrl}/mobile?token={mobileTokenDraft}</a>
-                    <button type="button" onClick={() => { const link = ngrokUrl + "/mobile?token=" + mobileTokenDraft; navigator.clipboard?.writeText(link); setStatus(locale === "ru" ? "🔗 Ссылка скопирована!" : "🔗 Link copied!"); }} className="text-[10px] text-[#9da3b2] hover:text-white whitespace-nowrap">{locale === "ru" ? "Копировать" : "Copy"}</button>
+                  <div className="mt-2">
+                    <div className="flex items-center gap-2 rounded bg-[#1e3323] p-2 text-xs">
+                      <span className="text-[#6a9955]">🟢 {locale === "ru" ? "Активен" : "Active"}</span>
+                      <a href={ngrokUrl + "/mobile?token=" + mobileTokenDraft} target="_blank" rel="noopener noreferrer" className="text-[#4fc1ff] underline truncate">{ngrokUrl}/mobile?token={mobileTokenDraft}</a>
+                      <button type="button" onClick={() => { const link = ngrokUrl + "/mobile?token=" + mobileTokenDraft; navigator.clipboard?.writeText(link); setStatus(locale === "ru" ? "🔗 Ссылка скопирована!" : "🔗 Link copied!"); }} className="text-[10px] text-[#9da3b2] hover:text-white whitespace-nowrap">{locale === "ru" ? "Копировать" : "Copy"}</button>
+                    </div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={`/api/qrcode?url=${encodeURIComponent(ngrokUrl + "/mobile?token=" + mobileTokenDraft)}`} alt="QR code" className="mt-2 h-[140px] w-[140px] rounded border border-[#2d2d30]" />
                   </div>
                 ) : null}
                 <p className="mt-1 text-[10px]" style={{ color: "var(--text-muted)" }}>{locale === "ru" ? "Бесплатный токен → ngrok.com. Туннель доступен из любой сети мира." : "Free token → ngrok.com. Tunnel works from anywhere in the world."}</p>

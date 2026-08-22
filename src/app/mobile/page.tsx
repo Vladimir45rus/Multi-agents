@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { MobileSettings } from "./settings";
+import { useVoiceInput } from "./voice-input";
 
 type MobileTab = "lead" | "group" | "settings";
 
@@ -42,6 +43,12 @@ export default function MobilePage() {
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+
+  // Voice input
+  const voice = useVoiceInput((text) => {
+    if (tab === "lead") setLeadMsg((prev) => prev + (prev ? " " : "") + text);
+    else setGroupMsg((prev) => prev + (prev ? " " : "") + text);
+  });
 
   // Auth check: if token set but mismatch, block access
   useEffect(() => {
@@ -153,6 +160,12 @@ export default function MobilePage() {
           onChange={e => tab === "lead" ? setLeadMsg(e.target.value) : setGroupMsg(e.target.value)}
           style={{ flex: 1, padding: "10px 14px", borderRadius: 20, border: `1px solid ${vars("border-input")}`, background: vars("bg-input"), color: vars("text-primary"), fontSize: 14, outline: "none" }}
           placeholder="Сообщение..." disabled={sending} />
+        {voice.supported ? (
+          <button type="button" onClick={voice.toggle}
+            style={{ background: voice.listening ? "#a12828" : vars("bg-input"), color: voice.listening ? "white" : vars("text-secondary"), border: `1px solid ${vars("border-input")}`, borderRadius: 20, padding: "10px 12px", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>
+            🎙️
+          </button>
+        ) : null}
         <button type="submit" style={{ background: vars("bg-status"), color: "white", border: "none", borderRadius: 20, padding: "10px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: sending ? 0.5 : 1 }} disabled={sending}>↑</button>
         {sending && <button type="button" onClick={() => { abortRef.current?.abort(); setSending(false); }} style={{ background: "#a12828", color: "white", border: "none", borderRadius: 20, padding: "10px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>✕</button>}
       </form>

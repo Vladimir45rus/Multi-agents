@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceSettingsRow, updateWorkspaceSettings } from "@/lib/workspace";
+import { recordSystemEvent } from "@/lib/system-events";
 import { startTunnel } from "@/lib/ngrok-tunnel";
 
 export const runtime = "nodejs";
@@ -19,22 +20,32 @@ export async function POST(request: Request) {
     if (action === "start") {
       if (tunnel) return NextResponse.json({ ok: true, url: tunnel.url, message: "Already running" });
       const token = await getToken();
-      if (!token) return NextResponse.json({ ok: false, error: "Ngrok token not configured" }, { status: 400 });
+      if (!token) {
+        const errMsg = "Ngrok token not configured. Get one at https://dashboard.ngrok.com/get-started/your-authtoken";
+        await recordSystemEvent("error", "ngrok", errMsg, "");
+        return NextResponse.json({ ok: false, error: errMsg }, { status: 400 });
+      }
 
       tunnel = await startTunnel(token, port || 3210);
-      if (tunnel.url) await updateWorkspaceSettings({ ngrokUrl: tunnel.url } as any);
+      if (tunnel.url) {
+        await updateWorkspaceSettings({ ngrokUrl: tunnel.url } as any);
+        await recordSystemEvent("success", "ngrok", `Tunnel started: ${tunnel.url}`, "");
+      }
       return NextResponse.json({ ok: true, url: tunnel.url });
     }
 
     if (action === "stop") {
       if (tunnel) { await tunnel.close(); tunnel = null; }
       await updateWorkspaceSettings({ ngrokUrl: "" } as any);
+      await recordSystemEvent("info", "ngrok", "Tunnel stopped by user", "");
       return NextResponse.json({ ok: true, message: "Tunnel stopped" });
     }
 
     return NextResponse.json({ ok: false, error: "Unknown action" }, { status: 400 });
   } catch (err) {
-    return NextResponse.json({ ok: false, error: err instanceof Error ? err.message : "Ngrok error" }, { status: 500 });
+    const errMsg = err instanceof Error ? err.message : "Ngrok error";
+    await recordSystemEvent("error", "ngrok", `Tunnel error: ${errMsg}`, "");
+    return NextResponse.json({ ok: false, error: errMsg }, { status: 500 });
   }
 }
 
