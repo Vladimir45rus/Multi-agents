@@ -148,6 +148,10 @@ function compact(value: string | null | undefined) {
   return (value ?? "").trim();
 }
 
+function providerModelLabel(provider: string, model: string) {
+  return `${getProviderPreset(provider).label} / ${model}`;
+}
+
 function normalizeRole(role: string | undefined) {
   const cleaned = compact(role).toLowerCase();
   return cleaned || "advisor";
@@ -629,6 +633,9 @@ export async function updateAgentProfile(
   if (!agent) throw new Error(t(activeLocale, "Агент не найден", "Agent not found"));
 
   const preset = getProviderPreset(payload.provider ?? agent.provider);
+  const provider = preset.id;
+  const model = compact(payload.model) || preset.defaultModel;
+  const baseUrl = compact(payload.baseUrl) || preset.baseUrl;
   const nextRole = normalizeRole(payload.role ?? agent.role);
 
   if (agent.role === "main" && nextRole !== "main") {
@@ -644,9 +651,9 @@ export async function updateAgentProfile(
   await db
     .update(agents)
     .set({
-      provider: preset.id,
-      baseUrl: compact(payload.baseUrl) || preset.baseUrl,
-      model: compact(payload.model) || preset.defaultModel,
+      provider,
+      baseUrl,
+      model,
       role: nextRole === "main" ? "main" : nextRole,
       skill: payload.skill,
       systemPrompt: payload.systemPrompt,
@@ -661,7 +668,11 @@ export async function updateAgentProfile(
       chatChannel: "group",
       senderType: "system",
       agentName: "System",
-      content: t(activeLocale, `Профиль агента ${agent.name} обновлён.`, `Agent profile for ${agent.name} updated.`),
+      content: t(
+        activeLocale,
+        `Профиль агента ${agent.name} (${providerModelLabel(provider, model)}) обновлён.`,
+        `Agent profile for ${agent.name} (${providerModelLabel(provider, model)}) updated.`,
+      ),
     });
   }
 }

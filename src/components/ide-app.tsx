@@ -311,6 +311,10 @@ export function IdeApp() {
     return role;
   }
 
+  function providerModelLabel(provider: string, model: string) {
+    return `${getProviderPreset(provider).label} / ${model}`;
+  }
+
   function senderName(senderType: string, agentName: string | null) {
     if (agentName === "System") return locale === "ru" ? "Система" : "System";
     if (agentName === "User" || agentName === "Пользователь") return locale === "ru" ? "Пользователь" : "User";
@@ -638,10 +642,22 @@ export function IdeApp() {
       let streamError: Error | null = null;
 
       const consumeBlock = (block: string) => {
-        const line = block.split(/\\r?\\n/).find((item) => item.startsWith("data:"));
-        if (!line) return;
+        const data = block
+          .split(/\\r?\\n/)
+          .filter((item) => item.startsWith("data:"))
+          .map((item) => item.slice(5).trimStart())
+          .join("\\n")
+          .trim();
+        if (!data) return;
 
-        const event = JSON.parse(line.slice(5).trim()) as ChatStreamEvent;
+        let event: ChatStreamEvent;
+        try {
+          event = JSON.parse(data) as ChatStreamEvent;
+        } catch {
+          streamError ??= new Error(locale === "ru" ? "Получено некорректное событие от LLM" : "Received an invalid LLM stream event");
+          return;
+        }
+
         if (event.type === "error") {
           streamError = new Error(event.message ?? "Chat error");
           return;
@@ -1117,7 +1133,10 @@ export function IdeApp() {
                 return (
                   <article key={agent.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
                     <div className="mb-1 flex items-center justify-between">
-                      <span className="text-sm">{agent.name}</span>
+                      <div>
+                        <span className="text-sm">{agent.name}</span>
+                        <p className="text-[10px] text-[#4fc1ff]">{providerModelLabel(draft.provider, draft.model)}</p>
+                      </div>
                       <span className="text-[10px] text-[#9da3b2]">{roleLabel(agent.role)}</span>
                     </div>
 

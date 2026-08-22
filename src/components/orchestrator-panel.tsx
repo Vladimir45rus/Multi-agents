@@ -288,10 +288,20 @@ export function OrchestratorPanel({ open, onClose, locale }: OrchestratorPanelPr
       let buffer = "";
 
       const consumeBlock = (block: string) => {
-        const line = block.split(/\r?\n/).find((item) => item.startsWith("data:"));
-        if (!line) return;
-        const event = JSON.parse(line.slice(5).trim()) as OrchestratorStreamEvent;
-        handleStreamEvent(event);
+        const data = block
+          .split(/\r?\n/)
+          .filter((item) => item.startsWith("data:"))
+          .map((item) => item.slice(5).trimStart())
+          .join("\n")
+          .trim();
+        if (!data) return;
+
+        try {
+          const event = JSON.parse(data) as OrchestratorStreamEvent;
+          handleStreamEvent(event);
+        } catch {
+          setError(locale === "ru" ? "Получено некорректное событие от LLM" : "Received an invalid LLM stream event");
+        }
       };
 
       while (true) {
