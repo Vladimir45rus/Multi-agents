@@ -42,7 +42,12 @@ export const chatMessages = sqliteTable("chat_messages", {
   agentName: text("agent_name"),
   content: text("content").notNull(),
   metadata: text("metadata", { mode: "json" })
-    .$type<{ attachments?: Array<{ type: "image" | "link"; url?: string; title?: string; previewText?: string; name?: string }> }>()
+    .$type<{
+      attachments?: Array<{ type: "image" | "link"; url?: string; title?: string; previewText?: string; name?: string }>;
+      agentId?: number;
+      provider?: string;
+      model?: string;
+    }>()
     .notNull()
     .default({}),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),

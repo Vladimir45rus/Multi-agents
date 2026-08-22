@@ -32,11 +32,18 @@ export type ChatAttachment = {
   previewText?: string;
 };
 
+export type ChatMessageMetadata = {
+  attachments?: ChatAttachment[];
+  agentId?: number;
+  provider?: string;
+  model?: string;
+};
+
 export type ChatStreamEvent =
-  | { type: "agent_start"; channel: ChatChannel; agentId: number; agentName: string; role: string }
-  | { type: "delta"; channel: ChatChannel; agentId: number; agentName: string; role: string; text: string }
-  | { type: "agent_done"; channel: ChatChannel; agentId: number; agentName: string; role: string; content: string }
-  | { type: "agent_error"; channel: ChatChannel; agentId: number; agentName: string; role: string; message: string }
+  | { type: "agent_start"; channel: ChatChannel; agentId: number; agentName: string; role: string; provider: string; model: string }
+  | { type: "delta"; channel: ChatChannel; agentId: number; agentName: string; role: string; provider: string; model: string; text: string }
+  | { type: "agent_done"; channel: ChatChannel; agentId: number; agentName: string; role: string; provider: string; model: string; content: string }
+  | { type: "agent_error"; channel: ChatChannel; agentId: number; agentName: string; role: string; provider: string; model: string; message: string }
   | { type: "done"; channel: ChatChannel }
   | { type: "error"; channel: ChatChannel; message: string };
 
@@ -86,7 +93,7 @@ type WorkspaceSnapshot = {
     senderType: string;
     agentName: string | null;
     content: string;
-    metadata: { attachments?: ChatAttachment[] };
+    metadata: ChatMessageMetadata;
     createdAt: string;
   }>;
   terminal: Array<{
@@ -108,7 +115,7 @@ type WorkspaceSnapshot = {
 
 const defaultAgents = [
   {
-    name: "GPT-4.1 Lead",
+    name: "Главный агент",
     provider: "openai",
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4.1-mini",
@@ -118,7 +125,7 @@ const defaultAgents = [
     systemPrompt: "Ты главный разработчик. Вноси только безопасные и проверяемые изменения.",
   },
   {
-    name: "Claude Sonnet Reviewer",
+    name: "Советник",
     provider: "openrouter",
     baseUrl: "https://openrouter.ai/api/v1",
     model: "anthropic/claude-3.5-sonnet",
@@ -149,7 +156,7 @@ function compact(value: string | null | undefined) {
 }
 
 function providerModelLabel(provider: string, model: string) {
-  return `${getProviderPreset(provider).label} / ${model}`;
+  return `${getProviderPreset(provider).label} / ${normalizeProviderModel(provider, model)}`;
 }
 
 function agentFailureMessage(locale: UiLocale, agent: typeof agents.$inferSelect, error: unknown) {
@@ -212,9 +219,16 @@ function runStaticAnalysis(filePath: string, content: string, locale: UiLocale) 
 
 type AgentPromptContext = { skill: string; systemPrompt: string };
 
+function cleanAgentSystemPrompt(value: string) {
+  return compact(value)
+    .replace(/(?:\b(?:you are|you're|identify as|call yourself|present yourself as)\b|\b(?:ты|представляйся|называй себя)\b)[^.!?\n]*(?:gpt|claude|liquid|lfm)[^.!?\n]*[.!?]?/gi, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function promptPersona(locale: UiLocale, context: AgentPromptContext) {
   const skill = compact(context.skill);
-  const systemPrompt = compact(context.systemPrompt);
+  const systemPrompt = cleanAgentSystemPrompt(context.systemPrompt);
 
   if (skill && systemPrompt) return t(locale, `Скилл: ${skill}. Инструкция: ${systemPrompt}`, `Skill: ${skill}. Prompt: ${systemPrompt}`);
   if (skill) return t(locale, `Скилл: ${skill}`, `Skill: ${skill}`);
@@ -274,7 +288,7 @@ async function pushMessage(payload: {
   senderType: string;
   agentName: string | null;
   content: string;
-  metadata?: { attachments?: ChatAttachment[] };
+  metadata?: ChatMessageMetadata;
 }) {
   await db.insert(chatMessages).values({
     chatChannel: payload.chatChannel,
@@ -426,8 +440,9 @@ export async function ensureWorkspaceBootstrap() {
   const agentRows = await db.select().from(agents);
   for (const agent of agentRows) {
     const model = normalizeProviderModel(agent.provider, agent.model);
-    if (model !== agent.model) {
-      await db.update(agents).set({ model }).where(eq(agents.id, agent.id));
+    const systemPrompt = cleanAgentSystemPrompt(agent.systemPrompt);
+    if (model !== agent.model || systemPrompt !== agent.systemPrompt) {
+      await db.update(agents).set({ model, systemPrompt }).where(eq(agents.id, agent.id));
     }
   }
 
@@ -614,7 +629,7 @@ export async function createAgent(
       role: role === "main" ? "advisor" : role,
       description: payload.description ?? "",
       skill: payload.skill ?? "",
-      systemPrompt: payload.systemPrompt ?? "",
+      systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt ?? ""),
       isActive: true,
     })
     .returning({ id: agents.id, name: agents.name });
@@ -674,7 +689,7 @@ export async function updateAgentProfile(
       model,
       role: nextRole === "main" ? "main" : nextRole,
       skill: payload.skill,
-      systemPrompt: payload.systemPrompt,
+      systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt),
       description: payload.description ?? agent.description,
     })
     .where(eq(agents.id, agentId));
@@ -882,12 +897,19 @@ function attachmentContext(locale: UiLocale, attachments: ChatAttachment[]) {
 
 function agentSystemPrompt(locale: UiLocale, agent: typeof agents.$inferSelect, findingsCount: number) {
   const persona = promptPersona(locale, { skill: agent.skill, systemPrompt: agent.systemPrompt });
+  const configuredModel = normalizeProviderModel(agent.provider, agent.model);
+  const configuredProvider = getProviderPreset(agent.provider).label;
+  const identity = t(
+    locale,
+    `Твоя реальная конфигурация: роль «${agent.role}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
+    `Your actual configuration: role "${agent.role}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
+  );
   const roleInstruction =
     agent.role === "main"
       ? t(locale, "Ты единственный агент, который может принимать и применять решения по коду. Отвечай конкретно и проверяемо.", "You are the only agent allowed to make and apply code decisions. Be concrete and verifiable.")
       : t(locale, "Ты советник. Не редактируй код и не выдавай себя за Главного. Анализируй и передавай аргументированные рекомендации Главному.", "You are an advisor. Do not edit code or impersonate the Lead. Analyze and send reasoned recommendations to the Lead.");
 
-  return `${persona}. ${roleInstruction} ${t(locale, `Текущих статических находок: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  return `${identity} ${persona}. ${roleInstruction} ${t(locale, `Текущих статических находок: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
 }
 
 async function* streamAgentReply(
@@ -913,12 +935,13 @@ async function* streamAgentReply(
   }
 
   const request = providerRequestFromAgent(agent, apiKey);
+  const configuredModel = normalizeProviderModel(agent.provider, agent.model);
   let response = "";
-  yield { type: "agent_start", channel, agentId: agent.id, agentName: agent.name, role: agent.role };
+  yield { type: "agent_start", channel, agentId: agent.id, agentName: agent.name, role: agent.role, provider: agent.provider, model: configuredModel };
 
   for await (const chunk of streamProviderResponse(request, gatewayMessages, options)) {
     response += chunk;
-    yield { type: "delta", channel, agentId: agent.id, agentName: agent.name, role: agent.role, text: chunk };
+    yield { type: "delta", channel, agentId: agent.id, agentName: agent.name, role: agent.role, provider: agent.provider, model: configuredModel, text: chunk };
   }
 
   if (!response.trim()) throw new Error(`${agent.name} returned an empty response`);
@@ -928,9 +951,10 @@ async function* streamAgentReply(
     senderType: agent.role === "main" ? "main" : "advisor",
     agentName: agent.name,
     content: response,
+    metadata: { agentId: agent.id, provider: agent.provider, model: configuredModel },
   });
 
-  yield { type: "agent_done", channel, agentId: agent.id, agentName: agent.name, role: agent.role, content: response };
+  yield { type: "agent_done", channel, agentId: agent.id, agentName: agent.name, role: agent.role, provider: agent.provider, model: configuredModel, content: response };
 }
 
 export async function* streamWorkspaceMessage(
@@ -1002,7 +1026,7 @@ export async function* streamWorkspaceMessage(
       } catch {
         // Persisting the notification is best-effort; never stop other agents.
       }
-      yield { type: "agent_error", channel, agentId: agent.id, agentName: agent.name, role: agent.role, message };
+      yield { type: "agent_error", channel, agentId: agent.id, agentName: agent.name, role: agent.role, provider: agent.provider, model: normalizeProviderModel(agent.provider, agent.model), message };
     }
   }
 

@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { PROVIDER_PRESETS, getProviderPreset } from "@/lib/providers";
+import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 
@@ -22,7 +22,12 @@ type WorkspaceMessage = {
   senderType: string;
   agentName: string | null;
   content: string;
-  metadata: { attachments?: ChatAttachment[] };
+  metadata: {
+    attachments?: ChatAttachment[];
+    agentId?: number;
+    provider?: string;
+    model?: string;
+  };
   createdAt: string;
 };
 
@@ -32,6 +37,8 @@ type ChatStreamEvent = {
   agentId?: number;
   agentName?: string;
   role?: string;
+  provider?: string;
+  model?: string;
   text?: string;
   content?: string;
   message?: string;
@@ -295,6 +302,8 @@ export function IdeApp() {
     channel: ChatChannel;
     agentName: string;
     role: string;
+    provider: string;
+    model: string;
     content: string;
   } | null>(null);
 
@@ -330,13 +339,29 @@ export function IdeApp() {
   }
 
   function providerModelLabel(provider: string, model: string) {
-    return `${getProviderPreset(provider).label} / ${model}`;
+    return `${getProviderPreset(provider).label} / ${normalizeProviderModel(provider, model)}`;
   }
 
-  function senderName(senderType: string, agentName: string | null) {
-    if (agentName === "System") return locale === "ru" ? "Система" : "System";
-    if (agentName === "User" || agentName === "Пользователь") return locale === "ru" ? "Пользователь" : "User";
-    return agentName ?? senderType;
+  function agentHeader(role: string, provider?: string, model?: string, fallbackName?: string | null) {
+    if (provider && model) {
+      return `${roleLabel(role)} (${getProviderPreset(provider).label}: ${normalizeProviderModel(provider, model)})`;
+    }
+    return fallbackName ?? roleLabel(role);
+  }
+
+  function messageHeader(message: WorkspaceMessage) {
+    if (message.agentName === "System" || message.senderType === "system") return locale === "ru" ? "Система" : "System";
+    if (message.senderType === "user" || message.agentName === "User" || message.agentName === "Пользователь") {
+      return locale === "ru" ? "Пользователь" : "User";
+    }
+
+    const agent = data?.agents.find((candidate) => candidate.id === message.metadata?.agentId || candidate.name === message.agentName);
+    if (agent) {
+      const draft = agentDrafts[agent.id];
+      return agentHeader(draft?.role ?? agent.role, draft?.provider ?? agent.provider, draft?.model ?? agent.model, agent.name);
+    }
+
+    return agentHeader(message.senderType, message.metadata?.provider, message.metadata?.model, message.agentName);
   }
 
   function toDrafts(agents: Agent[]) {
@@ -706,7 +731,15 @@ export function IdeApp() {
           return;
         }
         if (event.type === "agent_start" && event.channel && event.agentName) {
-          setStreamingMessage({ channel: event.channel, agentName: event.agentName, role: event.role ?? "agent", content: "" });
+          const configuredAgent = data?.agents.find((agent) => agent.id === event.agentId || agent.name === event.agentName);
+          setStreamingMessage({
+            channel: event.channel,
+            agentName: event.agentName,
+            role: event.role ?? configuredAgent?.role ?? "agent",
+            provider: event.provider ?? configuredAgent?.provider ?? "",
+            model: event.model ?? configuredAgent?.model ?? "",
+            content: "",
+          });
           return;
         }
         if (event.type === "delta" && event.channel && event.agentName && typeof event.text === "string" && event.text) {
@@ -717,6 +750,8 @@ export function IdeApp() {
             channel: eventChannel,
             agentName: eventAgentName,
             role: event.role ?? previous?.role ?? "agent",
+            provider: event.provider ?? previous?.provider ?? "",
+            model: event.model ?? previous?.model ?? "",
             content: previous && previous.agentName === eventAgentName && previous.channel === eventChannel ? previous.content + eventText : eventText,
           }));
         }
@@ -903,14 +938,14 @@ export function IdeApp() {
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {leadMessages?.map((msg) => (
               <article key={msg.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2 text-sm">
-                <p className="mb-1 text-[11px] text-[#9da3b2]">{senderName(msg.senderType, msg.agentName)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                <p className="mb-1 text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                 <p className="whitespace-pre-wrap">{msg.content}</p>
                 {renderAttachments(msg.metadata?.attachments)}
               </article>
             ))}
             {streamingMessage?.channel === "lead" ? (
               <article className="rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
-                <p className="mb-1 text-[11px] text-[#4fc1ff]">{streamingMessage.agentName} · {t.busy}</p>
+                <p className="mb-1 text-[11px] text-[#4fc1ff]">{agentHeader(streamingMessage.role, streamingMessage.provider, streamingMessage.model, streamingMessage.agentName)} · {t.busy}</p>
                 <p className="whitespace-pre-wrap">{streamingMessage.content || "…"}</p>
               </article>
             ) : null}
@@ -929,14 +964,14 @@ export function IdeApp() {
           <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {groupMessages?.map((msg) => (
               <article key={msg.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2 text-sm">
-                <p className="mb-1 text-[11px] text-[#9da3b2]">{senderName(msg.senderType, msg.agentName)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                <p className="mb-1 text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                 <p className="whitespace-pre-wrap">{msg.content}</p>
                 {renderAttachments(msg.metadata?.attachments)}
               </article>
             ))}
             {streamingMessage?.channel === "group" ? (
               <article className="rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
-                <p className="mb-1 text-[11px] text-[#4fc1ff]">{streamingMessage.agentName} · {t.busy}</p>
+                <p className="mb-1 text-[11px] text-[#4fc1ff]">{agentHeader(streamingMessage.role, streamingMessage.provider, streamingMessage.model, streamingMessage.agentName)} · {t.busy}</p>
                 <p className="whitespace-pre-wrap">{streamingMessage.content || "…"}</p>
               </article>
             ) : null}
