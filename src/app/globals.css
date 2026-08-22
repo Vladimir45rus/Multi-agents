@@ -1,24 +1,94 @@
 @import "tailwindcss";
 
-:root {
+/* ============================================================
+   DARK THEME (default)
+   ============================================================ */
+:root,
+html[data-theme="dark"] {
+  --bg-app: #1e1e1e;
+  --bg-panel: #252526;
+  --bg-panel-alt: #2d2d30;
+  --bg-input: #3c3c3c;
+  --bg-hover: #2a2d2e;
+  --bg-selection: #264f78;
+  --bg-status: #007acc;
+  --bg-message-user: #0e639c;
+  --bg-message-agent: #252526;
+
+  --border-default: #2d2d30;
+  --border-input: #3e3e42;
+
+  --text-primary: #d4d4d4;
+  --text-secondary: #9da3b2;
+  --text-muted: #6e7681;
+  --text-accent: #4fc1ff;
+  --text-link: #569cd6;
+
+  --scrollbar-thumb: #3a3d41;
+  --scrollbar-track: #1e1e1e;
+
   color-scheme: dark;
 }
 
+/* ============================================================
+   LIGHT THEME (calm, eye-friendly)
+   ============================================================ */
+html[data-theme="light"] {
+  --bg-app: #f5f5f5;
+  --bg-panel: #ffffff;
+  --bg-panel-alt: #f0f0f0;
+  --bg-input: #e8e8e8;
+  --bg-hover: #eaeaea;
+  --bg-selection: #b3d4fc;
+  --bg-status: #007acc;
+  --bg-message-user: #0078d4;
+  --bg-message-agent: #f3f3f3;
+
+  --border-default: #d9d9d9;
+  --border-input: #c0c0c0;
+
+  --text-primary: #1e1e1e;
+  --text-secondary: #5a5a5a;
+  --text-muted: #8a8a8a;
+  --text-accent: #0078d4;
+  --text-link: #005a9e;
+
+  --scrollbar-thumb: #c1c1c1;
+  --scrollbar-track: #f5f5f5;
+
+  color-scheme: light;
+}
+
+/* ============================================================
+   GLOBAL RESETS
+   ============================================================ */
 * {
   box-sizing: border-box;
 }
 
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg-app);
+  color: var(--text-primary);
+}
+
+/* ============================================================
+   PANEL HEADERS
+   ============================================================ */
 .panel-header {
   height: 36px;
-  border-bottom: 1px solid #2d2d30;
-  background: #252526;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--bg-panel);
   padding: 0 12px;
   display: flex;
   align-items: center;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.08em;
-  color: #9da3b2;
+  color: var(--text-secondary);
   gap: 6px;
   flex-shrink: 0;
 }
@@ -36,13 +106,16 @@
   white-space: nowrap;
 }
 
+/* ============================================================
+   STATUS BAR
+   ============================================================ */
 .status-bar {
   position: fixed;
   left: 0;
   right: 0;
   bottom: 0;
   height: 24px;
-  background: #007acc;
+  background: var(--bg-status);
   color: white;
   display: flex;
   align-items: center;
@@ -52,16 +125,56 @@
   z-index: 20;
 }
 
+/* ============================================================
+   SCROLLBARS
+   ============================================================ */
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #3a3d41;
+  background: var(--scrollbar-thumb);
   border-radius: 999px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e1e1e;
+  background: var(--scrollbar-track);
+}
+
+/* ============================================================
+   SMOOTH THEME TRANSITION
+   ============================================================ */
+html {
+  transition: color-scheme 0.2s ease;
+}
+
+html * {
+  transition: background-color 0.15s ease,
+              border-color 0.15s ease,
+              color 0.15s ease;
+}
+
+/* ============================================================
+   SKELETON LOADER (prevents white flash)
+   ============================================================ */
+.app-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  background: var(--bg-app);
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-family: system-ui, sans-serif;
+}
+
+.app-loading::after {
+  content: "Загрузка...";
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
 }

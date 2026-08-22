@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { appendStreamDelta, finishStream, type ChatStreamState } from "@/lib/chat-state";
@@ -877,7 +878,7 @@ export function IdeApp() {
 
   function panelClass(name: string) {
     if (!fullscreenPanel) return "";
-    return fullscreenPanel === name ? "fixed inset-0 z-50 bg-[#1e1e1e] flex flex-col" : "hidden";
+    return fullscreenPanel === name ? "fixed inset-0 z-50 flex flex-col" + (typeof window !== "undefined" && document.documentElement.getAttribute("data-theme") === "light" ? " bg-white" : " bg-[#1e1e1e]") : "hidden";
   }
 
   // --- Collapse-aware flex proportions ---
@@ -1515,20 +1516,20 @@ export function IdeApp() {
     if (!collapsed) return null;
     if (vertical) {
       return (
-        <div className="flex flex-col items-center justify-center gap-1 bg-[#252526]" style={{ width: COLLAPSED_SIDE }}>
-          <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-[10px] text-[#9da3b2] hover:text-white">
+        <div className="flex items-center justify-center gap-1" style={{ background: "var(--bg-panel)", width: COLLAPSED_SIDE }}>
+          <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-[10px] hover:text-white" style={{ color: "var(--text-secondary)" }}>
             ▸
           </button>
-          <span className="text-[9px] text-[#9da3b2] [writing-mode:vertical-rl] select-none">{label}</span>
+          <span className="text-[9px] select-none" style={{ color: "var(--text-secondary)", writingMode: "vertical-rl" }}>{label}</span>
         </div>
       );
     }
     return (
-      <div className="flex items-center justify-center gap-1 bg-[#252526]" style={{ height: COLLAPSED_BOTTOM }}>
-        <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-[10px] text-[#9da3b2] hover:text-white">
+      <div className="flex items-center justify-center gap-1" style={{ background: "var(--bg-panel)", height: COLLAPSED_BOTTOM }}>
+        <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-[10px] hover:text-white" style={{ color: "var(--text-secondary)" }}>
           ▴
         </button>
-        <span className="text-[9px] text-[#9da3b2] select-none">{label}</span>
+        <span className="text-[9px] select-none" style={{ color: "var(--text-secondary)" }}>{label}</span>
       </div>
     );
   }
@@ -1538,8 +1539,8 @@ export function IdeApp() {
   const bottomGrows = [bottomFlexGrow(0), bottomFlexGrow(1)];
 
   return (
-    <main className="relative h-screen overflow-hidden bg-[#1e1e1e] pb-6 text-[#d4d4d4]">
-      <header className="flex h-10 items-center justify-between border-b border-[#2d2d30] bg-[#252526] px-3">
+    <main className="relative h-screen overflow-hidden pb-6" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
+      <header className="flex h-10 items-center justify-between border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="flex items-center gap-3">
           <span className="text-sm font-semibold">Multi-Agent Code Studio</span>
           <div className="relative">
@@ -1547,7 +1548,7 @@ export function IdeApp() {
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={t.searchPlaceholder}
-              className="w-[200px] rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-[11px] outline-none focus:border-[#007acc]"
+              className="w-[200px] rounded border px-2 py-1 text-[11px] outline-none focus:border-[#007acc]" style={{ borderColor: "var(--border-input)", background: "var(--bg-app)", color: "var(--text-primary)" }}
             />
             {searchQuery && searchResults.length > 0 && (
               <div className="absolute left-0 top-full z-40 mt-1 max-h-[300px] w-[400px] overflow-y-auto rounded border border-[#3a3d41] bg-[#252526] shadow-lg">
@@ -1584,6 +1585,7 @@ export function IdeApp() {
           <button type="button" onClick={() => setOrchestratorOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
             🤖 {locale === "ru" ? "Оркестратор" : "Orchestrator"}
           </button>
+          <ThemeToggle />
           <button type="button" onClick={() => setSettingsOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
             ⚙️ {t.settings}
           </button>
@@ -1598,7 +1600,7 @@ export function IdeApp() {
           <div className={`relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("explorer", t.explorer)}
             {!collapsedPanels.explorer && (
-              <section className="panel h-full border-r border-[#2d2d30]">
+              <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.explorer}</span>
                   <div className="flex items-center gap-0.5">
@@ -1649,7 +1651,7 @@ export function IdeApp() {
           <div className={`relative ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("editor", t.editor)}
             {!collapsedPanels.editor && (
-              <section className="panel h-full border-r border-[#2d2d30]">
+              <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.editor} — {selectedFile?.path ?? t.noFile}</span>
                   <div className="flex items-center gap-0.5">
@@ -1670,7 +1672,7 @@ export function IdeApp() {
                       <div
                         key={tab.id}
                         onClick={() => { setSelectedFileId(tab.id); setEditorText(tab.content); }}
-                        className={`flex items-center gap-1 shrink-0 cursor-pointer border-r border-[#2d2d30] px-3 py-1 text-[11px] ${tab.id === selectedFileId ? "bg-[#37373d] text-white" : "text-[#9da3b2] hover:bg-[#2a2d2e]"}`}
+                        className={`flex items-center gap-1 shrink-0 cursor-pointer border-r px-3 py-1 text-[11px] ${tab.id === selectedFileId ? "bg-[#37373d] text-white" : "hover:bg-[#2a2d2e]"}`} style={{ borderColor: "var(--border-default)", color: tab.id === selectedFileId ? undefined : "var(--text-secondary)" }}
                       >
                         <span className="truncate max-w-[120px]">{tab.path.split("/").pop() || tab.path}</span>
                         <button type="button" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} className="ml-1 rounded-full px-1 text-[10px] hover:bg-[#555]">✕</button>
@@ -1707,7 +1709,7 @@ export function IdeApp() {
           <div className={`relative ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
-              <section className="panel h-full border-r border-[#2d2d30]">
+              <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.leadChat}</span>
                   <div className="flex items-center gap-0.5">
@@ -1836,7 +1838,7 @@ export function IdeApp() {
           <div className={`relative ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("terminal", t.terminal, false)}
             {!collapsedPanels.terminal && (
-              <section className="panel h-full border-r border-[#2d2d30]">
+              <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.terminal}</span>
                   <div className="flex items-center gap-0.5">
@@ -1931,7 +1933,7 @@ export function IdeApp() {
       ) : null}
 
       {/* Settings drawer */}
-      <aside className={`absolute inset-y-0 right-0 z-30 flex h-full min-h-0 w-[460px] flex-col border-l border-[#2d2d30] bg-[#1b1b1c] transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`}>
+      <aside className={`absolute inset-y-0 right-0 z-30 flex h-full min-h-0 w-[460px] flex-col border-l transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`} style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="panel-header flex items-center justify-between">
           <span className="flex items-center gap-2">{t.settings}{Object.entries(agentDrafts).some(([agentId, draft]) => {
             const agent = data?.agents.find((candidate) => candidate.id === Number(agentId));
