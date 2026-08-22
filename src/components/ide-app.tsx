@@ -87,6 +87,7 @@ type WorkspaceData = {
     githubRepo: string;
     githubAutoPush: boolean;
     autoApprove: boolean;
+    mobileAuthToken: string;
     vaultAvailable: boolean;
   };
   agents: Agent[];
@@ -446,6 +447,7 @@ export function IdeApp() {
   const [githubRepoDraft, setGithubRepoDraft] = useState("");
   const [githubAutoPushDraft, setGithubAutoPushDraft] = useState(false);
   const [autoApproveDraft, setAutoApproveDraft] = useState(false);
+  const [mobileTokenDraft, setMobileTokenDraft] = useState("");
   const [agentDrafts, setAgentDrafts] = useState<Record<number, AgentDraft>>({});
   const [newAgent, setNewAgent] = useState<NewAgentDraft>(emptyNewAgent());
   const [modelOptions, setModelOptions] = useState<Record<string, string[]>>({});
@@ -503,8 +505,9 @@ export function IdeApp() {
       || githubTokenDraft.trim() !== ""
       || githubRepoDraft !== saved.githubRepo
       || githubAutoPushDraft !== saved.githubAutoPush
-      || autoApproveDraft !== saved.autoApprove;
-  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft]);
+      || autoApproveDraft !== saved.autoApprove
+      || mobileTokenDraft !== (saved.mobileAuthToken ?? "");
+  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft, mobileTokenDraft]);
   const newAgentDirty = useMemo(() => Boolean(
     newAgent.name.trim()
       || newAgent.description.trim()
@@ -792,6 +795,7 @@ export function IdeApp() {
     setGithubRepoDraft(payload.settings?.githubRepo ?? "");
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
+    setMobileTokenDraft(payload.settings.mobileAuthToken ?? "");
     setAgentDrafts(toDrafts(payload.agents));
 
     const target = nextFileId ?? selectedFileId ?? payload.files[0]?.id ?? null;
@@ -1050,6 +1054,7 @@ export function IdeApp() {
           githubRepo: githubRepoDraft,
           githubAutoPush: githubAutoPushDraft,
           autoApprove: autoApproveDraft,
+          mobileAuthToken: mobileTokenDraft,
         }),
       });
       if (!res.ok) {
@@ -2059,6 +2064,13 @@ export function IdeApp() {
                 />
                 {locale === "ru" ? "Авто-утверждение (автономный цикл)" : "Auto-Approve (autonomous cycle)"}
               </label>
+              <div className="mt-2">
+                <p className="text-xs text-[#9da3b2]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>
+                <div className="flex gap-2 mt-1">
+                  <input value={mobileTokenDraft} onChange={(e) => setMobileTokenDraft(e.target.value)} placeholder={locale === "ru" ? "Оставьте пустым чтобы отключить" : "Leave empty to disable"} className="flex-1 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                  {mobileTokenDraft ? <span className="text-[10px] self-center" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:3210/mobile?token={mobileTokenDraft}</span> : null}
+                </div>
+              </div>
             </div>
 
             <button type="button" onClick={saveApiKeys} disabled={busy || !settingsDirty} className="mt-2 rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.saveKeys}</button>

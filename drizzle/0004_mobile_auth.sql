@@ -1,0 +1,1 @@
+ALTER TABLE workspace_settings ADD COLUMN mobile_auth_token TEXT NOT NULL DEFAULT '';

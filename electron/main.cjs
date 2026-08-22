@@ -139,7 +139,7 @@ function startEmbeddedServer() {
       // Run the child as plain Node.js (not a second Electron instance).
       ELECTRON_RUN_AS_NODE: "1",
       NODE_ENV: "production",
-      HOSTNAME: "127.0.0.1",
+      HOSTNAME: process.env.MOBILE_ACCESS === "1" ? "0.0.0.0" : "127.0.0.1",
       PORT: String(port),
       DATABASE_URL: `file:${dbPath}`,
       ELECTRON_VAULT: "1",

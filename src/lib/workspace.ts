@@ -64,6 +64,7 @@ type WorkspaceSnapshot = {
     githubRepo: string;
     githubAutoPush: boolean;
     autoApprove: boolean;
+    mobileAuthToken: string;
     vaultAvailable: boolean;
   };
   agents: Array<{
@@ -532,6 +533,7 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       githubRepo: settingsRow.githubRepo,
       githubAutoPush: settingsRow.githubAutoPush,
       autoApprove: Boolean(settingsRow.autoApprove),
+      mobileAuthToken: settingsRow.mobileAuthToken ?? "",
       vaultAvailable: hasElectronVault(),
     },
     agents: agentRows,
@@ -582,6 +584,7 @@ export async function updateWorkspaceSettings(payload: {
   githubRepo?: string;
   githubAutoPush?: boolean;
   autoApprove?: boolean;
+  mobileAuthToken?: string;
   removeApiKeys?: string[];
 }) {
   await ensureWorkspaceBootstrap();
@@ -598,6 +601,7 @@ export async function updateWorkspaceSettings(payload: {
       githubRepo,
       githubAutoPush: payload.githubAutoPush === undefined ? current.githubAutoPush : Boolean(payload.githubAutoPush),
       autoApprove: payload.autoApprove === undefined ? current.autoApprove : Boolean(payload.autoApprove),
+      mobileAuthToken: payload.mobileAuthToken === undefined ? current.mobileAuthToken : compact(payload.mobileAuthToken),
       updatedAt: new Date(),
     });
   await recordSystemEvent("success", "settings", "Workspace settings saved");
