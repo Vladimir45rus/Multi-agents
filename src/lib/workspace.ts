@@ -134,16 +134,7 @@ const defaultAgents = [
     description: "Главный кодер: проектирует архитектуру и пишет основной код.",
     skill: "Сильный fullstack-инженер с акцентом на чистую архитектуру и практичность.",
     systemPrompt: "Ты главный разработчик. Вноси только безопасные и проверяемые изменения.",
-  },
-  {
-    name: "Советник",
-    provider: "openrouter",
-    baseUrl: "https://openrouter.ai/api/v1",
-    model: "anthropic/claude-3.5-sonnet",
-    role: "advisor",
-    description: "Советник: code review и читаемость.",
-    skill: "Строгий ревьюер: читаемость, API-дизайн и поддерживаемость.",
-    systemPrompt: "Не редактируй код сам — давай рекомендации главному кодеру.",
+    color: "#4fc1ff",
   },
 ] as const;
 
@@ -645,6 +636,7 @@ export async function createAgent(
     role?: string;
     skill?: string;
     systemPrompt?: string;
+    color?: string;
   },
   locale?: string,
 ) {
@@ -671,6 +663,7 @@ export async function createAgent(
       description: payload.description ?? "",
       skill: payload.skill ?? "",
       systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt ?? ""),
+      color: compact(payload.color) || "#4fc1ff",
       isActive: true,
     })
     .returning({ id: agents.id, name: agents.name });
@@ -697,6 +690,7 @@ export async function updateAgentProfile(
     systemPrompt: string;
     description?: string;
     role?: string;
+    color?: string;
   },
   locale?: string,
 ) {
@@ -732,6 +726,7 @@ export async function updateAgentProfile(
       skill: payload.skill,
       systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt),
       description: payload.description ?? agent.description,
+      color: payload.color !== undefined ? compact(payload.color) || agent.color : agent.color,
     })
     .where(eq(agents.id, agentId));
 

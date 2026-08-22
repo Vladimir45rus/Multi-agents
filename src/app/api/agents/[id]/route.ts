@@ -17,6 +17,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       systemPrompt?: string;
       description?: string;
       role?: string;
+      color?: string;
       locale?: "ru" | "en";
     };
 
@@ -30,6 +31,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         systemPrompt: body.systemPrompt ?? "",
         description: body.description,
         role: body.role,
+        color: body.color,
       },
       body.locale,
     );

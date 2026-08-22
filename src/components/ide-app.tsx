@@ -59,6 +59,7 @@ type Agent = {
   description: string;
   skill: string;
   systemPrompt: string;
+  color: string;
   isActive: boolean;
 };
 
@@ -100,6 +101,7 @@ type AgentDraft = {
   description: string;
   skill: string;
   systemPrompt: string;
+  color: string;
   manualModel: boolean;
 };
 
@@ -112,6 +114,7 @@ type NewAgentDraft = {
   description: string;
   skill: string;
   systemPrompt: string;
+  color: string;
   manualModel: boolean;
 };
 
@@ -126,6 +129,35 @@ type DesktopBridge = {
 };
 
 const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "security", "observer"];
+
+const ROLE_COLORS: Record<string, string> = {
+  main: "#4fc1ff",
+  advisor: "#6a9955",
+  reviewer: "#ce9178",
+  tester: "#dcdcaa",
+  architect: "#c586c0",
+  security: "#f48771",
+  observer: "#9da3b2",
+};
+
+const ROLE_PRIORITY: Record<string, number> = {
+  main: 0,
+  architect: 1,
+  advisor: 2,
+  reviewer: 3,
+  tester: 4,
+  security: 5,
+  observer: 6,
+};
+
+function sortAgents(agents: Agent[]): Agent[] {
+  return [...agents].sort((a, b) => {
+    const pa = ROLE_PRIORITY[a.role] ?? 99;
+    const pb = ROLE_PRIORITY[b.role] ?? 99;
+    if (pa !== pb) return pa - pb;
+    return a.id - b.id;
+  });
+}
 
 const COLLAPSED_SIDE = 38;
 const COLLAPSED_BOTTOM = 38;
@@ -317,18 +349,21 @@ const dict = {
   },
 };
 
-const emptyNewAgent = (): NewAgentDraft => {
+const emptyNewAgent = (overrides: Partial<NewAgentDraft> = {}): NewAgentDraft => {
   const preset = getProviderPreset("openrouter");
+  const role = overrides.role ?? "advisor";
   return {
     name: "",
     provider: preset.id,
     baseUrl: preset.baseUrl,
     model: preset.defaultModel,
-    role: "advisor",
+    role,
     description: "",
     skill: "",
     systemPrompt: "",
+    color: ROLE_COLORS[role] ?? "#4fc1ff",
     manualModel: false,
+    ...overrides,
   };
 };
 
@@ -348,6 +383,8 @@ export function IdeApp() {
   const [orchestratorOpen, setOrchestratorOpen] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(true);
   const [agentsOpen, setAgentsOpen] = useState(true);
+  const [showAddAgent, setShowAddAgent] = useState(false);
+  const [addAgentMode, setAddAgentMode] = useState<"template" | "custom" | null>(null);
   const [fullscreenPanel, setFullscreenPanel] = useState<string | null>(null);
   const [collapsedPanels, setCollapsedPanels] = useState<Record<PanelName, boolean>>({
     explorer: false,
@@ -405,6 +442,7 @@ export function IdeApp() {
       || newAgent.baseUrl !== getProviderPreset("openrouter").baseUrl
       || newAgent.model !== getProviderPreset("openrouter").defaultModel
       || newAgent.role !== "advisor"
+      || newAgent.color !== (ROLE_COLORS[newAgent.role] ?? "#4fc1ff")
       || newAgent.manualModel,
   ), [newAgent]);
 
@@ -461,7 +499,17 @@ export function IdeApp() {
   }
 
   function isAgentDraftDirty(agent: Agent, draft: AgentDraft) {
-    return agent.provider !== draft.provider || agent.baseUrl !== draft.baseUrl || agent.model !== draft.model || agent.role !== draft.role || agent.description !== draft.description || agent.skill !== draft.skill || agent.systemPrompt !== draft.systemPrompt;
+    const agentColor = agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff";
+    return agent.provider !== draft.provider || agent.baseUrl !== draft.baseUrl || agent.model !== draft.model || agent.role !== draft.role || agent.description !== draft.description || agent.skill !== draft.skill || agent.systemPrompt !== draft.systemPrompt || agentColor !== draft.color;
+  }
+
+  function agentColorForIdentity(identity?: AgentIdentity, fallbackAgent?: Agent | null) {
+    if (identity?.agentId) {
+      const agent = data?.agents.find((a) => a.id === identity.agentId);
+      if (agent) return agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff";
+    }
+    if (fallbackAgent) return fallbackAgent.color ?? ROLE_COLORS[fallbackAgent.role] ?? "#4fc1ff";
+    return ROLE_COLORS[identity?.role ?? "advisor"] ?? "#4fc1ff";
   }
 
   function agentHeader(identity?: AgentIdentity, fallbackName?: string | null) {
@@ -498,6 +546,15 @@ export function IdeApp() {
     return agentHeader(undefined, message.agentName);
   }
 
+  function messageColor(message: WorkspaceMessage) {
+    if (message.senderType === "user") return "#4fc1ff";
+    const storedIdentity = message.metadata?.identity;
+    if (storedIdentity) return agentColorForIdentity(storedIdentity);
+    const agent = data?.agents.find((candidate) => candidate.name === message.agentName);
+    if (agent) return agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff";
+    return "#4fc1ff";
+  }
+
   function toDrafts(agents: Agent[]) {
     return Object.fromEntries(
       agents?.map((agent) => [
@@ -510,6 +567,7 @@ export function IdeApp() {
           description: agent.description,
           skill: agent.skill,
           systemPrompt: agent.systemPrompt,
+          color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff",
           manualModel: false,
         },
       ]),
@@ -1302,7 +1360,7 @@ export function IdeApp() {
       .map((message) => (
         <article key={`stream-${message.identity.agentId}`} className="mr-auto w-fit max-w-[92%] rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] text-[#4fc1ff]">{agentHeader(message.identity, message.identity.displayName)}</p>
+            <p className="flex items-center gap-1 text-[11px] text-[#4fc1ff]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: agentColorForIdentity(message.identity) }} />{agentHeader(message.identity, message.identity.displayName)}</p>
             <span className={`text-[10px] ${statusClass(message.status)}`}>{statusLabel(message.status)}</span>
           </div>
           <p className="mt-1 whitespace-pre-wrap">{message.content || "…"}</p>
@@ -1470,7 +1528,7 @@ export function IdeApp() {
                   {leadMessages?.map((msg) => (
                     <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[#3a3d41] bg-[#252526]"}`}>
                       <div className="flex items-center justify-between gap-2">
-                        <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                        <p className="flex items-center gap-1 text-[11px] text-[#9da3b2]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                         {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
                       </div>
                       <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
@@ -1515,7 +1573,7 @@ export function IdeApp() {
                   {groupMessages?.map((msg) => (
                     <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[#3a3d41] bg-[#252526]"}`}>
                       <div className="flex items-center justify-between gap-2">
-                        <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                        <p className="flex items-center gap-1 text-[11px] text-[#9da3b2]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                         {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
                       </div>
                       <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
@@ -1766,63 +1824,10 @@ export function IdeApp() {
             </> : null}
           </section>
 
-          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
-            <h3 className="mb-2 text-xs uppercase text-[#9da3b2]">{t.createAgent}</h3>
-            <p className="mb-2 text-[11px] text-[#9da3b2]">{t.mockHint}</p>
-            <input value={newAgent.name} onChange={(e) => setNewAgent((p) => ({ ...p, name: e.target.value }))} placeholder={t.name} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-            <label className="mb-1 block text-[11px] text-[#9da3b2]">
-              {t.provider}
-              <select
-                value={newAgent.provider}
-                onChange={(e) => {
-                  const preset = getProviderPreset(e.target.value);
-                  setNewAgent((p) => ({ ...p, provider: preset.id, baseUrl: preset.baseUrl, model: preset.defaultModel, manualModel: false }));
-                  void fetchModels(preset.id, preset.baseUrl, apiKeysDraft[preset.id]);
-                }}
-                className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
-              >
-                {PROVIDER_PRESETS?.map((preset) => (
-                  <option key={preset.id} value={preset.id}>{preset.label}</option>
-                ))}
-              </select>
-            </label>
-            <input value={newAgent.baseUrl} onChange={(e) => setNewAgent((p) => ({ ...p, baseUrl: e.target.value }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-            <div className="mb-1 flex gap-1">
-              <select
-                value={newAgent.manualModel ? "__manual__" : newAgent.model}
-                onChange={(e) => {
-                  if (e.target.value === "__manual__") {
-                    setNewAgent((p) => ({ ...p, manualModel: true }));
-                  } else {
-                    setNewAgent((p) => ({ ...p, model: e.target.value, manualModel: false }));
-                  }
-                }}
-                className="w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
-              >
-                {(modelOptions[newAgent.provider] ?? getProviderPreset(newAgent.provider).fallbackModels)?.map((model) => (
-                  <option key={model} value={model}>{model}</option>
-                ))}
-                {newAgent.model && !(modelOptions[newAgent.provider] ?? []).includes(newAgent.model) ? <option value={newAgent.model}>{newAgent.model}</option> : null}
-                <option value="__manual__">{t.manualModel}</option>
-              </select>
-              <button type="button" onClick={() => fetchModels(newAgent.provider, newAgent.baseUrl, apiKeysDraft[newAgent.provider], true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
-                {t.loadModels}
-              </button>
-            </div>
-            {newAgent.manualModel ? <input value={newAgent.model} onChange={(e) => setNewAgent((p) => ({ ...p, model: e.target.value }))} placeholder={t.model} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" /> : null}
-            <select value={newAgent.role} onChange={(e) => setNewAgent((p) => ({ ...p, role: e.target.value }))} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs">
-              {roleOptions?.map((role) => <option key={role} value={role}>{roleLabel(role)} ({role})</option>)}
-            </select>
-            <input value={newAgent.description} onChange={(e) => setNewAgent((p) => ({ ...p, description: e.target.value }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-            <textarea value={newAgent.skill} onChange={(e) => setNewAgent((p) => ({ ...p, skill: e.target.value }))} placeholder={t.skill} className="mb-1 min-h-12 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-            <textarea value={newAgent.systemPrompt} onChange={(e) => setNewAgent((p) => ({ ...p, systemPrompt: e.target.value }))} placeholder={t.prompt} className="mb-1 min-h-12 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-            <button type="button" onClick={createAgent} disabled={busy || !newAgentDirty} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.createAgent}</button>
-          </section>
-
           <section>
             <button type="button" onClick={() => setAgentsOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t.agents}</span><span className="text-sm">{agentsOpen ? "▼" : "▶"}</span></button>
             {agentsOpen ? <div className="space-y-2">
-              {data?.agents?.map((agent) => {
+              {sortAgents(data?.agents ?? [])?.map((agent) => {
                 const draft =
                   agentDrafts[agent.id] ??
                   ({
@@ -1833,6 +1838,7 @@ export function IdeApp() {
                     description: agent.description,
                     skill: agent.skill,
                     systemPrompt: agent.systemPrompt,
+                    color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff",
                     manualModel: false,
                   } as AgentDraft);
 
@@ -1842,9 +1848,12 @@ export function IdeApp() {
                 return (
                   <article key={agent.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
                     <div className="mb-1 flex items-center justify-between">
-                      <div>
-                        <span className="text-sm">{agent.name}</span>
-                        <p className="text-[10px] text-[#4fc1ff]">{providerModelLabel(draft.provider, draft.model)}</p>
+                      <div className="flex items-center gap-2">
+                        <span className="inline-block h-3 w-3 shrink-0 rounded-full border border-[#555]" style={{ backgroundColor: draft.color || ROLE_COLORS[agent.role] || "#4fc1ff" }} />
+                        <div>
+                          <span className="text-sm">{agent.name}</span>
+                          <p className="text-[10px] text-[#4fc1ff]">{providerModelLabel(draft.provider, draft.model)}</p>
+                        </div>
                       </div>
                       <span className="text-[10px] text-[#9da3b2]">{draftDirty ? t.unsaved : roleLabel(agent.role)}</span>
                     </div>
@@ -1893,9 +1902,19 @@ export function IdeApp() {
 
                     {draft.manualModel ? <input value={draft.model} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value } }))} placeholder={t.model} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" /> : null}
 
-                    <select value={draft.role} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, role: e.target.value } }))} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs">
+                    <select value={draft.role} onChange={(e) => {
+                      const newRole = e.target.value;
+                      const newColor = ROLE_COLORS[newRole] ?? "#4fc1ff";
+                      setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, role: newRole, color: draft.color === (ROLE_COLORS[draft.role] ?? "") ? newColor : draft.color } }));
+                    }} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs">
                       {roleOptions?.map((role) => <option key={role} value={role}>{roleLabel(role)} ({role})</option>)}
                     </select>
+
+                    <div className="mb-1 flex items-center gap-2">
+                      <span className="text-[10px] text-[#9da3b2]">Цвет:</span>
+                      <input type="color" value={draft.color} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, color: e.target.value } }))} className="h-6 w-8 cursor-pointer rounded border border-[#3a3d41] bg-[#1e1e1e]" />
+                    </div>
+
                     <input value={draft.description} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, description: e.target.value } }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
                     <textarea value={draft.skill} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, skill: e.target.value } }))} placeholder={t.skill} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
                     <textarea value={draft.systemPrompt} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, systemPrompt: e.target.value } }))} placeholder={t.prompt} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
@@ -1906,6 +1925,108 @@ export function IdeApp() {
                   </article>
                 );
               })}
+
+              {/* Add agent button / form */}
+              {!showAddAgent ? (
+                <button type="button" onClick={() => { setShowAddAgent(true); setAddAgentMode(null); setNewAgent(emptyNewAgent()); }} className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-[#3a3d41] bg-[#1e1e1e] px-3 py-2 text-xs text-[#9da3b2] hover:border-[#4fc1ff] hover:text-white">
+                  + {locale === "ru" ? "Добавить агента" : "Add agent"}
+                </button>
+              ) : (
+                <article className="rounded border border-[#007acc] bg-[#1b1b1c] p-2">
+                  <div className="mb-2 flex items-center justify-between">
+                    <span className="text-xs text-[#9da3b2]">{addAgentMode === "template" ? (locale === "ru" ? "Новый агент (шаблон)" : "New agent (template)") : addAgentMode === "custom" ? (locale === "ru" ? "Новый агент (свой)" : "New agent (custom)") : locale === "ru" ? "Выберите вариант" : "Choose option"}</span>
+                    <button type="button" onClick={() => setShowAddAgent(false)} className="rounded px-1 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41]">✕</button>
+                  </div>
+
+                  {addAgentMode === null ? (
+                    <div className="space-y-1">
+                      <p className="mb-2 text-[10px] text-[#9da3b2]">{locale === "ru" ? "Быстрый старт — готовые роли агентов:" : "Quick start — preset agent roles:"}</p>
+                      {roleOptions.map((role) => (
+                        <button
+                          key={role}
+                          type="button"
+                          onClick={() => {
+                            setNewAgent(emptyNewAgent({ role, color: ROLE_COLORS[role] ?? "#4fc1ff" }));
+                            setAddAgentMode("template");
+                          }}
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
+                        >
+                          <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ROLE_COLORS[role] ?? "#4fc1ff" }} />
+                          <span className="font-medium">{roleLabel(role)}</span>
+                          <span className="text-[10px] text-[#9da3b2]">({role})</span>
+                        </button>
+                      ))}
+                      <div className="border-t border-[#3a3d41] pt-1">
+                        <button
+                          type="button"
+                          onClick={() => { setNewAgent(emptyNewAgent()); setAddAgentMode("custom"); }}
+                          className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
+                        >
+                          ✨ {locale === "ru" ? "Создать с нуля" : "Create from scratch"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <>
+                      <input value={newAgent.name} onChange={(e) => setNewAgent((p) => ({ ...p, name: e.target.value }))} placeholder={t.name} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                      <label className="mb-1 block text-[11px] text-[#9da3b2]">
+                        {t.provider}
+                        <select
+                          value={newAgent.provider}
+                          onChange={(e) => {
+                            const preset = getProviderPreset(e.target.value);
+                            setNewAgent((p) => ({ ...p, provider: preset.id, baseUrl: preset.baseUrl, model: preset.defaultModel, manualModel: false }));
+                            void fetchModels(preset.id, preset.baseUrl, apiKeysDraft[preset.id]);
+                          }}
+                          className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                        >
+                          {PROVIDER_PRESETS?.map((preset) => (
+                            <option key={preset.id} value={preset.id}>{preset.label}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <input value={newAgent.baseUrl} onChange={(e) => setNewAgent((p) => ({ ...p, baseUrl: e.target.value }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                      <div className="mb-1 flex gap-1">
+                        <select
+                          value={newAgent.manualModel ? "__manual__" : newAgent.model}
+                          onChange={(e) => {
+                            if (e.target.value === "__manual__") {
+                              setNewAgent((p) => ({ ...p, manualModel: true }));
+                            } else {
+                              setNewAgent((p) => ({ ...p, model: e.target.value, manualModel: false }));
+                            }
+                          }}
+                          className="w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                        >
+                          {(modelOptions[newAgent.provider] ?? getProviderPreset(newAgent.provider).fallbackModels)?.map((model) => (
+                            <option key={model} value={model}>{model}</option>
+                          ))}
+                          {newAgent.model && !(modelOptions[newAgent.provider] ?? []).includes(newAgent.model) ? <option value={newAgent.model}>{newAgent.model}</option> : null}
+                          <option value="__manual__">{t.manualModel}</option>
+                        </select>
+                        <button type="button" onClick={() => fetchModels(newAgent.provider, newAgent.baseUrl, apiKeysDraft[newAgent.provider], true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
+                          {t.loadModels}
+                        </button>
+                      </div>
+                      {newAgent.manualModel ? <input value={newAgent.model} onChange={(e) => setNewAgent((p) => ({ ...p, model: e.target.value }))} placeholder={t.model} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" /> : null}
+                      <select value={newAgent.role} onChange={(e) => {
+                        const newRole = e.target.value;
+                        setNewAgent((p) => ({ ...p, role: newRole, color: ROLE_COLORS[newRole] ?? "#4fc1ff" }));
+                      }} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs">
+                        {roleOptions?.map((role) => <option key={role} value={role}>{roleLabel(role)} ({role})</option>)}
+                      </select>
+                      <div className="mb-1 flex items-center gap-2">
+                        <span className="text-[10px] text-[#9da3b2]">Цвет:</span>
+                        <input type="color" value={newAgent.color} onChange={(e) => setNewAgent((p) => ({ ...p, color: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-[#3a3d41] bg-[#1e1e1e]" />
+                      </div>
+                      <input value={newAgent.description} onChange={(e) => setNewAgent((p) => ({ ...p, description: e.target.value }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                      <textarea value={newAgent.skill} onChange={(e) => setNewAgent((p) => ({ ...p, skill: e.target.value }))} placeholder={t.skill} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                      <textarea value={newAgent.systemPrompt} onChange={(e) => setNewAgent((p) => ({ ...p, systemPrompt: e.target.value }))} placeholder={t.prompt} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                      <button type="button" onClick={createAgent} disabled={busy || !newAgentDirty} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.createAgent}</button>
+                    </>
+                  )}
+                </article>
+              )}
             </div> : null}
           </section>
         </div>

@@ -1,0 +1,1 @@
+ALTER TABLE `agents` ADD `color` text DEFAULT '' NOT NULL;

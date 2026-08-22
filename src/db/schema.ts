@@ -24,6 +24,7 @@ export const agents = sqliteTable("agents", {
   description: text("description").notNull().default(""),
   skill: text("skill").notNull().default(""),
   systemPrompt: text("system_prompt").notNull().default(""),
+  color: text("color").notNull().default(""),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
 });

@@ -40,6 +40,7 @@ export async function POST(request: Request) {
         description: body.description,
         skill: body.skill,
         systemPrompt: body.systemPrompt,
+        color: (body as Record<string, unknown>).color as string | undefined,
       },
       body.locale,
     );
