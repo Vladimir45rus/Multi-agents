@@ -1,6 +1,6 @@
 "use client";
 
-import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallback } from "react";
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
@@ -127,6 +127,17 @@ type DesktopBridge = {
 
 const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "security", "observer"];
 
+const COLLAPSED_SIDE = 38;
+const COLLAPSED_BOTTOM = 38;
+
+type PanelName = "explorer" | "editor" | "lead" | "group" | "terminal" | "logs";
+
+type ContextMenuState = {
+  x: number;
+  y: number;
+  entry: WorkspaceTreeEntry;
+};
+
 const dict = {
   ru: {
     loading: "Загрузка рабочей среды...",
@@ -205,6 +216,16 @@ const dict = {
     cancelled: "Остановлено",
     errorStatus: "Ошибка",
     unsaved: "● Не сохранено",
+    collapse: "Свернуть",
+    expand: "Развернуть",
+    newFile: "Создать файл",
+    newFolder: "Создать папку",
+    rename: "Переименовать",
+    delete: "Удалить",
+    create: "Создать",
+    error429: "⚠️ Ошибка 429 (Превышен лимит запросов). Смените модель или провайдера.",
+    errorDefault: "⚠️ Произошла ошибка. Попробуйте ещё раз или смените модель.",
+    logsTitle: "ЛОГИ / СИСТЕМНЫЕ СОБЫТИЯ",
   },
   en: {
     loading: "Loading workspace...",
@@ -283,6 +304,16 @@ const dict = {
     cancelled: "Stopped",
     errorStatus: "Error",
     unsaved: "● Unsaved",
+    collapse: "Collapse",
+    expand: "Maximize",
+    newFile: "New file",
+    newFolder: "New folder",
+    rename: "Rename",
+    delete: "Delete",
+    create: "Create",
+    error429: "⚠️ Error 429 (Rate limit exceeded). Switch model or provider.",
+    errorDefault: "⚠️ An error occurred. Try again or switch models.",
+    logsTitle: "LOGS / SYSTEM EVENTS",
   },
 };
 
@@ -318,10 +349,20 @@ export function IdeApp() {
   const [providersOpen, setProvidersOpen] = useState(true);
   const [agentsOpen, setAgentsOpen] = useState(true);
   const [fullscreenPanel, setFullscreenPanel] = useState<string | null>(null);
-  const [columnWidths, setColumnWidths] = useState([260, 420, 360, 360]);
+  const [collapsedPanels, setCollapsedPanels] = useState<Record<PanelName, boolean>>({
+    explorer: false,
+    editor: false,
+    lead: false,
+    group: false,
+    terminal: false,
+    logs: false,
+  });
+  const [topProportions, setTopProportions] = useState([0.15, 0.35, 0.25, 0.25]);
+  const [bottomProportions, setBottomProportions] = useState([0.5, 0.5]);
   const [bottomRowHeight, setBottomRowHeight] = useState(220);
   const [workspaceTreeEntries, setWorkspaceTreeEntries] = useState<WorkspaceTreeEntry[]>([]);
   const [fileStatuses, setFileStatuses] = useState<Record<string, "new" | "modified" | "saved">>({});
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
 
   const [apiKeysDraft, setApiKeysDraft] = useState<Record<string, string>>({});
   const [githubTokenDraft, setGithubTokenDraft] = useState("");
@@ -386,6 +427,21 @@ export function IdeApp() {
   }, [leadMessages.length, groupMessages.length, liveMessagesVersion]);
 
   useEffect(() => () => chatAbortRef.current?.abort(), []);
+
+  useEffect(() => {
+    const close = (e: MouseEvent) => {
+      if (contextMenu && !(e.target as HTMLElement).closest(".context-menu")) setContextMenu(null);
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && contextMenu) setContextMenu(null);
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [contextMenu]);
 
   function roleLabel(role: string) {
     if (locale === "ru") {
@@ -552,61 +608,122 @@ export function IdeApp() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newAgent.provider]);
 
-  function startColumnResize(index: number, event: React.PointerEvent<HTMLDivElement>) {
+  // --- Resize handlers ---
+
+  const topResizeRef = useRef<{ index: number; startX: number; startProps: number[] } | null>(null);
+
+  const startTopResize = useCallback((index: number, event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
-    const startX = event.clientX;
-    const startWidths = [...columnWidths];
-    const onMove = (moveEvent: PointerEvent) => {
-      const delta = moveEvent.clientX - startX;
-      setColumnWidths((current) => {
-        const next = [...startWidths];
-        next[index] = Math.max(180, startWidths[index] + delta);
-        next[index + 1] = Math.max(220, startWidths[index + 1] - delta);
-        return next;
-      });
+    topResizeRef.current = { index, startX: event.clientX, startProps: [...topProportions] };
+    const onMove = (e: PointerEvent) => {
+      if (!topResizeRef.current) return;
+      const delta = e.clientX - topResizeRef.current.startX;
+      const totalWidth = (topResizeRef.current.startProps.reduce((a, b) => a + b, 0)) || 1;
+      const deltaFrac = delta / (window.innerWidth || 1000);
+      const next = [...topResizeRef.current.startProps];
+      const minFrac = 0.03;
+      next[index] = Math.max(minFrac, topResizeRef.current.startProps[index] + deltaFrac);
+      next[index + 1] = Math.max(minFrac, topResizeRef.current.startProps[index + 1] - deltaFrac);
+      const sum = next.reduce((a, b) => a + b, 0);
+      setTopProportions(next.map((v) => v / sum));
     };
     const onUp = () => {
+      topResizeRef.current = null;
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
-  }
+  }, [topProportions]);
 
-  function startRowResize(event: React.PointerEvent<HTMLDivElement>) {
+  const startRowResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
     const startY = event.clientY;
     const startHeight = bottomRowHeight;
-    const onMove = (moveEvent: PointerEvent) => setBottomRowHeight(Math.max(140, Math.min(520, startHeight - (moveEvent.clientY - startY))));
+    const onMove = (moveEvent: PointerEvent) => setBottomRowHeight(Math.max(80, Math.min(520, startHeight - (moveEvent.clientY - startY))));
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp, { once: true });
+  }, [bottomRowHeight]);
+
+  // --- Panel controls ---
+
+  function toggleCollapse(name: PanelName) {
+    if (fullscreenPanel === name) setFullscreenPanel(null);
+    setCollapsedPanels((prev) => ({ ...prev, [name]: !prev[name] }));
   }
 
-  async function createTreeEntry(kind: "file" | "directory") {
+  function toggleFullscreen(name: string) {
+    setFullscreenPanel((current) => current === name ? null : name);
+    if (collapsedPanels[name as PanelName]) {
+      setCollapsedPanels((prev) => ({ ...prev, [name]: false }));
+    }
+  }
 
+  function panelClass(name: string) {
+    if (!fullscreenPanel) return "";
+    return fullscreenPanel === name ? "fixed inset-0 z-50 bg-[#1e1e1e] flex flex-col" : "hidden";
+  }
+
+  // --- Collapse-aware flex proportions ---
+
+  function topFlexGrow(index: number) {
+    const panelNames: PanelName[] = ["explorer", "editor", "lead", "group"];
+    const name = panelNames[index];
+    if (collapsedPanels[name]) return 0;
+    const active = panelNames.filter((n) => !collapsedPanels[n]);
+    if (active.length === 0) return 1;
+    const idx = active.indexOf(name);
+    if (idx < 0) return 0;
+    const activeProps = active.map((n) => topProportions[panelNames.indexOf(n)]);
+    const sum = activeProps.reduce((a, b) => a + b, 0) || 1;
+    return (activeProps[idx] / sum) * 100;
+  }
+
+  function bottomFlexGrow(index: number) {
+    const panelNames: PanelName[] = ["terminal", "logs"];
+    const name = panelNames[index];
+    if (collapsedPanels[name]) return 0;
+    const active = panelNames.filter((n) => !collapsedPanels[n]);
+    if (active.length === 0) return 1;
+    const idx = active.indexOf(name);
+    if (idx < 0) return 0;
+    const activeProps = active.map((n) => bottomProportions[panelNames.indexOf(n)]);
+    const sum = activeProps.reduce((a, b) => a + b, 0) || 1;
+    return (activeProps[idx] / sum) * 100;
+  }
+
+  // --- File tree operations ---
+
+  function handleTreeContextMenu(e: React.MouseEvent, entry: WorkspaceTreeEntry) {
+    e.preventDefault();
+    setContextMenu({ x: e.clientX, y: e.clientY, entry });
+  }
+
+  async function createTreeEntry(kind: "file" | "directory", parentPath = "") {
     if (!mainAgent) return;
-    const path = window.prompt(kind === "file" ? "Новый файл" : "Новая папка");
-    if (!path?.trim()) return;
+    const defaultName = kind === "file" ? "new-file.ts" : "new-folder";
+    const basePath = parentPath ? `${parentPath}/` : "";
+    const path = `${basePath}${defaultName}`;
     const response = await fetch("/api/workspace/entry", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actorAgentId: mainAgent.id, path: path.trim(), kind }),
+      body: JSON.stringify({ actorAgentId: mainAgent.id, path, kind }),
     });
     if (!response.ok) {
       setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "File operation failed");
       return;
     }
     await loadWorkspace(selectedFileId, locale);
-    if (kind === "file") setFileStatuses((previous) => ({ ...previous, [path.trim()]: "new" }));
+    if (kind === "file") setFileStatuses((previous) => ({ ...previous, [path]: "new" }));
   }
 
   async function renameTreeEntry(filePath: string) {
     if (!mainAgent) return;
-    const nextPath = window.prompt("Новое имя или путь", filePath);
+    const nextPath = window.prompt(locale === "ru" ? "Новое имя или путь" : "New name or path", filePath);
     if (!nextPath?.trim() || nextPath.trim() === filePath) return;
     const response = await fetch("/api/workspace/entry", {
       method: "PATCH",
@@ -621,7 +738,7 @@ export function IdeApp() {
   }
 
   async function deleteTreeEntry(filePath: string) {
-    if (!mainAgent || !window.confirm(`Удалить ${filePath}?`)) return;
+    if (!mainAgent || !window.confirm(`${locale === "ru" ? "Удалить" : "Delete"} ${filePath}?`)) return;
     const response = await fetch("/api/workspace/entry", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -634,13 +751,28 @@ export function IdeApp() {
     await loadWorkspace(null, locale);
   }
 
-  function panelClass(name: string) {
-    if (!fullscreenPanel) return "";
-    return fullscreenPanel === name ? "fixed inset-0 z-50 bg-[#1e1e1e]" : "hidden";
+  // --- Collapse button component ---
+
+  function CollapseButton({ name, label }: { name: PanelName; label: string }) {
+    const collapsed = collapsedPanels[name];
+    return (
+      <button
+        type="button"
+        onClick={() => toggleCollapse(name)}
+        title={collapsed ? t.expand : t.collapse}
+        className="rounded px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41] hover:text-white"
+      >
+        {collapsed ? "▸" : "◂"}
+      </button>
+    );
   }
 
-  function toggleFullscreen(name: string) {
-    setFullscreenPanel((current) => current === name ? null : name);
+  function ExpandButton({ name }: { name: string }) {
+    return (
+      <button type="button" onClick={() => toggleFullscreen(name)} title={t.expand} className="rounded px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41] hover:text-white">
+        □
+      </button>
+    );
   }
 
   function switchLocale(next: UiLocale) {
@@ -1175,11 +1307,41 @@ export function IdeApp() {
           </div>
           <p className="mt-1 whitespace-pre-wrap">{message.content || "…"}</p>
           {message.error ? <p className="mt-1 text-xs text-[#f48771]">{message.error}</p> : null}
-          {message.rateLimited ? <p className="mt-1 rounded bg-[#5a3c2b] px-2 py-1 text-xs text-[#f4c7a1]">Превышен лимит (429), смените модель</p> : null}
+          {message.rateLimited ? <p className="mt-1 rounded bg-[#5a3c2b] px-2 py-1 text-xs text-[#f4c7a1]">{t.error429}</p> : null}
+          {message.status === "error" && !message.rateLimited ? <p className="mt-1 rounded bg-[#3a2b2b] px-2 py-1 text-xs text-[#f4a1a1]">{t.errorDefault}</p> : null}
           {renderMessageActions(`stream-${message.identity.agentId}`, message.content, false)}
         </article>
       ));
   }
+
+  // --- Collapsed panel strip ---
+
+  function collapsedStrip(name: PanelName, label: string, vertical = true) {
+    const collapsed = collapsedPanels[name];
+    if (!collapsed) return null;
+    if (vertical) {
+      return (
+        <div className="flex flex-col items-center justify-center gap-1 bg-[#252526]" style={{ width: COLLAPSED_SIDE }}>
+          <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-[10px] text-[#9da3b2] hover:text-white">
+            ▸
+          </button>
+          <span className="text-[9px] text-[#9da3b2] [writing-mode:vertical-rl] select-none">{label}</span>
+        </div>
+      );
+    }
+    return (
+      <div className="flex items-center justify-center gap-1 bg-[#252526]" style={{ height: COLLAPSED_BOTTOM }}>
+        <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-[10px] text-[#9da3b2] hover:text-white">
+          ▴
+        </button>
+        <span className="text-[9px] text-[#9da3b2] select-none">{label}</span>
+      </div>
+    );
+  }
+
+  // Computed top flex grow values
+  const topGrows = [topFlexGrow(0), topFlexGrow(1), topFlexGrow(2), topFlexGrow(3)];
+  const bottomGrows = [bottomFlexGrow(0), bottomFlexGrow(1)];
 
   return (
     <main className="relative h-screen overflow-hidden bg-[#1e1e1e] pb-6 text-[#d4d4d4]">
@@ -1205,184 +1367,304 @@ export function IdeApp() {
         </div>
       </header>
 
-      <div
-        className="relative grid h-[calc(100%-40px)] overflow-auto"
-        style={{
-          gridTemplateColumns: columnWidths.map((width) => `${width}px`).join(" "),
-          gridTemplateRows: `minmax(0, 1fr) ${bottomRowHeight}px`,
-        }}
-      >
-        {columnWidths.slice(0, -1).map((_, index) => (
-          <div key={`column-resizer-${index}`} className="absolute inset-y-0 z-10 w-1 cursor-col-resize bg-transparent hover:bg-[#007acc]" style={{ left: `${columnWidths.slice(0, index + 1).reduce((sum, width) => sum + width, 0) - 2}px` }} onPointerDown={(event) => startColumnResize(index, event)} />
-        ))}
-        <div className="absolute inset-x-0 z-10 h-1 cursor-row-resize bg-transparent hover:bg-[#007acc]" style={{ bottom: `${bottomRowHeight - 2}px` }} onPointerDown={startRowResize} />
-        <section className={`panel row-span-2 border-r border-[#2d2d30] ${panelClass("explorer")}`}>
-          <div className="panel-header flex items-center justify-between">
-            <span>{t.explorer}</span>
-            <div className="flex gap-1">
-              <button type="button" onClick={() => void createTreeEntry("file")} title="Создать файл" className="rounded bg-[#3a3d41] px-2 py-1 text-xs">+F</button>
-              <button type="button" onClick={() => void createTreeEntry("directory")} title="Создать папку" className="rounded bg-[#3a3d41] px-2 py-1 text-xs">+D</button>
-              <button type="button" onClick={() => toggleFullscreen("explorer")} title="Развернуть" className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button>
-            </div>
-          </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-2">
-            {workspaceTreeEntries.map((entry) => {
-              const file = entry.kind === "file" ? data?.files.find((candidate) => candidate.path === entry.path) : null;
-              const fileStatus = fileStatuses[entry.path];
-              return (
-                <div key={`${entry.kind}-${entry.path}`} className="group mb-1 flex items-center gap-1">
-                  <button
-                    type="button"
-                    disabled={entry.kind === "directory"}
-                    onClick={() => {
-                      void selectWorkspaceFile(entry);
-                    }}
-                    style={{ paddingLeft: `${8 + entry.path.split("/").length * 8}px` }}
-                    className={`block min-w-0 flex-1 truncate rounded px-2 py-1 text-left text-sm ${entry.kind === "directory" ? "text-[#9da3b2]" : selectedFileId === file?.id ? "bg-[#37373d] text-white" : "hover:bg-[#2a2d2e]"}`}
-                  >
-                    <span className="mr-1 text-[#4fc1ff]">{entry.kind === "directory" ? "▾" : "◆"}</span>{entry.path}
-                    {entry.kind === "file" && fileStatus ? <span className={`ml-2 text-[10px] ${fileStatus === "modified" ? "text-amber-300" : fileStatus === "new" ? "text-[#4fc1ff]" : "text-[#6a9955]"}`}>{fileStatus === "modified" ? "●" : fileStatus === "new" ? "＋" : "✓"}</span> : null}
-                  </button>
-                  <button type="button" onClick={() => void renameTreeEntry(entry.path)} className="invisible rounded bg-[#3a3d41] px-1 text-[10px] group-hover:visible">R</button>
-                  <button type="button" onClick={() => void deleteTreeEntry(entry.path)} className="invisible rounded bg-[#5a3c2b] px-1 text-[10px] group-hover:visible">X</button>
+      {/* Main content area: flex column, top flex area + resizer + bottom area */}
+      <div className="flex flex-col" style={{ height: "calc(100% - 40px)" }}>
+        {/* Top row: Tree | Editor | Lead Chat | Group Chat */}
+        <div className="flex min-h-0" style={{ flex: "1 1 auto", height: `calc(100% - ${bottomRowHeight}px)` }}>
+          {/* Explorer / File Tree */}
+          <div className={`relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%`, minWidth: 0 }}>
+            {collapsedStrip("explorer", t.explorer)}
+            {!collapsedPanels.explorer && (
+              <section className="panel h-full border-r border-[#2d2d30]">
+                <div className="panel-header flex items-center justify-between">
+                  <span className="truncate">{t.explorer}</span>
+                  <div className="flex items-center gap-0.5">
+                    <button type="button" onClick={() => createTreeEntry("file")} title={t.newFile} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📄</button>
+                    <button type="button" onClick={() => createTreeEntry("directory")} title={t.newFolder} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📁</button>
+                    <CollapseButton name="explorer" label={t.explorer} />
+                    <ExpandButton name="explorer" />
+                  </div>
                 </div>
-              );
-            })}
-          </div>
-        </section>
-
-        <section className={`panel border-r border-[#2d2d30] ${panelClass("editor")}`}>
-          <div className="panel-header flex items-center justify-between">
-            <span>{t.editor} — {selectedFile?.path ?? t.noFile}</span>
-            <button type="button" onClick={() => toggleFullscreen("editor")} title="Развернуть" className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={rollbackFile} disabled={!selectedFile || !mainAgent || busy} className="rounded bg-[#5a3c2b] px-2 py-1 text-xs text-white disabled:opacity-60">
-                {t.rollback}
-              </button>
-              <button type="button" onClick={saveFile} disabled={!selectedFile || !mainAgent || busy || fileStatuses[selectedFile?.path ?? ""] !== "modified"} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">
-                {t.saveMain}
-              </button>
-            </div>
-          </div>
-          <textarea value={editorText} onChange={(e) => {
-            setEditorText(e.target.value);
-            if (selectedFile) setFileStatuses((previous) => ({ ...previous, [selectedFile.path]: e.target.value === selectedFile.content ? "saved" : "modified" }));
-          }} spellCheck={false} className="min-h-0 flex-1 resize-none bg-[#1e1e1e] p-3 font-mono text-sm outline-none" />
-        </section>
-
-        <section className={`panel row-span-2 border-r border-[#2d2d30] ${panelClass("lead")}`}>
-
-          <div className="panel-header flex items-center justify-between"><span>{t.leadChat}</span><span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span><button type="button" onClick={() => toggleFullscreen("lead")} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button></div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-            {leadMessages?.map((msg) => (
-              <article key={msg.id} className={`w-fit max-w-[92%] rounded border border-[#3a3d41] p-2 text-sm ${msg.senderType === "user" ? "ml-auto bg-[#0e639c] text-white" : "mr-auto bg-[#252526]"}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
-                  {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
+                <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                  {workspaceTreeEntries.map((entry) => {
+                    const file = entry.kind === "file" ? data?.files.find((candidate) => candidate.path === entry.path) : null;
+                    const fileStatus = fileStatuses[entry.path];
+                    const isSelected = selectedFileId === file?.id;
+                    return (
+                      <div key={`${entry.kind}-${entry.path}`} className="group mb-0.5 flex items-center gap-0.5">
+                        <button
+                          type="button"
+                          disabled={entry.kind === "directory"}
+                          onClick={() => { void selectWorkspaceFile(entry); }}
+                          onContextMenu={(e) => handleTreeContextMenu(e, entry)}
+                          style={{ paddingLeft: `${8 + entry.path.split("/").length * 10}px` }}
+                          className={`block min-w-0 flex-1 truncate rounded px-2 py-1 text-left text-sm ${entry.kind === "directory" ? "text-[#9da3b2]" : isSelected ? "bg-[#37373d] text-white" : "hover:bg-[#2a2d2e]"}`}
+                          title={entry.path}
+                        >
+                          <span className="mr-1 text-[#4fc1ff]">{entry.kind === "directory" ? "▾" : "◆"}</span>
+                          <span className="truncate">{entry.path.split("/").pop() || entry.path}</span>
+                          {entry.kind === "file" && fileStatus && fileStatus !== "saved" ? (
+                            <span className={`ml-1 text-[10px] ${fileStatus === "modified" ? "text-amber-300" : "text-[#4fc1ff]"}`}>
+                              {fileStatus === "modified" ? "●" : "＋"}
+                            </span>
+                          ) : null}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
-                <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
-                {renderAttachments(msg.metadata?.attachments)}
-                {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
-                {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
-              </article>
-            ))}
-            {renderStreamingMessages("lead")}
-            <div ref={leadChatEndRef} aria-hidden="true" />
+              </section>
+            )}
           </div>
-          <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="border-t border-[#2d2d30] p-3">
-            <div className="flex gap-2">
-              <input value={leadMessage} onChange={(e) => setLeadMessage(e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
-              <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
-              {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
-            </div>
-          </form>
-        </section>
 
-        <section className={`panel ${panelClass("group")}`}>
-          <div className="panel-header flex items-center justify-between"><span>{t.allChat}</span><span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span><button type="button" onClick={() => toggleFullscreen("group")} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button></div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
-            {groupMessages?.map((msg) => (
-              <article key={msg.id} className={`w-fit max-w-[92%] rounded border border-[#3a3d41] p-2 text-sm ${msg.senderType === "user" ? "ml-auto bg-[#0e639c] text-white" : "mr-auto bg-[#252526]"}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
-                  {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
+          {/* Column resizer 0->1 */}
+          {!collapsedPanels.explorer && !collapsedPanels.editor && (
+            <div className="z-10 w-1 cursor-col-resize bg-transparent hover:bg-[#007acc]" onPointerDown={(e) => startTopResize(0, e)} />
+          )}
+
+          {/* Editor */}
+          <div className={`relative ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%`, minWidth: 0 }}>
+            {collapsedStrip("editor", t.editor)}
+            {!collapsedPanels.editor && (
+              <section className="panel h-full border-r border-[#2d2d30]">
+                <div className="panel-header flex items-center justify-between">
+                  <span className="truncate">{t.editor} — {selectedFile?.path ?? t.noFile}</span>
+                  <div className="flex items-center gap-0.5">
+                    <button type="button" onClick={rollbackFile} disabled={!selectedFile || !mainAgent || busy} className="rounded bg-[#5a3c2b] px-2 py-1 text-xs text-white disabled:opacity-60">
+                      {t.rollback}
+                    </button>
+                    <button type="button" onClick={saveFile} disabled={!selectedFile || !mainAgent || busy || fileStatuses[selectedFile?.path ?? ""] !== "modified"} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">
+                      {t.saveMain}
+                    </button>
+                    <CollapseButton name="editor" label={t.editor} />
+                    <ExpandButton name="editor" />
+                  </div>
                 </div>
-                <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
-                {renderAttachments(msg.metadata?.attachments)}
-                {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
-                {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
-              </article>
-            ))}
-            {renderStreamingMessages("group")}
-            <div ref={groupChatEndRef} aria-hidden="true" />
+                <textarea value={editorText} onChange={(e) => {
+                  setEditorText(e.target.value);
+                  if (selectedFile) setFileStatuses((previous) => ({ ...previous, [selectedFile.path]: e.target.value === selectedFile.content ? "saved" : "modified" }));
+                }} spellCheck={false} className="min-h-0 flex-1 resize-none bg-[#1e1e1e] p-3 font-mono text-sm outline-none" />
+              </section>
+            )}
           </div>
-          <form onSubmit={(e) => { e.preventDefault(); void sendChat("group", groupMessage, duplicateToLead); }} className="border-t border-[#2d2d30] p-3">
-            <div className="mb-2 flex items-center gap-2 text-xs">
-              <input id="dup" type="checkbox" checked={duplicateToLead} onChange={(e) => setDuplicateToLead(e.target.checked)} />
-              <label htmlFor="dup">{t.duplicate}</label>
-            </div>
-            <div className="mb-2 flex gap-2">
-              <input value={attachmentLink} onChange={(e) => setAttachmentLink(e.target.value)} placeholder={t.attachLink} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-2 py-1 text-xs" />
-              <button type="button" onClick={addLinkAttachment} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.addLink}</button>
-              <label className="cursor-pointer rounded bg-[#3a3d41] px-2 py-1 text-xs">
-                {t.attachImage}
-                <input type="file" accept="image/*" className="hidden" onChange={onPickImageAttachment} />
-              </label>
-            </div>
-            {pendingAttachments.length > 0 ? (
-              <div className="mb-2 rounded border border-[#3a3d41] bg-[#252526] p-2 text-xs">
-                {pendingAttachments?.map((att, i) => (
-                  <div key={`${att.type}-${i}`}>{att.type === "link" ? att.url : att.name || "image"}</div>
-                ))}
-                <button type="button" className="mt-2 rounded bg-[#4b2f2f] px-2 py-1" onClick={() => setPendingAttachments([])}>
-                  {t.clearAttach}
-                </button>
-              </div>
-            ) : null}
-            <div className="flex gap-2">
-              <input value={groupMessage} onChange={(e) => setGroupMessage(e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
-              <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
-              {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
-            </div>
-          </form>
-        </section>
 
-        <section className={`panel border-r border-t border-[#2d2d30] ${panelClass("terminal")}`}>
-          <div className="panel-header flex items-center justify-between"><span>{t.terminal}</span><button type="button" onClick={() => toggleFullscreen("terminal")} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button></div>
-          <div className="min-h-0 flex-1 overflow-y-auto bg-[#111214] p-3 font-mono text-xs">
-            {data?.terminal?.map((entry) => (
-              <div key={entry.id} className="mb-3">
-                <div className="text-[#4fc1ff]">$ {entry.command}</div>
-                <pre className="whitespace-pre-wrap">{entry.output}</pre>
-              </div>
-            ))}
-          </div>
-          <form onSubmit={runTerminal} className="border-t border-[#2d2d30] p-3">
-            <input value={terminalCommand} onChange={(e) => setTerminalCommand(e.target.value)} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-xs outline-none" />
-          </form>
-        </section>
+          {/* Column resizer 1->2 */}
+          {!collapsedPanels.editor && !collapsedPanels.lead && (
+            <div className="z-10 w-1 cursor-col-resize bg-transparent hover:bg-[#007acc]" onPointerDown={(e) => startTopResize(1, e)} />
+          )}
 
-        <section className={`panel border-t border-[#2d2d30] ${panelClass("checks")}`}>
-          <div className="panel-header flex items-center justify-between"><span>{locale === "ru" ? "ЛОГИ / СИСТЕМНЫЕ СОБЫТИЯ" : "LOGS / SYSTEM EVENTS"}</span><button type="button" onClick={() => toggleFullscreen("checks")} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">□</button></div>
-          <div className="border-b border-[#2d2d30] px-3 py-1 text-[10px] uppercase text-[#9da3b2]">{t.checks}</div>
-          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 text-xs">
-            {data?.systemEvents?.map((event) => (
-              <article key={`event-${event.id}`} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
-                <p className="text-[10px] text-[#9da3b2]">{event.source} · {new Date(event.createdAt).toLocaleTimeString(locale)}</p>
-                <p>{event.message}</p>
-                {event.details ? <pre className="mt-1 whitespace-pre-wrap text-[10px] text-[#9da3b2]">{event.details}</pre> : null}
-              </article>
-            ))}
-            {data?.findings?.map((finding) => (
-              <article key={finding.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
-                <p className="text-[#9da3b2]">[{finding.severity.toUpperCase()}] {finding.filePath}{finding.line ? `:${finding.line}` : ""}</p>
-                <p>{finding.message}</p>
-              </article>
-            ))}
+          {/* Lead Chat */}
+          <div className={`relative ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%`, minWidth: 0 }}>
+            {collapsedStrip("lead", t.leadChat)}
+            {!collapsedPanels.lead && (
+              <section className="panel h-full border-r border-[#2d2d30]">
+                <div className="panel-header flex items-center justify-between">
+                  <span className="truncate">{t.leadChat}</span>
+                  <div className="flex items-center gap-0.5">
+                    <span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <CollapseButton name="lead" label={t.leadChat} />
+                    <ExpandButton name="lead" />
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                  {leadMessages?.map((msg) => (
+                    <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[#3a3d41] bg-[#252526]"}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                        {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
+                      </div>
+                      <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
+                      {renderAttachments(msg.metadata?.attachments)}
+                      {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
+                      {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
+                    </article>
+                  ))}
+                  {renderStreamingMessages("lead")}
+                  <div ref={leadChatEndRef} aria-hidden="true" />
+                </div>
+                <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="border-t border-[#2d2d30] p-3">
+                  <div className="flex gap-2">
+                    <input value={leadMessage} onChange={(e) => setLeadMessage(e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
+                    {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
+                  </div>
+                </form>
+              </section>
+            )}
           </div>
-        </section>
+
+          {/* Column resizer 2->3 */}
+          {!collapsedPanels.lead && !collapsedPanels.group && (
+            <div className="z-10 w-1 cursor-col-resize bg-transparent hover:bg-[#007acc]" onPointerDown={(e) => startTopResize(2, e)} />
+          )}
+
+          {/* Group Chat */}
+          <div className={`relative ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%`, minWidth: 0 }}>
+            {collapsedStrip("group", t.allChat)}
+            {!collapsedPanels.group && (
+              <section className="panel h-full">
+                <div className="panel-header flex items-center justify-between">
+                  <span className="truncate">{t.allChat}</span>
+                  <div className="flex items-center gap-0.5">
+                    <span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <CollapseButton name="group" label={t.allChat} />
+                    <ExpandButton name="group" />
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                  {groupMessages?.map((msg) => (
+                    <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[#3a3d41] bg-[#252526]"}`}>
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="text-[11px] text-[#9da3b2]">{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                        {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
+                      </div>
+                      <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
+                      {renderAttachments(msg.metadata?.attachments)}
+                      {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
+                      {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
+                    </article>
+                  ))}
+                  {renderStreamingMessages("group")}
+                  <div ref={groupChatEndRef} aria-hidden="true" />
+                </div>
+                <form onSubmit={(e) => { e.preventDefault(); void sendChat("group", groupMessage, duplicateToLead); }} className="border-t border-[#2d2d30] p-3">
+                  <div className="mb-2 flex items-center gap-2 text-xs">
+                    <input id="dup" type="checkbox" checked={duplicateToLead} onChange={(e) => setDuplicateToLead(e.target.checked)} />
+                    <label htmlFor="dup">{t.duplicate}</label>
+                  </div>
+                  <div className="mb-2 flex gap-2">
+                    <input value={attachmentLink} onChange={(e) => setAttachmentLink(e.target.value)} placeholder={t.attachLink} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-2 py-1 text-xs" />
+                    <button type="button" onClick={addLinkAttachment} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.addLink}</button>
+                    <label className="cursor-pointer rounded bg-[#3a3d41] px-2 py-1 text-xs">
+                      {t.attachImage}
+                      <input type="file" accept="image/*" className="hidden" onChange={onPickImageAttachment} />
+                    </label>
+                  </div>
+                  {pendingAttachments.length > 0 ? (
+                    <div className="mb-2 rounded border border-[#3a3d41] bg-[#252526] p-2 text-xs">
+                      {pendingAttachments?.map((att, i) => (
+                        <div key={`${att.type}-${i}`}>{att.type === "link" ? att.url : att.name || "image"}</div>
+                      ))}
+                      <button type="button" className="mt-2 rounded bg-[#4b2f2f] px-2 py-1" onClick={() => setPendingAttachments([])}>
+                        {t.clearAttach}
+                      </button>
+                    </div>
+                  ) : null}
+                  <div className="flex gap-2">
+                    <input value={groupMessage} onChange={(e) => setGroupMessage(e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
+                    {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
+                  </div>
+                </form>
+              </section>
+            )}
+          </div>
+        </div>
+
+        {/* Horizontal resizer between top and bottom */}
+        <div className="z-10 h-1 cursor-row-resize bg-transparent hover:bg-[#007acc]" onPointerDown={startRowResize} />
+
+        {/* Bottom row: Terminal | Logs */}
+        <div className="flex border-t border-[#2d2d30]" style={{ height: `${bottomRowHeight}px`, minHeight: collapsedPanels.terminal && collapsedPanels.logs ? `${COLLAPSED_BOTTOM}px` : "auto" }}>
+          {/* Terminal */}
+          <div className={`relative ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%`, minWidth: 0 }}>
+            {collapsedStrip("terminal", t.terminal, false)}
+            {!collapsedPanels.terminal && (
+              <section className="panel h-full border-r border-[#2d2d30]">
+                <div className="panel-header flex items-center justify-between">
+                  <span className="truncate">{t.terminal}</span>
+                  <div className="flex items-center gap-0.5">
+                    <CollapseButton name="terminal" label={t.terminal} />
+                    <ExpandButton name="terminal" />
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto bg-[#111214] p-3 font-mono text-xs">
+                  {data?.terminal?.map((entry) => (
+                    <div key={entry.id} className="mb-3">
+                      <div className="text-[#4fc1ff]">$ {entry.command}</div>
+                      <pre className="whitespace-pre-wrap">{entry.output}</pre>
+                    </div>
+                  ))}
+                </div>
+                <form onSubmit={runTerminal} className="border-t border-[#2d2d30] p-3">
+                  <input value={terminalCommand} onChange={(e) => setTerminalCommand(e.target.value)} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-xs outline-none" />
+                </form>
+              </section>
+            )}
+          </div>
+
+          {/* Logs / System Events */}
+          <div className={`relative ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%`, minWidth: 0 }}>
+            {collapsedStrip("logs", t.logsTitle, false)}
+            {!collapsedPanels.logs && (
+              <section className="panel h-full">
+                <div className="panel-header flex items-center justify-between">
+                  <span className="truncate">{t.logsTitle}</span>
+                  <div className="flex items-center gap-0.5">
+                    <CollapseButton name="logs" label={t.logsTitle} />
+                    <ExpandButton name="logs" />
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 text-xs">
+                  {data?.systemEvents?.map((event) => (
+                    <article key={`event-${event.id}`} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
+                      <p className="text-[10px] text-[#9da3b2]">{event.source} · {new Date(event.createdAt).toLocaleTimeString(locale)}</p>
+                      <p>{event.message}</p>
+                      {event.details ? <pre className="mt-1 whitespace-pre-wrap text-[10px] text-[#9da3b2]">{event.details}</pre> : null}
+                    </article>
+                  ))}
+                  {data?.findings?.map((finding) => (
+                    <article key={finding.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
+                      <p className="text-[#9da3b2]">[{finding.severity.toUpperCase()}] {finding.filePath}{finding.line ? `:${finding.line}` : ""}</p>
+                      <p>{finding.message}</p>
+                    </article>
+                  ))}
+                </div>
+              </section>
+            )}
+          </div>
+        </div>
       </div>
 
+      {/* Context menu for file tree */}
+      {contextMenu ? (
+        <div
+          className="context-menu fixed z-50 min-w-[160px] rounded border border-[#3a3d41] bg-[#252526] py-1 shadow-[0_8px_24px_rgba(0,0,0,0.6)]"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
+            onClick={() => { createTreeEntry("file", contextMenu.entry.kind === "directory" ? contextMenu.entry.path : contextMenu.entry.path.split("/").slice(0, -1).join("/")); setContextMenu(null); }}
+          >
+            📄 {t.newFile}
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
+            onClick={() => { createTreeEntry("directory", contextMenu.entry.kind === "directory" ? contextMenu.entry.path : contextMenu.entry.path.split("/").slice(0, -1).join("/")); setContextMenu(null); }}
+          >
+            📁 {t.newFolder}
+          </button>
+          <div className="my-1 border-t border-[#3a3d41]" />
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
+            onClick={() => { renameTreeEntry(contextMenu.entry.path); setContextMenu(null); }}
+          >
+            ✏️ {t.rename}
+          </button>
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#f48771] hover:bg-[#37373d]"
+            onClick={() => { deleteTreeEntry(contextMenu.entry.path); setContextMenu(null); }}
+          >
+            🗑️ {t.delete}
+          </button>
+        </div>
+      ) : null}
+
+      {/* Settings drawer */}
       <aside className={`absolute inset-y-0 right-0 z-30 flex h-full min-h-0 w-[460px] flex-col border-l border-[#2d2d30] bg-[#1b1b1c] transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`}>
         <div className="panel-header flex items-center justify-between">
           <span className="flex items-center gap-2">{t.settings}{Object.entries(agentDrafts).some(([agentId, draft]) => {
@@ -1428,7 +1710,7 @@ export function IdeApp() {
           </section>
 
           <section className="mb-5">
-            <button type="button" onClick={() => setProvidersOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t?.apiKeys}</span><span>{providersOpen ? "−" : "+"}</span></button>
+            <button type="button" onClick={() => setProvidersOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t?.apiKeys}</span><span className="text-sm">{providersOpen ? "▼" : "▶"}</span></button>
             {providersOpen ? <>
             <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="mb-2 inline-block text-xs text-[#4fc1ff] underline">
               {t.freeOpenRouter}
@@ -1538,7 +1820,7 @@ export function IdeApp() {
           </section>
 
           <section>
-            <button type="button" onClick={() => setAgentsOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t.agents}</span><span>{agentsOpen ? "−" : "+"}</span></button>
+            <button type="button" onClick={() => setAgentsOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t.agents}</span><span className="text-sm">{agentsOpen ? "▼" : "▶"}</span></button>
             {agentsOpen ? <div className="space-y-2">
               {data?.agents?.map((agent) => {
                 const draft =
@@ -1619,7 +1901,7 @@ export function IdeApp() {
                     <textarea value={draft.systemPrompt} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, systemPrompt: e.target.value } }))} placeholder={t.prompt} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
                     <div className="flex gap-2">
                       {!isMain ? <button type="button" onClick={() => setMainCoder(agent.id)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.setMain}</button> : null}
-                      <button type="button" onClick={() => saveAgentProfile(agent.id)} disabled={busy || !draftDirty} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:opacity-60">{t.saveProfile}</button>
+                      <button type="button" onClick={() => saveAgentProfile(agent.id)} disabled={busy || !draftDirty} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.saveProfile}</button>
                     </div>
                   </article>
                 );
