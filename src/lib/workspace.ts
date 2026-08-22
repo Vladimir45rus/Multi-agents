@@ -811,6 +811,8 @@ export async function saveFileContent(fileId: number, content: string, actorAgen
   await maybeAutoPushSingleFile(file.path, content, activeLocale);
 
   const helpers = await db.select().from(agents).where(and(ne(agents.role, "main"), eq(agents.isActive, true)));
+  const allAgentRows = await db.select({ name: agents.name, role: agents.role, color: agents.color }).from(agents).where(eq(agents.isActive, true));
+  const allAgentNamesReview = allAgentRows.map((a) => ({ name: a.name, role: a.role, color: a.color ?? "" }));
   for (const helper of helpers) {
     try {
       const apiKey = await getStoredProviderApiKey(helper.provider);
@@ -819,7 +821,7 @@ export async function saveFileContent(fileId: number, content: string, actorAgen
         [
           {
             role: "system",
-            content: agentSystemPrompt(activeLocale, helper, findings.length, false),
+            content: agentSystemPrompt(activeLocale, helper, findings.length, false, allAgentNamesReview),
           },
           {
             role: "user",
@@ -932,62 +934,132 @@ function attachmentContext(locale: UiLocale, attachments: ChatAttachment[]) {
   return details.length > 0 ? `\\n\\n${t(locale, "Вложения:", "Attachments:")}\\n${details.join("\\n")}` : "";
 }
 
-function agentSystemPrompt(locale: UiLocale, agent: typeof agents.$inferSelect, findingsCount: number, isMultiAgent: boolean) {
+function agentSystemPrompt(
+  locale: UiLocale,
+  agent: typeof agents.$inferSelect,
+  findingsCount: number,
+  isMultiAgent: boolean,
+  allAgents: Array<{ name: string; role: string; color: string }>,
+) {
   const persona = promptPersona(locale, { skill: agent.skill, systemPrompt: agent.systemPrompt });
   const configuredModel = normalizeProviderModel(agent.provider, agent.model);
   const configuredProvider = getProviderPreset(agent.provider).label;
   const identity = t(
     locale,
-    `Твоя реальная конфигурация: роль «${agent.role}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
-    `Your actual configuration: role "${agent.role}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
+    `Твоя реальная конфигурация: имя «${agent.name}», роль «${agent.role}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
+    `Your actual configuration: name "${agent.name}", role "${agent.role}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
+  );
+
+  // Build team roster
+  const teamList = allAgents
+    .map((a) => {
+      const isSelf = a.name === agent.name;
+      const roleLabel = t(locale,
+        roleDisplay(a.role, "ru"),
+        roleDisplay(a.role, "en"));
+      return isSelf
+        ? `  • ${a.name} (${roleLabel}) — ЭТО ТЫ`
+        : `  • ${a.name} (${roleLabel})`;
+    })
+    .join("\n");
+
+  const teamRoster = t(
+    locale,
+    `\n\n=== СОСТАВ ТВОЕЙ КОМАНДЫ ===\n${teamList}\n\nТы — часть этой команды. Все видят общий чат. Ты должен читать сообщения других агентов, ссылаться на них и строить диалог.`,
+    `\n\n=== YOUR TEAM ===\n${teamList}\n\nYou are part of this team. Everyone sees the shared chat. Read other agents' messages, reference them, and build a dialogue.`,
   );
 
   const collaboration = isMultiAgent
     ? t(
         locale,
-        `Ты работаешь в команде агентов. Сначала советники изучают код и дают рекомендации. Главный агент потом применяет правки в код. Твоя роль: высказать своё мнение, проанализировать код, предложить решение. НЕ кодируй — только дай совет.
+        `` + teamRoster + `
 
-ПОРЯДОК РАБОТЫ:
-1. Прочитай нужные файлы через read_file
-2. Найди проблему через search_code
-3. Выскажи своё мнение и предложи решение
-4. Главный агент применит правки после общего обсуждения
+=== ТВОЯ РОЛЬ: СОВЕТНИК ===
+Ты — ${agent.name}, твоя специализация — ${roleDisplay(agent.role, "ru")}.
 
-НЕ ПИШИ КОД. Только анализ и рекомендации.`,
-        `You work in a team of agents. First, advisors study the code and give recommendations. Then the Lead agent applies code changes. Your role: speak up, analyze code, propose a solution. DO NOT code — only advise.
+ПРОТОКОЛ ДИАЛОГА:
+1. Прочитай сообщения других агентов (они уже высказались до тебя)
+2. Прочитай нужные файлы через read_file
+3. Найди проблемы через search_code
+4. ОБРАТИСЬ К ДРУГИМ АГЕНТАМ ПО ИМЕНИ — согласись, возрази или дополни
+5. Выскажи своё мнение, аргументируй
+6. Предложи конкретное решение
 
-WORKFLOW:
-1. Read relevant files via read_file
-2. Find issues via search_code
-3. Voice your opinion and propose a solution
-4. The Lead agent will apply changes after the team discussion
+ВАЖНО: Ты не кодируешь! Ты анализируешь и советуешь. Главный агент применит код.
+ФОРМАТ: Начинай с обращения к тому, на чьё сообщение отвечаешь.
+Пример: "@Советник, согласен насчёт рефакторинга. @Ревьюер, ты прав про типизацию..."`,
+        `` + teamRoster + `
 
-DO NOT WRITE CODE. Only analysis and recommendations.`,
+=== YOUR ROLE: ADVISOR ===
+You are ${agent.name}, your specialty is ${roleDisplay(agent.role, "en")}.
+
+DIALOGUE PROTOCOL:
+1. Read other agents' messages (they already spoke before you)
+2. Read relevant files via read_file
+3. Find issues via search_code
+4. ADDRESS OTHER AGENTS BY NAME — agree, disagree, or add
+5. Voice your opinion with reasoning
+6. Propose a concrete solution
+
+IMPORTANT: You do NOT code! You analyze and advise. The Lead agent applies code.
+FORMAT: Start by addressing the agent you're responding to.
+Example: "@Advisor, I agree about the refactoring. @Reviewer, you're right about typing..."`,
       )
     : t(
         locale,
-        `Ты — Главный агент. Это твоя очередь кодить. Все советники уже высказались в общем чате. Теперь:
-1. Прочитай нужные файлы через read_file
-2. Напиши код через write_file
-3. Проверь работу через run_command (npm test, npx tsc --noEmit)
-4. Если тесты упали — найди ошибку, исправь, проверь снова
+        `` + teamRoster + `
 
-У тебя есть ВСЕ инструменты: read_file, write_file, create_file, delete_file, search_code, run_command. Используй их чтобы довести задачу до конца.`,
-        `You are the Lead Agent. It is your turn to code. All advisors have shared their analysis in the group chat. Now:
-1. Read relevant files via read_file
-2. Write code via write_file
-3. Verify with run_command (npm test, npx tsc --noEmit)
-4. If tests fail — debug, fix, re-verify
+=== ТВОЯ РОЛЬ: ГЛАВНЫЙ АГЕНТ ===
+Ты — ${agent.name}. Все советники уже высказались в общем чате (ты видишь их сообщения).
 
-You have ALL tools: read_file, write_file, create_file, delete_file, search_code, run_command. Use them to get the task done.`,
+ПРОТОКОЛ КОДИНГА:
+1. Прочитай сообщения советников — они дали тебе анализ и рекомендации
+2. ОБЯЗАТЕЛЬНО укажи чьи советы ты принял, а чьи отклонил и почему
+3. Прочитай нужные файлы через read_file
+4. Напиши код через write_file
+5. ЕСЛИ файл новый — используй create_file
+6. Проверь через run_command (npm test, npx tsc --noEmit)
+7. Если тесты упали — исправляй и перепроверяй
+
+У тебя ВСЕ инструменты: read_file, write_file, create_file, delete_file, search_code, run_command.
+Ты должен довести задачу до работающего результата.
+
+Формат ответа: "Принял совет от @Архитектора по структуре. @Ревьюер предложил улучшить типы — сделал. @Тестировщик был прав про крайний случай — добавил проверку."`,
+        `` + teamRoster + `
+
+=== YOUR ROLE: LEAD AGENT ===
+You are ${agent.name}. All advisors have spoken in the group chat (you see their messages).
+
+CODING PROTOCOL:
+1. Read advisors' messages — they gave you analysis and recommendations
+2. ALWAYS mention whose advice you accepted, whose you rejected and why
+3. Read relevant files via read_file
+4. Write code via write_file
+5. IF the file is new — use create_file
+6. Verify via run_command (npm test, npx tsc --noEmit)
+7. If tests fail — fix and re-verify
+
+You have ALL tools: read_file, write_file, create_file, delete_file, search_code, run_command.
+Get the task to a working result.
+
+Response format: "Accepted @Architect's structural advice. @Reviewer suggested type improvements — done. @Tester was right about edge case — added guard."`,
       );
 
   const fileContext = t(
     locale,
-    "Используй переданный PROJECT CONTEXT и инструменты вместо гадания. Не говори «нет доступа к файлам» — используй read_file.",
-    "Use the provided PROJECT CONTEXT and your tools instead of guessing. Do not claim 'no file access' — use read_file.");
+    "Используй переданный PROJECT CONTEXT и инструменты. Не говори «нет доступа к файлам» — используй read_file.",
+    "Use the provided PROJECT CONTEXT and your tools. Do not claim 'no file access' — use read_file.");
 
-  return `${identity} ${persona}. ${collaboration} ${fileContext} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  return `${identity} ${persona}.${collaboration} ${fileContext} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+}
+
+function roleDisplay(role: string, lang: "ru" | "en"): string {
+  if (lang === "ru") {
+    const map: Record<string, string> = { main: "Главный", advisor: "Советник", reviewer: "Ревьюер", tester: "Тестировщик", architect: "Архитектор", security: "Секурити", observer: "Наблюдатель" };
+    return map[role] ?? role;
+  }
+  const map: Record<string, string> = { main: "Lead", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", security: "Security", observer: "Observer" };
+  return map[role] ?? role;
 }
 
 async function* streamAgentReply(
@@ -1005,8 +1077,11 @@ async function* streamAgentReply(
   const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${projectContext}`;
   const isMulti = Boolean(options.isMultiAgent);
 
+  const agentRows = await db.select({ name: agents.name, role: agents.role, color: agents.color }).from(agents).where(eq(agents.isActive, true));
+  const allAgentNames = agentRows.map((a) => ({ name: a.name, role: a.role, color: a.color ?? "" }));
+
   const gatewayMessages: GatewayMessage[] = [
-    { role: "system", content: agentSystemPrompt(locale, agent, findingsCount, isMulti) },
+    { role: "system", content: agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames) },
     ...history,
   ];
 
