@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { PROVIDER_PRESETS, getProviderPreset } from "@/lib/providers";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
+import { hasSseData, parseSseJson } from "@/lib/sse-json";
 
 type UiLocale = "ru" | "en";
 type ChatChannel = "group" | "lead";
@@ -616,6 +617,11 @@ export function IdeApp() {
     if (!message.trim() && pendingAttachments.length === 0) return;
     setBusy(true);
     setStreamingMessage(null);
+    const outgoingAttachments = pendingAttachments;
+    setPendingAttachments([]);
+    setAttachmentLink("");
+    if (channel === "lead") setLeadMessage("");
+    if (channel === "group") setGroupMessage("");
 
     try {
       const res = await fetch("/api/chat/stream", {
@@ -626,7 +632,7 @@ export function IdeApp() {
           locale,
           channel,
           duplicateToLead: duplicate,
-          attachments: pendingAttachments,
+          attachments: outgoingAttachments,
         }),
       });
 
@@ -642,18 +648,10 @@ export function IdeApp() {
       let streamError: Error | null = null;
 
       const consumeBlock = (block: string) => {
-        const data = block
-          .split(/\\r?\\n/)
-          .filter((item) => item.startsWith("data:"))
-          .map((item) => item.slice(5).trimStart())
-          .join("\\n")
-          .trim();
-        if (!data) return;
+        if (!hasSseData(block)) return;
 
-        let event: ChatStreamEvent;
-        try {
-          event = JSON.parse(data) as ChatStreamEvent;
-        } catch {
+        const event = parseSseJson<ChatStreamEvent>(block);
+        if (!event) {
           streamError ??= new Error(locale === "ru" ? "Получено некорректное событие от LLM" : "Received an invalid LLM stream event");
           return;
         }
@@ -701,10 +699,6 @@ export function IdeApp() {
       if (buffer.trim()) consumeBlock(buffer);
       if (streamError) throw streamError;
 
-      setPendingAttachments([]);
-      setAttachmentLink("");
-      if (channel === "lead") setLeadMessage("");
-      if (channel === "group") setGroupMessage("");
       await loadWorkspace(selectedFileId, locale);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Chat error");

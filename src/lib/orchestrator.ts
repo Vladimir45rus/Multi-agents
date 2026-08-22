@@ -8,6 +8,7 @@ import { db } from "@/db";
 import { agentEvents, agents, orchestratorReports } from "@/db/schema";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { completeProviderResponse, providerRequestFromAgent, type GatewayMessage } from "@/lib/provider-gateway";
+import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction } from "@/lib/patch-parser";
 import { ensureWorkspaceBootstrap, getStoredProviderApiKey } from "@/lib/workspace";
 import { applyWorkspacePatch, getWorkspaceRoot, type WorkspacePatchFile } from "@/lib/workspace-files";
@@ -304,6 +305,15 @@ function waitForConfirmation(confirmationId: string, signal?: AbortSignal): Prom
   });
 }
 
+function agentFailureMessage(locale: Locale, agent: typeof agents.$inferSelect, error: unknown) {
+  const message = error instanceof Error ? error.message : t(locale, "неизвестная ошибка", "unknown error");
+  return t(
+    locale,
+    `Агент ${agent.name} (${getProviderPreset(agent.provider).label} / ${agent.model}) недоступен: ${message}. Остальные агенты продолжат работу.`,
+    `Agent ${agent.name} (${getProviderPreset(agent.provider).label} / ${agent.model}) is unavailable: ${message}. Other agents will continue.`,
+  );
+}
+
 function basePersona(locale: Locale, agent: typeof agents.$inferSelect) {
   const skill = compact(agent.skill);
   const prompt = compact(agent.systemPrompt);
@@ -449,14 +459,19 @@ async function completeAgent(
   userPrompt: string,
   signal?: AbortSignal,
   jsonMode = false,
+  locale: Locale = "ru",
 ) {
-  const apiKey = await getStoredProviderApiKey(agent.provider);
-  const request = providerRequestFromAgent(agent, apiKey);
-  const messages: GatewayMessage[] = [
-    { role: "system", content: systemPrompt },
-    { role: "user", content: userPrompt },
-  ];
-  return completeProviderResponse(request, messages, { signal, jsonMode });
+  try {
+    const apiKey = await getStoredProviderApiKey(agent.provider);
+    const request = providerRequestFromAgent(agent, apiKey);
+    const messages: GatewayMessage[] = [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ];
+    return await completeProviderResponse(request, messages, { signal, jsonMode });
+  } catch (error) {
+    throw new Error(agentFailureMessage(locale, agent, error), { cause: error });
+  }
 }
 
 function summarizePatches(locale: Locale, patches: WorkspacePatchFile[]) {
@@ -603,7 +618,7 @@ export async function* runOrchestrator(options: {
     };
 
     yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "started" };
-    const plan = await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), planPrompt(locale, task), signal);
+    const plan = await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), planPrompt(locale, task), signal, false, locale);
     yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
     yield {
       type: "event",
@@ -644,10 +659,12 @@ export async function* runOrchestrator(options: {
                 advisorSystemPrompt(locale, entry.agent, entry.role),
                 advicePrompt(locale, task, plan, iteration, lastCheckFailure, entry.role),
                 signal,
+                false,
+                locale,
               );
               return { agent: entry.agent, role: entry.role, advice, stance: classifyStance(advice) };
             } catch (error) {
-              return { agent: entry.agent, role: entry.role, error: error instanceof Error ? error.message : "failed" };
+              return { agent: entry.agent, role: entry.role, error: error instanceof Error ? error.message : agentFailureMessage(locale, entry.agent, error) };
             }
           }),
         );
@@ -696,6 +713,7 @@ export async function* runOrchestrator(options: {
           consolidationPrompt(locale, task, plan, adviceResults, conflicts, lastCheckFailure),
           signal,
           true,
+          locale,
         );
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
         const decisionInstruction = parsePatchInstruction(rawDecision);

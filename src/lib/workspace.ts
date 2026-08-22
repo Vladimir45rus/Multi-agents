@@ -11,7 +11,7 @@ import {
   workspaceSettings,
 } from "@/db/schema";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
-import { getProviderPreset } from "@/lib/providers";
+import { getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import {
   completeProviderResponse,
   providerRequestFromAgent,
@@ -121,7 +121,7 @@ const defaultAgents = [
     name: "Claude Sonnet Reviewer",
     provider: "openrouter",
     baseUrl: "https://openrouter.ai/api/v1",
-    model: "anthropic/claude-3.7-sonnet",
+    model: "anthropic/claude-3.5-sonnet",
     role: "advisor",
     description: "Советник: code review и читаемость.",
     skill: "Строгий ревьюер: читаемость, API-дизайн и поддерживаемость.",
@@ -150,6 +150,15 @@ function compact(value: string | null | undefined) {
 
 function providerModelLabel(provider: string, model: string) {
   return `${getProviderPreset(provider).label} / ${model}`;
+}
+
+function agentFailureMessage(locale: UiLocale, agent: typeof agents.$inferSelect, error: unknown) {
+  const message = error instanceof Error ? error.message : t(locale, "неизвестная ошибка", "unknown error");
+  return t(
+    locale,
+    `Агент ${agent.name} (${providerModelLabel(agent.provider, agent.model)}) недоступен: ${message}. Остальные агенты продолжат работу.`,
+    `Agent ${agent.name} (${providerModelLabel(agent.provider, agent.model)}) is unavailable: ${message}. Other agents will continue.`,
+  );
 }
 
 function normalizeRole(role: string | undefined) {
@@ -413,6 +422,15 @@ export async function ensureWorkspaceBootstrap() {
     if (main) await db.update(workspaceSettings).set({ mainCoderAgentId: main.id, updatedAt: new Date() });
   }
 
+  // Migrate model ids saved by older releases before they are used for requests.
+  const agentRows = await db.select().from(agents);
+  for (const agent of agentRows) {
+    const model = normalizeProviderModel(agent.provider, agent.model);
+    if (model !== agent.model) {
+      await db.update(agents).set({ model }).where(eq(agents.id, agent.id));
+    }
+  }
+
   const existingFiles = await db.select().from(projectFiles).limit(1);
   if (existingFiles.length === 0) {
     await db.insert(projectFiles).values(defaultFiles.map((file) => ({ ...file, updatedAt: new Date() })));
@@ -580,7 +598,7 @@ export async function createAgent(
   const name = compact(payload.name);
   const preset = getProviderPreset(payload.provider);
   const provider = preset.id;
-  const model = compact(payload.model) || preset.defaultModel;
+  const model = normalizeProviderModel(provider, compact(payload.model) || preset.defaultModel);
   const baseUrl = compact(payload.baseUrl) || preset.baseUrl;
   const role = normalizeRole(payload.role);
 
@@ -634,7 +652,7 @@ export async function updateAgentProfile(
 
   const preset = getProviderPreset(payload.provider ?? agent.provider);
   const provider = preset.id;
-  const model = compact(payload.model) || preset.defaultModel;
+  const model = normalizeProviderModel(provider, compact(payload.model) || preset.defaultModel);
   const baseUrl = compact(payload.baseUrl) || preset.baseUrl;
   const nextRole = normalizeRole(payload.role ?? agent.role);
 
@@ -769,12 +787,11 @@ export async function saveFileContent(fileId: number, content: string, actorAgen
         content: response,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : t(activeLocale, "Ошибка проверки агента.", "Agent review failed.");
       await pushMessage({
         chatChannel: "group",
         senderType: "system",
         agentName: "System",
-        content: t(activeLocale, `Агент ${helper.name} не выполнил ревью: ${message}`, `Agent ${helper.name} review failed: ${message}`),
+        content: agentFailureMessage(activeLocale, helper, error),
       });
     }
   }
@@ -974,16 +991,18 @@ export async function* streamWorkspaceMessage(
         }
       }
     } catch (error) {
-      const message = error instanceof Error ? error.message : t(activeLocale, "Ошибка агента.", "Agent error.");
-      if (agent.role === "main") throw error;
-
-      await pushMessage({
-        chatChannel: "group",
-        senderType: "system",
-        agentName: "System",
-        content: t(activeLocale, `Агент ${agent.name} пропущен: ${message}`, `Agent ${agent.name} skipped: ${message}`),
-      });
-      yield { type: "agent_error", channel: "group", agentId: agent.id, agentName: agent.name, role: agent.role, message };
+      const message = agentFailureMessage(activeLocale, agent, error);
+      try {
+        await pushMessage({
+          chatChannel: channel,
+          senderType: "system",
+          agentName: "System",
+          content: message,
+        });
+      } catch {
+        // Persisting the notification is best-effort; never stop other agents.
+      }
+      yield { type: "agent_error", channel, agentId: agent.id, agentName: agent.name, role: agent.role, message };
     }
   }
 

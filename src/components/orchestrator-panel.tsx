@@ -9,6 +9,7 @@ import type {
   OrchestratorStreamEvent,
   ReleaseReport,
 } from "@/lib/orchestrator-types";
+import { hasSseData, parseSseJson } from "@/lib/sse-json";
 
 type UiLocale = "ru" | "en";
 
@@ -288,20 +289,15 @@ export function OrchestratorPanel({ open, onClose, locale }: OrchestratorPanelPr
       let buffer = "";
 
       const consumeBlock = (block: string) => {
-        const data = block
-          .split(/\r?\n/)
-          .filter((item) => item.startsWith("data:"))
-          .map((item) => item.slice(5).trimStart())
-          .join("\n")
-          .trim();
-        if (!data) return;
+        if (!hasSseData(block)) return;
 
-        try {
-          const event = JSON.parse(data) as OrchestratorStreamEvent;
-          handleStreamEvent(event);
-        } catch {
+        const event = parseSseJson<OrchestratorStreamEvent>(block);
+        if (!event) {
           setError(locale === "ru" ? "Получено некорректное событие от LLM" : "Received an invalid LLM stream event");
+          return;
         }
+
+        handleStreamEvent(event);
       };
 
       while (true) {

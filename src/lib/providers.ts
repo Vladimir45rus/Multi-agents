@@ -7,18 +7,29 @@ export type ProviderPreset = {
   supportsPublicModels?: boolean;
 };
 
+export const OPENROUTER_MODEL_IDS = [
+  "anthropic/claude-3.5-sonnet",
+  "openai/gpt-4o",
+  "deepseek/deepseek-r1",
+] as const;
+
+const OPENROUTER_MODEL_ALIASES: Record<string, string> = {
+  "anthropic/claude-3.7-sonnet": "anthropic/claude-3.5-sonnet",
+};
+
+export function normalizeProviderModel(providerId: string | undefined, model: string | undefined) {
+  const value = (model ?? "").trim();
+  if (providerId === "openrouter") return OPENROUTER_MODEL_ALIASES[value] ?? value;
+  return value;
+}
+
 export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     id: "openrouter",
     label: "OpenRouter",
     baseUrl: "https://openrouter.ai/api/v1",
-    defaultModel: "openrouter/free",
-    fallbackModels: [
-      "openrouter/free",
-      "qwen/qwen-2.5-coder-32b-instruct:free",
-      "anthropic/claude-3.7-sonnet",
-      "deepseek/deepseek-r1",
-    ],
+    defaultModel: OPENROUTER_MODEL_IDS[0],
+    fallbackModels: [...OPENROUTER_MODEL_IDS],
     supportsPublicModels: true,
   },
   {
