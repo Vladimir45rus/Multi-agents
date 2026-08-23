@@ -17,9 +17,9 @@ type ChatMsg = {
 type AgentInfo = { id: number; name: string; role: string; color: string; isActive: boolean; provider: string; model: string };
 
 const ROLE_COLORS: Record<string, string> = {
-  main: "#4fc1ff", advisor: "#6a9955", reviewer: "#ce9178",
-  tester: "#dcdcaa", architect: "#c586c0", uiux: "#e8ab53",
-  security: "#f48771", observer: "#9da3b2",
+  main: "#8b5cf6", architect: "#10b981", reviewer: "#f97316",
+  tester: "#ef4444", uiux: "#ec4899", advisor: "#06b6d4",
+  security: "#f59e0b", observer: "#64748b",
 };
 
 function msgColor(m: ChatMsg, agents: AgentInfo[]) {

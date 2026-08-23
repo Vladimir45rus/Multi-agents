@@ -7,6 +7,7 @@
     { "idx": 2, "version": "7", "when": 1787341632801, "tag": "0002_agent_color", "breakpoints": true },
     { "idx": 3, "version": "7", "when": 1787341632802, "tag": "0003_auto_approve", "breakpoints": true },
     { "idx": 4, "version": "7", "when": 1787341632803, "tag": "0004_mobile_auth", "breakpoints": true },
-    { "idx": 5, "version": "7", "when": 1787341632804, "tag": "0005_ngrok", "breakpoints": true }
+    { "idx": 5, "version": "7", "when": 1787341632804, "tag": "0005_ngrok", "breakpoints": true },
+    { "idx": 6, "version": "7", "when": 1787341632805, "tag": "0006_localtunnel", "breakpoints": true }
   ]
 }

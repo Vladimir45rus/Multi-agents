@@ -88,8 +88,8 @@ type WorkspaceData = {
     githubAutoPush: boolean;
     autoApprove: boolean;
     mobileAuthToken: string;
-    ngrokToken: string;
-    ngrokUrl: string;
+    localtunnelEnabled: boolean;
+    localtunnelUrl: string;
     vaultAvailable: boolean;
   };
   agents: Agent[];
@@ -138,14 +138,14 @@ type DesktopBridge = {
 const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "uiux", "security", "observer"];
 
 const ROLE_COLORS: Record<string, string> = {
-  main: "#4fc1ff",
-  advisor: "#6a9955",
-  reviewer: "#ce9178",
-  tester: "#dcdcaa",
-  architect: "#c586c0",
-  uiux: "#e8ab53",
-  security: "#f48771",
-  observer: "#9da3b2",
+  main: "#8b5cf6",
+  architect: "#10b981",
+  reviewer: "#f97316",
+  tester: "#ef4444",
+  uiux: "#ec4899",
+  advisor: "#06b6d4",
+  security: "#f59e0b",
+  observer: "#64748b",
 };
 
 const AGENT_COLOR_PALETTE = [
@@ -450,9 +450,14 @@ export function IdeApp() {
   const [githubAutoPushDraft, setGithubAutoPushDraft] = useState(false);
   const [autoApproveDraft, setAutoApproveDraft] = useState(false);
   const [mobileTokenDraft, setMobileTokenDraft] = useState("");
-  const [ngrokTokenDraft, setNgrokTokenDraft] = useState("");
-  const [ngrokUrl, setNgrokUrl] = useState("");
-  const [ngrokLoading, setNgrokLoading] = useState(false);
+  const [localtunnelEnabledDraft, setLocaltunnelEnabledDraft] = useState(false);
+  const [localtunnelUrl, setLocaltunnelUrl] = useState("");
+  const [localtunnelLoading, setLocaltunnelLoading] = useState(false);
+  const localtunnelAutoStartRef = useRef(false);
+  const [githubModalOpen, setGithubModalOpen] = useState(false);
+  const [githubPushToken, setGithubPushToken] = useState("");
+  const [githubPushRepo, setGithubPushRepo] = useState("");
+  const [githubPushLoading, setGithubPushLoading] = useState(false);
   const [agentDrafts, setAgentDrafts] = useState<Record<number, AgentDraft>>({});
   const [newAgent, setNewAgent] = useState<NewAgentDraft>(emptyNewAgent());
   const [modelOptions, setModelOptions] = useState<Record<string, string[]>>({});
@@ -512,8 +517,8 @@ export function IdeApp() {
       || githubAutoPushDraft !== saved.githubAutoPush
       || autoApproveDraft !== saved.autoApprove
       || mobileTokenDraft !== (saved.mobileAuthToken ?? "")
-      || ngrokTokenDraft !== "";
-  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft, mobileTokenDraft, ngrokTokenDraft]);
+      || localtunnelEnabledDraft !== Boolean(saved.localtunnelEnabled);
+  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft, mobileTokenDraft, localtunnelEnabledDraft]);
   const newAgentDirty = useMemo(() => Boolean(
     newAgent.name.trim()
       || newAgent.description.trim()
@@ -563,6 +568,7 @@ export function IdeApp() {
       if (e.key === "Escape" && searchQuery) { setSearchQuery(""); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === "p") { e.preventDefault(); setSearchQuery(""); setSearchResults([]); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveFileRef.current(); return; }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "r") { e.preventDefault(); window.location.reload(); return; }
     };
     window.addEventListener("click", close);
     window.addEventListener("keydown", onKey);
@@ -721,6 +727,14 @@ export function IdeApp() {
   }
 
   useEffect(() => {
+    if (!data?.settings.localtunnelEnabled || localtunnelLoading || localtunnelAutoStartRef.current) return;
+    localtunnelAutoStartRef.current = true;
+    void toggleLocaltunnel(true);
+    // Start once after workspace settings are loaded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data?.settings.localtunnelEnabled]);
+
+  useEffect(() => {
     const timer = window.setTimeout(() => { if (searchQuery) searchFiles(); }, 200);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -802,7 +816,8 @@ export function IdeApp() {
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
     setMobileTokenDraft(payload.settings.mobileAuthToken ?? "");
-    setNgrokUrl(payload.settings.ngrokUrl ?? "");
+    setLocaltunnelEnabledDraft(Boolean(payload.settings.localtunnelEnabled));
+    setLocaltunnelUrl(payload.settings.localtunnelUrl ?? "");
     setAgentDrafts(toDrafts(payload.agents));
 
     const target = nextFileId ?? selectedFileId ?? payload.files[0]?.id ?? null;
@@ -940,7 +955,12 @@ export function IdeApp() {
     if (!mainAgent) return;
     const defaultName = kind === "file" ? "new-file.ts" : "new-folder";
     const basePath = parentPath ? `${parentPath}/` : "";
-    const path = `${basePath}${defaultName}`;
+    let path = `${basePath}${defaultName}`;
+    let suffix = 1;
+    while (workspaceTreeEntries.some((entry) => entry.path === path)) {
+      path = kind === "file" ? `${basePath}new-file-${suffix}.ts` : `${basePath}new-folder-${suffix}`;
+      suffix += 1;
+    }
     const response = await fetch("/api/workspace/entry", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1062,7 +1082,8 @@ export function IdeApp() {
           githubAutoPush: githubAutoPushDraft,
           autoApprove: autoApproveDraft,
           mobileAuthToken: mobileTokenDraft,
-          ...(ngrokTokenDraft ? { ngrokToken: ngrokTokenDraft } : {}),
+          localtunnelEnabled: localtunnelEnabledDraft,
+          localtunnelUrl,
         }),
       });
       if (!res.ok) {
@@ -1178,23 +1199,73 @@ export function IdeApp() {
     }
   }
 
-  async function pushToGithub() {
+  async function pushToGithub(credentials?: { token?: string; repo?: string }) {
+    if (!credentials && (!data?.settings.githubTokenConfigured || !data.settings.githubRepo)) {
+      setGithubPushToken("");
+      setGithubPushRepo(data?.settings.githubRepo ?? "");
+      setGithubModalOpen(true);
+      return;
+    }
+
     setBusy(true);
+    setGithubPushLoading(true);
     try {
       const res = await fetch("/api/github/push", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ locale }),
+        body: JSON.stringify({ locale, ...credentials }),
       });
+      const payload = (await res.json().catch(() => null)) as { error?: string; code?: string } | null;
       if (!res.ok) {
-        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        if (payload?.code === "GITHUB_CREDENTIALS_REQUIRED") {
+          setGithubPushToken("");
+          setGithubPushRepo(data?.settings.githubRepo ?? "");
+          setGithubModalOpen(true);
+          return;
+        }
         throw new Error(payload?.error ?? "github push error");
       }
+      setGithubModalOpen(false);
       await loadWorkspace(selectedFileId, locale);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Error");
     } finally {
+      setGithubPushLoading(false);
       setBusy(false);
+    }
+  }
+
+  async function clearHistory(channel: ChatChannel) {
+    if (!window.confirm(locale === "ru" ? "Очистить историю этого чата?" : "Clear this chat history?")) return;
+    try {
+      const response = await fetch(`/api/chat/history?channel=${channel}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("History clear failed");
+      await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? "История очищена" : "History cleared");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "History clear failed");
+    }
+  }
+
+  async function toggleLocaltunnel(enabled: boolean) {
+    localtunnelAutoStartRef.current = enabled;
+    setLocaltunnelEnabledDraft(enabled);
+    setLocaltunnelLoading(true);
+    try {
+      const response = await fetch("/api/localtunnel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: enabled ? "start" : "stop" }),
+      });
+      const payload = (await response.json().catch(() => null)) as { url?: string; error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "Localtunnel error");
+      setLocaltunnelUrl(payload?.url ?? "");
+      await loadWorkspace(selectedFileId, locale);
+    } catch (error) {
+      setLocaltunnelEnabledDraft(false);
+      setStatus(error instanceof Error ? error.message : "Localtunnel error");
+    } finally {
+      setLocaltunnelLoading(false);
     }
   }
 
@@ -1607,7 +1678,7 @@ export function IdeApp() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <button type="button" onClick={pushToGithub} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white" disabled={busy}>
+          <button type="button" onClick={() => void pushToGithub()} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white" disabled={busy}>
             {t.pushGithub}
           </button>
           <button
@@ -1749,6 +1820,7 @@ export function IdeApp() {
                   <span className="truncate">{t.leadChat}</span>
                   <div className="flex items-center gap-0.5">
                     <span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
                     {renderCollapseButton("lead")}
                     {renderExpandButton("lead")}
                   </div>
@@ -1802,6 +1874,7 @@ export function IdeApp() {
                   <span className="truncate">{t.allChat}</span>
                   <div className="flex items-center gap-0.5">
                     <span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <button type="button" onClick={() => void clearHistory("group")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
                     {renderCollapseButton("group")}
                     {renderExpandButton("group")}
                   </div>
@@ -1969,7 +2042,7 @@ export function IdeApp() {
       ) : null}
 
       {/* Settings drawer */}
-      <aside className={`absolute inset-y-0 right-0 z-30 flex h-full min-h-0 w-[460px] flex-col border-l transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`} style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
+      <aside className={`absolute inset-y-0 right-0 z-30 flex max-h-[85vh] min-h-0 w-[460px] max-w-[calc(100vw-16px)] flex-col overflow-y-auto border-l transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`} style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="panel-header flex items-center justify-between">
           <span className="flex items-center gap-2">{t.settings}{Object.entries(agentDrafts).some(([agentId, draft]) => {
             const agent = data?.agents.find((candidate) => candidate.id === Number(agentId));
@@ -2079,47 +2152,29 @@ export function IdeApp() {
                 {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:3210/mobile?token={mobileTokenDraft}</span> : null}
               </div>
               <div className="mt-3 border-t border-[#2d2d30] pt-3">
-                <p className="text-xs text-[#9da3b2]">{locale === "ru" ? "🌍 Ngrok туннель (доступ из интернета)" : "🌍 Ngrok tunnel (worldwide access)"}</p>
-                <div className="flex gap-2 mt-1">
-                  <input value={ngrokTokenDraft} onChange={(e) => setNgrokTokenDraft(e.target.value)} type="password" placeholder={locale === "ru" ? "Токен из ngrok.com" : "Token from ngrok.com"} className="flex-1 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-                  {!ngrokUrl ? (
-                    <button type="button" disabled={ngrokLoading || !ngrokTokenDraft}
-                      onClick={async () => {
-                        setNgrokLoading(true);
-                        try {
-                          await fetch("/api/settings", { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ngrokToken: ngrokTokenDraft }) });
-                          const r = await fetch("/api/ngrok", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "start", port: 3210 }) });
-                          const d = await r.json();
-                          if (d.url) setNgrokUrl(d.url);
-                          else setStatus(d.error || (locale === "ru" ? "Ошибка запуска туннеля" : "Tunnel start failed"));
-                        } catch { setStatus(locale === "ru" ? "Ошибка туннеля" : "Tunnel error"); }
-                        finally { setNgrokLoading(false); }
-                      }} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:opacity-40 whitespace-nowrap">
-                      {ngrokLoading ? "..." : locale === "ru" ? "Запустить" : "Start"}
-                    </button>
-                  ) : (
-                    <button type="button"
-                      onClick={async () => {
-                        try { await fetch("/api/ngrok", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "stop" }) }); }
-                        catch { /* ok */ }
-                        setNgrokUrl("");
-                      }} className="rounded bg-[#a12828] px-2 py-1 text-xs text-white whitespace-nowrap">
-                      {locale === "ru" ? "Остановить" : "Stop"}
-                    </button>
-                  )}
-                </div>
-                {ngrokUrl ? (
-                  <div className="mt-2">
-                    <div className="flex items-center gap-2 rounded bg-[#1e3323] p-2 text-xs">
-                      <span className="text-[#6a9955]">🟢 {locale === "ru" ? "Активен" : "Active"}</span>
-                      <a href={ngrokUrl + "/mobile?token=" + mobileTokenDraft} target="_blank" rel="noopener noreferrer" className="text-[#4fc1ff] underline truncate">{ngrokUrl}/mobile?token={mobileTokenDraft}</a>
-                      <button type="button" onClick={() => { const link = ngrokUrl + "/mobile?token=" + mobileTokenDraft; navigator.clipboard?.writeText(link); setStatus(locale === "ru" ? "🔗 Ссылка скопирована!" : "🔗 Link copied!"); }} className="text-[10px] text-[#9da3b2] hover:text-white whitespace-nowrap">{locale === "ru" ? "Копировать" : "Copy"}</button>
+                <label className="flex items-center justify-between gap-3 text-xs text-[#c6ced8]">
+                  <span>{locale === "ru" ? "Глобальный доступ (Localtunnel)" : "Global access (Localtunnel)"}</span>
+                  <input
+                    type="checkbox"
+                    checked={localtunnelEnabledDraft}
+                    disabled={localtunnelLoading}
+                    onChange={(e) => void toggleLocaltunnel(e.target.checked)}
+                  />
+                </label>
+                {localtunnelUrl ? (() => {
+                  const mobileUrl = `${localtunnelUrl}/mobile${mobileTokenDraft ? `?token=${encodeURIComponent(mobileTokenDraft)}` : ""}`;
+                  return (
+                    <div className="mt-2">
+                      <div className="flex items-center gap-2 rounded bg-[#1e3323] p-2 text-xs">
+                        <span className="text-[#6a9955]">🟢 {locale === "ru" ? "Активен" : "Active"}</span>
+                        <a href={mobileUrl} target="_blank" rel="noopener noreferrer" className="truncate text-[#4fc1ff] underline">{mobileUrl}</a>
+                        <button type="button" onClick={() => { navigator.clipboard?.writeText(mobileUrl); setStatus(locale === "ru" ? "Ссылка скопирована" : "Link copied"); }} className="whitespace-nowrap text-[10px] text-[#9da3b2] hover:text-white">{locale === "ru" ? "Копировать" : "Copy"}</button>
+                      </div>
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src={`/api/qrcode?url=${encodeURIComponent(mobileUrl)}`} alt="QR code" className="mt-2 h-[140px] w-[140px] rounded border border-[#2d2d30]" />
                     </div>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={`/api/qrcode?url=${encodeURIComponent(ngrokUrl + "/mobile?token=" + mobileTokenDraft)}`} alt="QR code" className="mt-2 h-[140px] w-[140px] rounded border border-[#2d2d30]" />
-                  </div>
-                ) : null}
-                <p className="mt-1 text-[10px]" style={{ color: "var(--text-muted)" }}>{locale === "ru" ? "Бесплатный токен → ngrok.com. Туннель доступен из любой сети мира." : "Free token → ngrok.com. Tunnel works from anywhere in the world."}</p>
+                  );
+                })() : <p className="mt-2 text-[10px] text-[#9da3b2]">{locale === "ru" ? "Без регистрации, токенов и VPN." : "No registration, tokens, or VPN required."}</p>}
               </div>
               </div>
             </div>
@@ -2351,6 +2406,29 @@ export function IdeApp() {
       </aside>
 
       {settingsOpen ? <button type="button" onClick={() => setSettingsOpen(false)} className="absolute inset-0 z-20 bg-black/40" aria-label={t.close} /> : null}
+
+      {githubModalOpen ? (
+        <div className="absolute inset-0 z-50 flex items-center justify-center">
+          <button type="button" onClick={() => setGithubModalOpen(false)} className="absolute inset-0 bg-black/60" aria-label={t.close} />
+          <form onSubmit={(event) => { event.preventDefault(); void pushToGithub({ token: githubPushToken, repo: githubPushRepo }); }} className="relative z-10 w-[92%] max-w-[460px] rounded border border-[#3a3d41] bg-[#252526] p-4 shadow-xl">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">{locale === "ru" ? "Пуш в GitHub" : "Push to GitHub"}</h2>
+              <button type="button" onClick={() => setGithubModalOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
+            </div>
+            <label className="mb-3 block text-xs text-[#9da3b2]">
+              GitHub Personal Access Token (PAT)
+              <input value={githubPushToken} onChange={(event) => setGithubPushToken(event.target.value)} type="password" required className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-2 text-xs" autoComplete="off" />
+            </label>
+            <label className="mb-4 block text-xs text-[#9da3b2]">
+              {locale === "ru" ? "Репозиторий (owner/repo)" : "Repository (owner/repo)"}
+              <input value={githubPushRepo} onChange={(event) => setGithubPushRepo(event.target.value)} placeholder="owner/repo" required className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-2 text-xs" />
+            </label>
+            <button type="submit" disabled={githubPushLoading || !githubPushToken.trim() || !githubPushRepo.trim()} className="w-full rounded bg-[#0e639c] px-3 py-2 text-xs text-white disabled:opacity-50">
+              {githubPushLoading ? (locale === "ru" ? "Пуш выполняется..." : "Pushing...") : (locale === "ru" ? "Инициализировать и пушнуть" : "Initialize and push")}
+            </button>
+          </form>
+        </div>
+      ) : null}
 
       {supportOpen ? (
         <div className="absolute inset-0 z-40 flex items-center justify-center">

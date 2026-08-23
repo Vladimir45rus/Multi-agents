@@ -190,7 +190,7 @@ export async function createWorkspaceEntry(actorAgentId: number, relativePath: s
   const root = await getWorkspaceRoot();
   const target = await safeAbsolutePath(root, relativePath);
   if (kind === "directory") {
-    await mkdir(target.absolutePath, { recursive: false });
+    await mkdir(target.absolutePath, { recursive: true });
   } else {
     await mkdir(path.dirname(target.absolutePath), { recursive: true });
     await writeFile(target.absolutePath, content, { encoding: "utf8", flag: "wx" });

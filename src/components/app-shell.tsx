@@ -12,7 +12,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       {!accepted ? (
         <DisclaimerModal onAccept={accept} />
       ) : (
-        <>
+        <div id="root">
           {/* Loading fallback — prevents white flash during hydration */}
           <div id="app-loading" className="app-loading" aria-hidden />
           <script
@@ -21,7 +21,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             }}
           />
           {children}
-        </>
+        </div>
       )}
     </ErrorBoundary>
   );

@@ -313,7 +313,13 @@ function installApplicationMenu() {
     {
       label: "View",
       submenu: [
-        { role: "reload" },
+        {
+          label: "Сбросить верстку / Перезагрузить",
+          accelerator: "Ctrl+R",
+          click: () => {
+            if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.reload();
+          },
+        },
         { role: "forceReload" },
         { role: "toggleDevTools" },
         { type: "separator" },

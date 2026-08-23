@@ -9,8 +9,8 @@ async function handleUpdate(request: Request) {
     githubAutoPush?: boolean;
     autoApprove?: boolean;
     mobileAuthToken?: string;
-    ngrokToken?: string;
-    ngrokUrl?: string;
+    localtunnelEnabled?: boolean;
+    localtunnelUrl?: string;
     removeApiKeys?: string[];
   };
   await updateWorkspaceSettings(body);

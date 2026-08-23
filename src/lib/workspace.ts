@@ -1,5 +1,7 @@
 import "server-only";
 
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { db, runMigrations } from "@/db";
 import {
   agents,
@@ -26,6 +28,16 @@ import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
 import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
+
+const execFileAsync = promisify(execFile);
+
+const ROLE_COLORS: Record<string, string> = {
+  main: "#8b5cf6",
+  architect: "#10b981",
+  reviewer: "#f97316",
+  tester: "#ef4444",
+  uiux: "#ec4899",
+};
 
 export type UiLocale = "ru" | "en";
 export type ChatChannel = "group" | "lead";
@@ -65,8 +77,8 @@ type WorkspaceSnapshot = {
     githubAutoPush: boolean;
     autoApprove: boolean;
     mobileAuthToken: string;
-    ngrokToken: string;
-    ngrokUrl: string;
+    localtunnelEnabled: boolean;
+    localtunnelUrl: string;
     vaultAvailable: boolean;
   };
   agents: Array<{
@@ -79,6 +91,7 @@ type WorkspaceSnapshot = {
     description: string;
     skill: string;
     systemPrompt: string;
+    color: string;
     isActive: boolean;
   }>;
   files: Array<{
@@ -139,7 +152,7 @@ const defaultAgents = [
     description: "Главный кодер: проектирует архитектуру и пишет основной код.",
     skill: "Сильный fullstack-инженер с акцентом на чистую архитектуру и практичность.",
     systemPrompt: "Ты главный разработчик внутри IDE Multi-Agent Code Studio. Дерево проекта и содержимое открытых файлов автоматически передаются тебе приложением. Используй инструменты read_file, write_file, create_file для работы с кодом. Никогда не говори «у меня нет доступа к файлам» — это неправда, доступ есть через инструменты.",
-    color: "#4fc1ff",
+    color: "#8b5cf6",
   },
 ] as const;
 
@@ -315,87 +328,103 @@ export async function getWorkspaceSettingsRow() {
   return row;
 }
 
-async function githubRequest<T>(url: string, init: RequestInit, token: string): Promise<T> {
-  const res = await fetch(url, {
-    ...init,
+async function getGitHubDefaultBranch(repo: string, token: string) {
+  const res = await fetch(`https://api.github.com/repos/${repo}`, {
     headers: {
       Accept: "application/vnd.github+json",
       Authorization: `Bearer ${token}`,
       "X-GitHub-Api-Version": "2022-11-28",
-      ...(init.headers ?? {}),
     },
   });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`GitHub API ${res.status}: ${text || res.statusText}`);
-  }
-
-  return (await res.json()) as T;
-}
-
-async function getGitHubDefaultBranch(repo: string, token: string) {
-  const payload = await githubRequest<{ default_branch?: string }>(`https://api.github.com/repos/${repo}`, { method: "GET" }, token);
+  if (!res.ok) throw new Error(`GitHub API ${res.status}: ${res.statusText}`);
+  const payload = (await res.json()) as { default_branch?: string };
   return payload.default_branch || "main";
 }
 
-async function pushSingleFileToGitHub(repo: string, token: string, branch: string, path: string, content: string, message: string) {
-  const encodedPath = encodeURIComponent(path).replace(/%2F/g, "/");
-  const endpoint = `https://api.github.com/repos/${repo}/contents/${encodedPath}`;
-
-  let sha: string | undefined;
-  try {
-    const existing = await githubRequest<{ sha?: string }>(`${endpoint}?ref=${encodeURIComponent(branch)}`, { method: "GET" }, token);
-    sha = existing.sha;
-  } catch {
-    sha = undefined;
-  }
-
-  await githubRequest(
-    endpoint,
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        message,
-        content: Buffer.from(content, "utf-8").toString("base64"),
-        branch,
-        sha,
-      }),
-    },
-    token,
-  );
+async function runGit(args: string[], cwd: string, env?: Record<string, string>) {
+  const result = await execFileAsync("git", args, {
+    cwd,
+    env: { ...process.env, ...env },
+    maxBuffer: 2_000_000,
+    windowsHide: true,
+  });
+  return `${result.stdout}${result.stderr}`.trim();
 }
 
-export async function pushWorkspaceToGitHub(locale?: string) {
+function githubRepoName(value: string) {
+  const repo = compact(value).replace(/^https?:\/\/github\.com\//, "").replace(/\.git$/, "");
+  if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) throw new Error("Repository must use owner/repo format");
+  return repo;
+}
+
+function gitAuthEnv(token: string): Record<string, string> {
+  const basic = Buffer.from(`x-access-token:${token}`, "utf8").toString("base64");
+  return {
+    GIT_CONFIG_COUNT: "1",
+    GIT_CONFIG_KEY_0: "http.extraheader",
+    GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
+  };
+}
+
+export async function pushWorkspaceToGitHub(
+  locale?: string,
+  credentials?: { token?: string; repo?: string },
+) {
   const activeLocale = normalizeLocale(locale);
   await ensureWorkspaceBootstrap();
 
   const settings = await getWorkspaceSettingsRow();
-  const storedToken = compact(settings.githubToken);
+  const inputToken = compact(credentials?.token);
+  const storedToken = inputToken || compact(settings.githubToken);
   const token = storedToken ? await decryptSecret(storedToken) : "";
-  const repo = compact(settings.githubRepo);
+  const repoInput = credentials?.repo === undefined ? settings.githubRepo : credentials.repo;
 
-  if (!token || !repo) {
-    throw new Error(t(activeLocale, "Заполните GitHub Token и Repository в настройках.", "Set GitHub Token and Repository in settings."));
+  if (!token || !compact(repoInput)) {
+    const error = new Error("GitHub credentials are required");
+    (error as Error & { code?: string }).code = "GITHUB_CREDENTIALS_REQUIRED";
+    throw error;
   }
+
+  const repo = githubRepoName(repoInput);
+  if (inputToken || credentials?.repo !== undefined) {
+    await updateWorkspaceSettings({ githubToken: inputToken || settings.githubToken, githubRepo: repo });
+  }
+
+  const root = compact(settings.projectRoot);
+  if (!root) throw new Error(t(activeLocale, "Сначала подключите папку проекта.", "Connect a project folder first."));
+
+  await recordSystemEvent("info", "github", t(activeLocale, "Инициализация git и подготовка push...", "Initializing git and preparing push..."));
+  await runGit(["init"], root);
+  await runGit(["config", "user.name", "Multi-Agent Code Studio"], root);
+  await runGit(["config", "user.email", "multi-agent-code-studio@users.noreply.github.com"], root);
 
   const branch = await getGitHubDefaultBranch(repo, token);
-  const files = await db.select().from(projectFiles).orderBy(asc(projectFiles.path));
+  const remoteUrl = `https://github.com/${repo}.git`;
+  const remoteOutput = await runGit(["remote"], root).catch(() => "");
+  if (remoteOutput.split(/\r?\n/).includes("origin")) await runGit(["remote", "set-url", "origin", remoteUrl], root);
+  else await runGit(["remote", "add", "origin", remoteUrl], root);
 
-  let pushed = 0;
-  for (const file of files) {
-    await pushSingleFileToGitHub(repo, token, branch, file.path, file.content, `chore(ai): sync ${file.path}`);
-    pushed += 1;
+  await runGit(["add", "-A"], root);
+  const changes = await runGit(["status", "--porcelain"], root);
+  if (changes) {
+    await runGit(["commit", "-m", "chore: sync workspace"], root);
+    await recordSystemEvent("success", "github", t(activeLocale, "Локальный git-коммит создан.", "Local git commit created."));
+  } else {
+    await recordSystemEvent("info", "github", t(activeLocale, "Изменений для нового коммита нет.", "No changes for a new commit."));
   }
+
+  await recordSystemEvent("info", "github", t(activeLocale, `Отправка в ${repo}/${branch}...`, `Pushing to ${repo}/${branch}...`));
+  await runGit(["push", "-u", "origin", `HEAD:${branch}`], root, await gitAuthEnv(token));
+  await recordSystemEvent("success", "github", t(activeLocale, `GitHub push выполнен: ${repo}/${branch}.`, `GitHub push completed: ${repo}/${branch}.`));
 
   await pushMessage({
     chatChannel: "group",
     senderType: "system",
     agentName: "System",
-    content: t(activeLocale, `GitHub push выполнен. Файлов отправлено: ${pushed}.`, `GitHub push completed. Files pushed: ${pushed}.`),
+    content: t(activeLocale, `GitHub push выполнен: ${repo}/${branch}.`, `GitHub push completed: ${repo}/${branch}.`),
   });
 
-  return { pushed, branch };
+  return { branch, repo };
 }
 
 async function maybeAutoPushSingleFile(path: string, content: string, locale?: string) {
@@ -409,8 +438,7 @@ async function maybeAutoPushSingleFile(path: string, content: string, locale?: s
   if (!token || !repo) return;
 
   try {
-    const branch = await getGitHubDefaultBranch(repo, token);
-    await pushSingleFileToGitHub(repo, token, branch, path, content, `chore(ai-auto): update ${path}`);
+    await pushWorkspaceToGitHub(activeLocale);
     await pushMessage({
       chatChannel: "group",
       senderType: "system",
@@ -455,8 +483,9 @@ export async function ensureWorkspaceBootstrap() {
     const name = agent.name === "GPT-4.1 Lead" || agent.name === "Claude Sonnet Reviewer"
       ? agent.role === "main" ? "Главный агент" : "Советник"
       : agent.name;
-    if (model !== agent.model || systemPrompt !== agent.systemPrompt || name !== agent.name) {
-      await db.update(agents).set({ model, systemPrompt, name }).where(eq(agents.id, agent.id));
+    const roleColor = ROLE_COLORS[agent.role];
+    if (model !== agent.model || systemPrompt !== agent.systemPrompt || name !== agent.name || (roleColor && roleColor !== agent.color)) {
+      await db.update(agents).set({ model, systemPrompt, name, ...(roleColor ? { color: roleColor } : {}) }).where(eq(agents.id, agent.id));
     }
   }
 
@@ -536,8 +565,8 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       githubAutoPush: settingsRow.githubAutoPush,
       autoApprove: Boolean(settingsRow.autoApprove),
       mobileAuthToken: settingsRow.mobileAuthToken ?? "",
-      ngrokToken: "",
-      ngrokUrl: settingsRow.ngrokUrl ?? "",
+      localtunnelEnabled: Boolean(settingsRow.localtunnelEnabled),
+      localtunnelUrl: settingsRow.localtunnelUrl ?? "",
       vaultAvailable: hasElectronVault(),
     },
     agents: agentRows,
@@ -589,8 +618,8 @@ export async function updateWorkspaceSettings(payload: {
   githubAutoPush?: boolean;
   autoApprove?: boolean;
   mobileAuthToken?: string;
-  ngrokToken?: string;
-  ngrokUrl?: string;
+  localtunnelEnabled?: boolean;
+  localtunnelUrl?: string;
   removeApiKeys?: string[];
 }) {
   await ensureWorkspaceBootstrap();
@@ -608,11 +637,18 @@ export async function updateWorkspaceSettings(payload: {
       githubAutoPush: payload.githubAutoPush === undefined ? current.githubAutoPush : Boolean(payload.githubAutoPush),
       autoApprove: payload.autoApprove === undefined ? current.autoApprove : Boolean(payload.autoApprove),
       mobileAuthToken: payload.mobileAuthToken === undefined ? current.mobileAuthToken : compact(payload.mobileAuthToken),
-      ngrokToken: payload.ngrokToken === undefined ? current.ngrokToken : compact(payload.ngrokToken),
-      ngrokUrl: payload.ngrokUrl === undefined ? current.ngrokUrl : compact(payload.ngrokUrl),
+      localtunnelEnabled: payload.localtunnelEnabled === undefined ? current.localtunnelEnabled : Boolean(payload.localtunnelEnabled),
+      localtunnelUrl: payload.localtunnelUrl === undefined ? current.localtunnelUrl : compact(payload.localtunnelUrl),
       updatedAt: new Date(),
     });
   await recordSystemEvent("success", "settings", "Workspace settings saved");
+}
+
+export async function clearChatHistory(channel?: ChatChannel) {
+  await ensureWorkspaceBootstrap();
+  if (channel) await db.delete(chatMessages).where(eq(chatMessages.chatChannel, channel));
+  else await db.delete(chatMessages);
+  await recordSystemEvent("info", "chat", channel ? `Chat history cleared: ${channel}` : "All chat history cleared");
 }
 
 export async function importProjectFiles(files: Array<{ path: string; content: string }>, locale?: string) {
@@ -680,7 +716,7 @@ export async function createAgent(
       description: payload.description ?? "",
       skill: payload.skill ?? "",
       systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt ?? ""),
-      color: compact(payload.color) || "#4fc1ff",
+      color: ROLE_COLORS[role === "main" ? "main" : role] ?? (compact(payload.color) || "#4fc1ff"),
       isActive: true,
     })
     .returning({ id: agents.id, name: agents.name });
@@ -743,7 +779,7 @@ export async function updateAgentProfile(
       skill: payload.skill,
       systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt),
       description: payload.description ?? agent.description,
-      color: payload.color !== undefined ? compact(payload.color) || agent.color : agent.color,
+      color: ROLE_COLORS[nextRole] ?? (payload.color !== undefined ? compact(payload.color) || agent.color : agent.color),
     })
     .where(eq(agents.id, agentId));
 
@@ -930,13 +966,10 @@ async function gatewayHistory(channel: ChatChannel) {
     content: row.content,
   }));
 
-  const compacted: GatewayMessage[] = [];
-  for (const message of messages) {
-    const previous = compacted[compacted.length - 1];
-    if (previous?.role === message.role) previous.content += `\\n\\n${message.content}`;
-    else compacted.push({ ...message });
-  }
-  return compacted.slice(-16);
+  return messages.slice(-16).map((message) => ({
+    role: message.role,
+    content: message.content,
+  }));
 }
 
 function attachmentContext(locale: UiLocale, attachments: ChatAttachment[]) {
