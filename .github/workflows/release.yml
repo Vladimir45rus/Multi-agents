@@ -79,7 +79,7 @@ jobs:
       - name: Package Windows installer and portable build
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win nsis portable --x64 --publish never
+        run: npx electron-builder --win nsis portable --x64 --publish onTag
 
       - name: Upload Windows artifacts
         uses: actions/upload-artifact@v4
@@ -87,6 +87,7 @@ jobs:
           name: release-windows
           path: |
             release/*.exe
+            release/latest.yml
           if-no-files-found: error
           retention-days: 7
 
@@ -115,7 +116,7 @@ jobs:
       - name: Package universal macOS builds
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --mac dmg zip --universal --publish never
+        run: npx electron-builder --mac dmg zip --universal --publish onTag
 
       - name: Upload macOS artifacts
         uses: actions/upload-artifact@v4
@@ -124,6 +125,7 @@ jobs:
           path: |
             release/*.dmg
             release/*.zip
+            release/latest-mac.yml
           if-no-files-found: error
           retention-days: 7
 
@@ -152,7 +154,7 @@ jobs:
       - name: Package Linux builds
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --linux AppImage deb --x64 --publish never
+        run: npx electron-builder --linux AppImage deb --x64 --publish onTag
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@v4
@@ -161,58 +163,6 @@ jobs:
           path: |
             release/*.AppImage
             release/*.deb
+            release/latest-linux.yml
           if-no-files-found: error
           retention-days: 7
-
-  publish:
-    name: Publish GitHub Release
-    needs: [windows, macos, linux]
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Download Windows artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-windows
-          path: release
-
-      - name: Download macOS artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-macos
-          path: release
-
-      - name: Download Linux artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: release-linux
-          path: release
-
-      - name: Create or update GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          if ! gh release view "$TAG" >/dev/null 2>&1; then
-            gh release create "$TAG" \
-              --title "Multi-Agent Code Studio $TAG" \
-              --generate-notes \
-              --draft=false
-          fi
-
-          mapfile -d '' assets < <(find release -type f \( \
-            -name '*.exe' -o \
-            -name '*.dmg' -o \
-            -name '*.zip' -o \
-            -name '*.AppImage' -o \
-            -name '*.deb' \
-          \) -print0)
-          if [ "${#assets[@]}" -eq 0 ]; then
-            echo "No release assets were produced" >&2
-            exit 1
-          fi
-          gh release upload "$TAG" "${assets[@]}" --clobber
