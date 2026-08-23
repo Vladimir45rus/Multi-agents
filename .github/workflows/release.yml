@@ -31,7 +31,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Typecheck
         run: npm run typecheck
@@ -41,6 +41,18 @@ jobs:
 
       - name: Tests
         run: npm test
+
+      - name: Verify tag matches package version
+        env:
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(node -p "require('./package.json').version")"
+          test "v$VERSION" = "$TAG" || {
+            echo "Tag $TAG does not match package.json version $VERSION" >&2
+            exit 1
+          }
 
   windows:
     name: Windows (.exe)
@@ -57,7 +69,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build standalone application
         run: npm run build:standalone
@@ -69,7 +81,8 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-windows
-          path: release/*
+          path: |
+            release/*.exe
           if-no-files-found: error
           retention-days: 7
 
@@ -88,7 +101,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build standalone application
         run: npm run build:standalone
@@ -100,7 +113,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-macos
-          path: release/*
+          path: |
+            release/*.dmg
+            release/*.zip
           if-no-files-found: error
           retention-days: 7
 
@@ -119,7 +134,7 @@ jobs:
           cache: npm
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       - name: Build standalone application
         run: npm run build:standalone
@@ -131,7 +146,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: release-linux
-          path: release/*
+          path: |
+            release/*.AppImage
+            release/*.deb
           if-no-files-found: error
           retention-days: 7
 
@@ -171,7 +188,13 @@ jobs:
               --generate-notes
           fi
 
-          mapfile -d '' assets < <(find release -type f -print0)
+          mapfile -d '' assets < <(find release -type f \( \
+            -name '*.exe' -o \
+            -name '*.dmg' -o \
+            -name '*.zip' -o \
+            -name '*.AppImage' -o \
+            -name '*.deb' \
+          \) -print0)
           if [ "${#assets[@]}" -eq 0 ]; then
             echo "No release assets were produced" >&2
             exit 1
