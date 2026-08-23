@@ -11,9 +11,20 @@ async function handleUpdate(request: Request) {
     mobileAuthToken?: string;
     localtunnelEnabled?: boolean;
     localtunnelUrl?: string;
+    telegramToken?: string;
+    telegramChatId?: string;
+    fallbackModels?: string[];
+    previewCommand?: string;
+    previewPort?: number;
+    previewUrl?: string;
+    projectTemplate?: string;
+    projectTemplatePrompt?: string;
     removeApiKeys?: string[];
   };
   await updateWorkspaceSettings(body);
+  if (body.telegramToken || body.telegramChatId) {
+    void import("@/lib/telegram").then(({ ensureTelegramPolling }) => ensureTelegramPolling()).catch(() => undefined);
+  }
   return NextResponse.json({ ok: true });
 }
 

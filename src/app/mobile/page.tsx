@@ -6,6 +6,7 @@ import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { MobileSettings } from "./settings";
 import { useVoiceInput } from "./voice-input";
+import { PreviewModal } from "@/components/preview-modal";
 
 type MobileTab = "lead" | "group" | "settings";
 
@@ -34,12 +35,15 @@ export default function MobilePage() {
   const urlToken = sp.get("token") ?? "";
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [tab, setTab] = useState<MobileTab>("lead");
-  const [data, setData] = useState<{ messages: ChatMsg[]; agents: AgentInfo[]; settings: { autoApprove: boolean; mobileAuthToken: string } } | null>(null);
+  const [data, setData] = useState<{ messages: ChatMsg[]; agents: AgentInfo[]; settings: { autoApprove: boolean; mobileAuthToken: string; previewUrl?: string } } | null>(null);
   const [leadMsg, setLeadMsg] = useState("");
   const [groupMsg, setGroupMsg] = useState("");
   const [sending, setSending] = useState(false);
   const [stream, setStream] = useState<Record<string, string>>({});
   const [status, setStatus] = useState("");
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -59,7 +63,7 @@ export default function MobilePage() {
     }).catch(() => setAuthed(true)); // fail open
   }, [urlToken]);
 
-  const f = async () => { try { const r = await fetch("/api/workspace"); if (r.ok) setData(await r.json()); } catch { /* */ } };
+  const f = async () => { try { const r = await fetch("/api/workspace"); if (r.ok) { const next = await r.json(); setData(next); setPreviewUrl(next?.settings?.previewUrl ? "/api/preview/proxy" : ""); } } catch { /* */ } };
   // Initial fetch + poll — external data sync, not cascading state
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
@@ -78,6 +82,31 @@ export default function MobilePage() {
     }
     return all.filter(m => m.chatChannel === "group" && m.senderType !== "system");
   }, [data, tab]);
+
+  async function startPreview() {
+    setPreviewLoading(true);
+    try {
+      const response = await fetch("/api/preview", { method: "POST" });
+      const payload = await response.json().catch(() => ({})) as { url?: string; error?: string };
+      if (!response.ok) throw new Error(payload.error ?? "Preview failed");
+      setPreviewUrl(payload.url ? "/api/preview/proxy" : "");
+      setStatus("Preview запущен");
+    } catch (error) {
+      setStatus(error instanceof Error ? `Ошибка: ${error.message}` : "Ошибка preview");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function sendPreviewFeedback(value: string) {
+    try {
+      const response = await fetch("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ feedback: value }) });
+      if (!response.ok) throw new Error("Feedback failed");
+      setStatus("Комментарий отправлен Дизайнеру");
+    } catch (error) {
+      setStatus(error instanceof Error ? `Ошибка: ${error.message}` : "Ошибка отправки комментария");
+    }
+  }
 
   async function send() {
     const msg = tab === "lead" ? leadMsg : groupMsg;
@@ -131,6 +160,7 @@ export default function MobilePage() {
               color: tab === t ? vars("text-accent") : vars("text-secondary"), cursor: "pointer" }}>
             {t === "lead" ? "🤖 Главный" : t === "group" ? "💬 Общий" : "⚙️"}
           </button>))}
+        <button type="button" onClick={() => setPreviewOpen(true)} style={{ marginLeft: "auto", padding: "10px 10px", fontSize: 13, fontWeight: 700, border: "none", background: "transparent", color: vars("text-secondary"), cursor: "pointer" }} title="Предпросмотр">👁️</button>
       </header>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "10px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
@@ -152,6 +182,7 @@ export default function MobilePage() {
       </div>
 
       {(data?.settings?.autoApprove && !sending) && <div style={{ padding: "4px 12px", fontSize: 11, background: vars("bg-panel"), borderTop: `1px solid ${vars("border-default")}`, color: vars("text-secondary") }}>🔄 Авто-цикл активен</div>}
+      <PreviewModal open={previewOpen} url={previewUrl} loading={previewLoading} onClose={() => setPreviewOpen(false)} onReload={() => void startPreview()} onStart={() => void startPreview()} onFeedback={(value) => void sendPreviewFeedback(value)} />
       {status && <div style={{ padding: "4px 12px", fontSize: 12, color: status.startsWith("Ошибка") ? "#f48771" : vars("text-accent") }}>{status}</div>}
 
       <form onSubmit={e => { e.preventDefault(); void send(); }}

@@ -1,6 +1,7 @@
 type CommandPolicy = {
   executable: string;
   subcommands: Set<string>;
+  allowRelativeScript?: boolean;
 };
 
 export const COMMAND_POLICIES: Record<string, CommandPolicy> = {
@@ -14,6 +15,7 @@ export const COMMAND_POLICIES: Record<string, CommandPolicy> = {
   pytest: { executable: process.platform === "win32" ? "pytest.exe" : "pytest", subcommands: new Set(["--version", "-q", "-x"]) },
   go: { executable: process.platform === "win32" ? "go.exe" : "go", subcommands: new Set(["test", "build", "vet", "version"]) },
   cargo: { executable: process.platform === "win32" ? "cargo.exe" : "cargo", subcommands: new Set(["test", "check", "build", "fmt", "--version"]) },
+  node: { executable: process.platform === "win32" ? "node.exe" : "node", subcommands: new Set(["--version", "--help"]), allowRelativeScript: true },
 };
 
 export function tokenize(command: string) {
@@ -55,7 +57,14 @@ export function parseCommand(command: string) {
   const args = tokens.slice(1);
   for (const argument of args) assertSafeArgument(argument);
   const subcommand = args[0] ?? "";
-  if (!policy.subcommands.has(subcommand)) throw new Error(`Command is not allowed: ${name} ${subcommand}`);
+  const allowedRelativeScript = Boolean(
+    policy.allowRelativeScript
+      && !subcommand.startsWith(".")
+      && !subcommand.startsWith("/")
+      && !subcommand.startsWith("\\\\")
+      && /\.(?:cjs|mjs|js)$/i.test(subcommand),
+  );
+  if (!policy.subcommands.has(subcommand) && !allowedRelativeScript) throw new Error(`Command is not allowed: ${name} ${subcommand}`);
 
   return { name, executable: policy.executable, args };
 }

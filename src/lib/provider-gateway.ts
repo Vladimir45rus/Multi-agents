@@ -25,6 +25,8 @@ export type ProviderGatewayOptions = {
   signal?: AbortSignal;
   jsonMode?: boolean;
   tools?: Array<Record<string, unknown>>;
+  fallbackModels?: string[];
+  onFallback?: (model: string, error: ProviderGatewayError) => void | Promise<void>;
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -269,6 +271,7 @@ async function fetchWithRetry(
       if (!error.retryable || attempt >= maxRetries) throw error;
       await new Promise((resolve) => setTimeout(resolve, retryAfterMs(response, attempt)));
     } catch (error) {
+      if (options.signal?.aborted) throw abortError(request.provider);
       if (error instanceof ProviderGatewayError) {
         if (!error.retryable || attempt >= maxRetries) throw error;
       } else if (attempt >= maxRetries) {
@@ -402,18 +405,37 @@ export async function* streamProviderResponse(
   messages: GatewayMessage[],
   options: ProviderGatewayOptions = {},
 ): AsyncGenerator<string> {
-  const normalized = validateRequest(request);
-  const { response, cleanup } = await fetchWithRetry(normalized, messages, options, options.tools);
-
-  try {
-    for await (const raw of readSse(response)) {
-      const parsed = extractText(normalized.provider, raw);
-      if (parsed.text) yield parsed.text;
-      if (parsed.done) return;
+  const models = [request.model, ...(options.fallbackModels ?? [])].map(compact).filter((model, index, all) => model && all.indexOf(model) === index);
+  let lastError: ProviderGatewayError | null = null;
+  for (const model of models) {
+    const candidate = { ...request, model };
+    try {
+      const normalized = validateRequest(candidate);
+      const { response, cleanup } = await fetchWithRetry(normalized, messages, options, options.tools);
+      try {
+        for await (const raw of readSse(response)) {
+          const parsed = extractText(normalized.provider, raw);
+          if (parsed.text) yield parsed.text;
+          if (parsed.done) return;
+        }
+        return;
+      } finally {
+        cleanup();
+      }
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+      if (error instanceof ProviderGatewayError) {
+        lastError = error;
+        const canFallback = error.status === 403 || error.status === 429 || error.status === 500 || error.status === 502 || error.status === 503 || error.status === 504 || error.retryable;
+        if (canFallback && model !== models[models.length - 1]) {
+          await options.onFallback?.(models[models.indexOf(model) + 1], error);
+          continue;
+        }
+      }
+      throw error;
     }
-  } finally {
-    cleanup();
   }
+  throw lastError ?? new ProviderGatewayError("All fallback models failed", { provider: request.provider, retryable: false });
 }
 
 export async function completeProviderResponse(

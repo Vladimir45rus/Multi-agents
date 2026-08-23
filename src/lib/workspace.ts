@@ -79,6 +79,14 @@ type WorkspaceSnapshot = {
     mobileAuthToken: string;
     localtunnelEnabled: boolean;
     localtunnelUrl: string;
+    telegramTokenConfigured: boolean;
+    telegramChatId: string;
+    fallbackModels: string[];
+    previewCommand: string;
+    previewPort: number;
+    previewUrl: string;
+    projectTemplate: string;
+    projectTemplatePrompt: string;
     vaultAvailable: boolean;
   };
   agents: Array<{
@@ -303,7 +311,7 @@ async function enrichAttachments(attachments: ChatAttachment[]) {
   return resolved;
 }
 
-async function pushMessage(payload: {
+export async function pushMessage(payload: {
   chatChannel: ChatChannel;
   senderType: string;
   agentName: string | null;
@@ -567,6 +575,14 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       mobileAuthToken: settingsRow.mobileAuthToken ?? "",
       localtunnelEnabled: Boolean(settingsRow.localtunnelEnabled),
       localtunnelUrl: settingsRow.localtunnelUrl ?? "",
+      telegramTokenConfigured: Boolean(compact(settingsRow.telegramToken)),
+      telegramChatId: settingsRow.telegramChatId ?? "",
+      fallbackModels: Array.isArray(settingsRow.fallbackModels) ? settingsRow.fallbackModels : [],
+      previewCommand: settingsRow.previewCommand ?? "npm run dev",
+      previewPort: settingsRow.previewPort ?? 4173,
+      previewUrl: settingsRow.previewUrl ?? "",
+      projectTemplate: settingsRow.projectTemplate ?? "",
+      projectTemplatePrompt: settingsRow.projectTemplatePrompt ?? "",
       vaultAvailable: hasElectronVault(),
     },
     agents: agentRows,
@@ -620,12 +636,22 @@ export async function updateWorkspaceSettings(payload: {
   mobileAuthToken?: string;
   localtunnelEnabled?: boolean;
   localtunnelUrl?: string;
+  telegramToken?: string;
+  telegramChatId?: string;
+  fallbackModels?: string[];
+  previewCommand?: string;
+  previewPort?: number;
+  previewUrl?: string;
+  projectTemplate?: string;
+  projectTemplatePrompt?: string;
   removeApiKeys?: string[];
 }) {
   await ensureWorkspaceBootstrap();
   const current = await getWorkspaceSettingsRow();
   const githubToken = compact(payload.githubToken) || current.githubToken;
   const githubRepo = payload.githubRepo === undefined ? current.githubRepo : compact(payload.githubRepo);
+  const telegramToken = compact(payload.telegramToken) || current.telegramToken;
+  const fallbackModels = (payload.fallbackModels ?? current.fallbackModels ?? []).map((model) => compact(model)).filter(Boolean).slice(0, 12);
 
   await db
     .update(workspaceSettings)
@@ -639,6 +665,14 @@ export async function updateWorkspaceSettings(payload: {
       mobileAuthToken: payload.mobileAuthToken === undefined ? current.mobileAuthToken : compact(payload.mobileAuthToken),
       localtunnelEnabled: payload.localtunnelEnabled === undefined ? current.localtunnelEnabled : Boolean(payload.localtunnelEnabled),
       localtunnelUrl: payload.localtunnelUrl === undefined ? current.localtunnelUrl : compact(payload.localtunnelUrl),
+      telegramToken,
+      telegramChatId: payload.telegramChatId === undefined ? current.telegramChatId : compact(payload.telegramChatId),
+      fallbackModels,
+      previewCommand: payload.previewCommand === undefined ? current.previewCommand : compact(payload.previewCommand) || "npm run dev",
+      previewPort: payload.previewPort === undefined ? current.previewPort : Math.max(1, Math.min(65535, Math.round(payload.previewPort))),
+      previewUrl: payload.previewUrl === undefined ? current.previewUrl : compact(payload.previewUrl),
+      projectTemplate: payload.projectTemplate === undefined ? current.projectTemplate : compact(payload.projectTemplate),
+      projectTemplatePrompt: payload.projectTemplatePrompt === undefined ? current.projectTemplatePrompt : compact(payload.projectTemplatePrompt),
       updatedAt: new Date(),
     });
   await recordSystemEvent("success", "settings", "Workspace settings saved");
@@ -1151,8 +1185,10 @@ async function* streamAgentReply(
   const agentRows = await db.select({ name: agents.name, role: agents.role, color: agents.color }).from(agents).where(eq(agents.isActive, true));
   const allAgentNames = agentRows.map((a) => ({ name: a.name, role: a.role, color: a.color ?? "" }));
 
+  const [workspaceSettingsRow] = await db.select({ projectTemplatePrompt: workspaceSettings.projectTemplatePrompt }).from(workspaceSettings).limit(1);
+  const templatePrompt = compact(workspaceSettingsRow?.projectTemplatePrompt);
   const gatewayMessages: GatewayMessage[] = [
-    { role: "system", content: agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix) },
+    { role: "system", content: templatePrompt ? `${agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix)}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix) },
     ...history,
   ];
 

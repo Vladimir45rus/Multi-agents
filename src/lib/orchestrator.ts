@@ -10,8 +10,9 @@ import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { completeProviderResponse, providerRequestFromAgent, type GatewayMessage } from "@/lib/provider-gateway";
 import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction } from "@/lib/patch-parser";
-import { ensureWorkspaceBootstrap, getStoredProviderApiKey } from "@/lib/workspace";
+import { ensureWorkspaceBootstrap, getStoredProviderApiKey, getWorkspaceSettingsRow } from "@/lib/workspace";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
+import { recordSystemEvent } from "@/lib/system-events";
 import { applyWorkspacePatch, getWorkspaceRoot, type WorkspacePatchFile } from "@/lib/workspace-files";
 import { runSandboxCommand } from "@/lib/terminal-sandbox";
 import type {
@@ -481,12 +482,22 @@ async function completeAgent(
   try {
     const apiKey = await getStoredProviderApiKey(agent.provider);
     const request = providerRequestFromAgent(agent, apiKey);
+    const settings = await getWorkspaceSettingsRow();
+    const fallbackModels = Array.isArray(settings.fallbackModels) ? settings.fallbackModels : [];
     const context = await buildProjectContext(projectContext);
+    const templatePrompt = compact(settings.projectTemplatePrompt);
     const messages: GatewayMessage[] = [
-      { role: "system", content: systemPrompt },
+      { role: "system", content: templatePrompt ? `${systemPrompt}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : systemPrompt },
       { role: "user", content: `${userPrompt}\n\n${context}` },
     ];
-    return await completeProviderResponse(request, messages, { signal, jsonMode });
+    return await completeProviderResponse(request, messages, {
+      signal,
+      jsonMode,
+      fallbackModels,
+      onFallback: async (model, error) => {
+        await recordSystemEvent("warning", "fallback", `${agent.name}: ${agent.model} failed (${error.status ?? "timeout"}); switched to ${model}`);
+      },
+    });
   } catch (error) {
     throw new Error(agentFailureMessage(locale, agent, error), { cause: error });
   }
@@ -807,6 +818,10 @@ export async function* runOrchestrator(options: {
           kind: "patch",
           prompt: patchPrompt,
         };
+        void import("@/lib/telegram").then(({ ensureTelegramPolling, notifyTelegramRelease }) => {
+          ensureTelegramPolling();
+          return notifyTelegramRelease("WAITING", patchPrompt, confirmationId);
+        }).catch(() => undefined);
         patchApproved = await waitForConfirmation(confirmationId, signal);
       }
 
@@ -874,6 +889,10 @@ export async function* runOrchestrator(options: {
           kind: "command",
           prompt: t(locale, "Выполнить команды проверок (typecheck/lint/tests) в терминале?", "Run the verification commands (typecheck/lint/tests) in the terminal?"),
         };
+        void import("@/lib/telegram").then(({ ensureTelegramPolling, notifyTelegramRelease }) => {
+          ensureTelegramPolling();
+          return notifyTelegramRelease("WAITING", t(locale, "Выполнить команды проверок (typecheck/lint/tests) в терминале?", "Run the verification commands (typecheck/lint/tests) in the terminal?"), confirmationId);
+        }).catch(() => undefined);
         const approved = await waitForConfirmation(confirmationId, signal);
         if (approved) {
           checkResults = await runVerificationChecks(locale, signal);
@@ -955,6 +974,10 @@ export async function* runOrchestrator(options: {
         iterations: iteration,
       });
       yield { type: "report", report };
+      void import("@/lib/telegram").then(({ ensureTelegramPolling, notifyTelegramRelease }) => {
+        ensureTelegramPolling();
+        return notifyTelegramRelease("RELEASE_READY", report.summary);
+      }).catch(() => undefined);
       yield { type: "task_completed", taskId, iterations: iteration, decision: lastDecision };
       return;
     }

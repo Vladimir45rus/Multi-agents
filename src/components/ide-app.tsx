@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { appendStreamDelta, finishStream, type ChatStreamState } from "@/lib/chat-state";
+import { PreviewModal } from "@/components/preview-modal";
 
 const CodeEditor = lazy(() => import("@/components/code-editor"));
 
@@ -90,6 +91,14 @@ type WorkspaceData = {
     mobileAuthToken: string;
     localtunnelEnabled: boolean;
     localtunnelUrl: string;
+    telegramTokenConfigured: boolean;
+    telegramChatId: string;
+    fallbackModels: string[];
+    previewCommand: string;
+    previewPort: number;
+    previewUrl: string;
+    projectTemplate: string;
+    projectTemplatePrompt: string;
     vaultAvailable: boolean;
   };
   agents: Agent[];
@@ -458,6 +467,17 @@ export function IdeApp() {
   const [githubPushToken, setGithubPushToken] = useState("");
   const [githubPushRepo, setGithubPushRepo] = useState("");
   const [githubPushLoading, setGithubPushLoading] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [previewCommandDraft, setPreviewCommandDraft] = useState("npm run dev");
+  const [previewPortDraft, setPreviewPortDraft] = useState(4173);
+  const [telegramTokenDraft, setTelegramTokenDraft] = useState("");
+  const [telegramChatIdDraft, setTelegramChatIdDraft] = useState("");
+  const [fallbackModelsDraft, setFallbackModelsDraft] = useState("");
+  const [templateOpen, setTemplateOpen] = useState(false);
+  const [templateId, setTemplateId] = useState("web");
+  const [telegramTesting, setTelegramTesting] = useState(false);
   const [agentDrafts, setAgentDrafts] = useState<Record<number, AgentDraft>>({});
   const [newAgent, setNewAgent] = useState<NewAgentDraft>(emptyNewAgent());
   const [modelOptions, setModelOptions] = useState<Record<string, string[]>>({});
@@ -517,8 +537,13 @@ export function IdeApp() {
       || githubAutoPushDraft !== saved.githubAutoPush
       || autoApproveDraft !== saved.autoApprove
       || mobileTokenDraft !== (saved.mobileAuthToken ?? "")
-      || localtunnelEnabledDraft !== Boolean(saved.localtunnelEnabled);
-  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft, mobileTokenDraft, localtunnelEnabledDraft]);
+      || localtunnelEnabledDraft !== Boolean(saved.localtunnelEnabled)
+      || previewCommandDraft !== saved.previewCommand
+      || previewPortDraft !== saved.previewPort
+      || telegramTokenDraft.trim() !== ""
+      || telegramChatIdDraft !== saved.telegramChatId
+      || fallbackModelsDraft !== saved.fallbackModels.join("\n");
+  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft, mobileTokenDraft, localtunnelEnabledDraft, previewCommandDraft, previewPortDraft, telegramTokenDraft, telegramChatIdDraft, fallbackModelsDraft]);
   const newAgentDirty = useMemo(() => Boolean(
     newAgent.name.trim()
       || newAgent.description.trim()
@@ -816,6 +841,12 @@ export function IdeApp() {
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
     setMobileTokenDraft(payload.settings.mobileAuthToken ?? "");
+    setPreviewUrl(payload.settings.previewUrl ?? "");
+    setPreviewCommandDraft(payload.settings.previewCommand ?? "npm run dev");
+    setPreviewPortDraft(payload.settings.previewPort ?? 4173);
+    setTelegramTokenDraft("");
+    setTelegramChatIdDraft(payload.settings.telegramChatId ?? "");
+    setFallbackModelsDraft((payload.settings.fallbackModels ?? []).join("\n"));
     setLocaltunnelEnabledDraft(Boolean(payload.settings.localtunnelEnabled));
     setLocaltunnelUrl(payload.settings.localtunnelUrl ?? "");
     setAgentDrafts(toDrafts(payload.agents));
@@ -1051,6 +1082,7 @@ export function IdeApp() {
     try {
       let apiKeysPayload = apiKeysDraft;
       let githubTokenPayload = githubTokenDraft;
+      let telegramTokenPayload = telegramTokenDraft;
       const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
       if (bridge?.safeStorage?.isAvailable && data?.settings?.vaultAvailable) {
         try {
@@ -1065,6 +1097,9 @@ export function IdeApp() {
             apiKeysPayload = encrypted;
             if (githubTokenDraft.trim()) {
               githubTokenPayload = await bridge.safeStorage.encryptString(githubTokenDraft);
+            }
+            if (telegramTokenDraft.trim()) {
+              telegramTokenPayload = await bridge.safeStorage.encryptString(telegramTokenDraft);
             }
           }
         } catch {
@@ -1084,6 +1119,12 @@ export function IdeApp() {
           mobileAuthToken: mobileTokenDraft,
           localtunnelEnabled: localtunnelEnabledDraft,
           localtunnelUrl,
+          telegramToken: telegramTokenPayload,
+          telegramChatId: telegramChatIdDraft,
+          fallbackModels: fallbackModelsDraft.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean),
+          previewCommand: previewCommandDraft,
+          previewPort: previewPortDraft,
+          previewUrl,
         }),
       });
       if (!res.ok) {
@@ -1441,6 +1482,81 @@ export function IdeApp() {
     chatAbortRef.current?.abort();
   }
 
+  async function startPreview() {
+    setPreviewLoading(true);
+    try {
+      const response = await fetch("/api/preview", { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as { url?: string; error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "Preview failed");
+      setPreviewUrl(payload?.url ?? "");
+      await loadWorkspace(selectedFileId, locale);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Preview failed");
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  async function reloadPreview() {
+    if (!previewUrl) return startPreview();
+    await startPreview();
+  }
+
+  async function sendPreviewFeedback(value: string) {
+    try {
+      const response = await fetch("/api/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ feedback: value }),
+      });
+      if (!response.ok) throw new Error("Preview feedback failed");
+      setStatus(locale === "ru" ? "Комментарий отправлен Дизайнеру" : "Feedback sent to the Designer");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Preview feedback failed");
+    }
+  }
+
+  async function testTelegram() {
+    setTelegramTesting(true);
+    try {
+      await saveApiKeys();
+      const response = await fetch("/api/telegram/test", { method: "POST" });
+      const payload = (await response.json().catch(() => null)) as { error?: string; username?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "Telegram connection failed");
+      await fetch("/api/telegram/poll", { method: "POST" });
+      setStatus(locale === "ru" ? `Telegram подключён${payload?.username ? `: @${payload.username}` : ""}` : `Telegram connected${payload?.username ? `: @${payload.username}` : ""}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Telegram connection failed");
+    } finally {
+      setTelegramTesting(false);
+    }
+  }
+
+  async function generateTemplate() {
+    const directory = workspaceRootDraft.trim();
+    if (!directory) {
+      setStatus(locale === "ru" ? "Сначала выберите папку проекта" : "Choose a project folder first");
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await fetch("/api/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ template: templateId, directory }),
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string; files?: string[] } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "Template generation failed");
+      setTemplateOpen(false);
+      await loadWorkspace(null, locale);
+      setStatus(locale === "ru" ? `Пресет создан: ${payload?.files?.length ?? 0} файлов` : `Preset created: ${payload?.files?.length ?? 0} files`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Template generation failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function runTerminal(event: FormEvent) {
     event.preventDefault();
     if (!terminalCommand.trim()) return;
@@ -1678,6 +1794,9 @@ export function IdeApp() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <button type="button" onClick={() => setPreviewOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs" title={locale === "ru" ? "Предпросмотр проекта" : "Project preview"}>
+            👁️ {locale === "ru" ? "Предпросмотр" : "Preview"}
+          </button>
           <button type="button" onClick={() => void pushToGithub()} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white" disabled={busy}>
             {t.pushGithub}
           </button>
@@ -2183,6 +2302,48 @@ export function IdeApp() {
             </> : null}
           </section>
 
+          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold">{locale === "ru" ? "Live Preview проекта" : "Project Live Preview"}</p>
+                <p className="text-[10px] text-[#9da3b2]">{previewUrl || `${previewCommandDraft} · :${previewPortDraft}`}</p>
+              </div>
+              <button type="button" onClick={() => setPreviewOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">👁️ {locale === "ru" ? "Открыть" : "Open"}</button>
+            </div>
+            <div className="mt-2 flex gap-2">
+              <input value={previewCommandDraft} onChange={(e) => setPreviewCommandDraft(e.target.value)} className="min-w-0 flex-1 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" placeholder="npm run dev" />
+              <input type="number" min={1} max={65535} value={previewPortDraft} onChange={(e) => setPreviewPortDraft(Number(e.target.value) || 4173)} className="w-20 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+            </div>
+          </section>
+
+          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold">{locale === "ru" ? "Пресет проекта" : "Project preset"}</p>
+                <p className="text-[10px] text-[#9da3b2]">{data?.settings.projectTemplate || (locale === "ru" ? "Не выбран" : "Not selected")}</p>
+              </div>
+              <button type="button" onClick={() => setTemplateOpen(true)} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white">⚡ {locale === "ru" ? "Выбрать" : "Choose"}</button>
+            </div>
+          </section>
+
+          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
+            <p className="mb-2 text-xs font-semibold">Telegram</p>
+            <label className="mb-2 block text-[11px] text-[#9da3b2]">Telegram Bot Token
+              <input value={telegramTokenDraft} onChange={(e) => setTelegramTokenDraft(e.target.value)} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "••••••••" : "123456:ABC..."} className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+            </label>
+            <label className="mb-2 block text-[11px] text-[#9da3b2]">Telegram Chat ID
+              <input value={telegramChatIdDraft} onChange={(e) => setTelegramChatIdDraft(e.target.value)} placeholder="-100..." className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+            </label>
+            <button type="button" onClick={() => void testTelegram()} disabled={telegramTesting || !telegramChatIdDraft.trim()} className="rounded bg-[#229ed9] px-3 py-1 text-xs text-white disabled:opacity-50">{telegramTesting ? "..." : (locale === "ru" ? "Проверить связь" : "Test connection")}</button>
+            <p className="mt-2 text-[10px] text-[#9da3b2]">{locale === "ru" ? "Режим: long polling. Сохраните настройки перед проверкой." : "Mode: long polling. Save settings before testing."}</p>
+          </section>
+
+          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
+            <p className="mb-2 text-xs font-semibold">{locale === "ru" ? "Fallback Chain моделей" : "Fallback model chain"}</p>
+            <textarea value={fallbackModelsDraft} onChange={(e) => setFallbackModelsDraft(e.target.value)} placeholder={locale === "ru" ? "По одной модели на строку\nнапример: gpt-4o-mini\nclaude-3-5-haiku" : "One model per line\ne.g. gpt-4o-mini\nclaude-3-5-haiku"} className="min-h-16 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+            <p className="mt-1 text-[10px] text-[#9da3b2]">{locale === "ru" ? "Используется при 403, 429, 5xx и timeout." : "Used for 403, 429, 5xx and timeouts."}</p>
+          </section>
+
           <section className="mb-5">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs uppercase text-[#9da3b2]">{locale === "ru" ? "ЭКСПОРТ / ИМПОРТ" : "EXPORT / IMPORT"}</span>
@@ -2430,6 +2591,33 @@ export function IdeApp() {
         </div>
       ) : null}
 
+      {templateOpen ? (
+        <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-3">
+          <section className="w-[92vw] max-w-[620px] rounded border border-[#3a3d41] bg-[#252526] p-4 shadow-xl">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-sm font-semibold">{locale === "ru" ? "Выбор пресета проекта" : "Choose project preset"}</h2>
+              <button type="button" onClick={() => setTemplateOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {[
+                ["web", "🌐 Web-сайт / Веб-приложение", "React / Vite / HTML-CSS"],
+                ["mobile", "📱 Мобильное приложение", "Capacitor / Android APK / iOS"],
+                ["desktop", "💻 Десктоп-приложение", ".exe / Electron"],
+                ["all", "⚡ Все в одном", "Web + APK + EXE"],
+                ["telegram", "🤖 Telegram-бот / Backend API", "Node.js / Express"],
+              ].map(([id, label, description]) => (
+                <button key={id} type="button" onClick={() => setTemplateId(id)} className={`rounded border p-3 text-left ${templateId === id ? "border-[#007acc] bg-[#264f78]" : "border-[#3a3d41] bg-[#1e1e1e]"}`}>
+                  <p className="text-xs font-semibold">{label}</p>
+                  <p className="mt-1 text-[10px] text-[#9da3b2]">{description}</p>
+                </button>
+              ))}
+            </div>
+            <p className="mt-3 text-[10px] text-[#9da3b2]">{workspaceRootDraft || (locale === "ru" ? "Папка проекта не подключена" : "Project folder is not connected")}</p>
+            <button type="button" onClick={() => void generateTemplate()} disabled={busy || !workspaceRootDraft.trim()} className="mt-3 w-full rounded bg-[#0e639c] px-3 py-2 text-xs text-white disabled:opacity-50">{locale === "ru" ? "Создать структуру проекта" : "Generate project structure"}</button>
+          </section>
+        </div>
+      ) : null}
+
       {supportOpen ? (
         <div className="absolute inset-0 z-40 flex items-center justify-center">
           <button type="button" onClick={() => setSupportOpen(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" aria-label={t.close} />
@@ -2471,6 +2659,8 @@ export function IdeApp() {
           </article>
         </div>
       ) : null}
+
+      <PreviewModal open={previewOpen} url={previewUrl} loading={previewLoading} onClose={() => setPreviewOpen(false)} onReload={() => void reloadPreview()} onStart={() => void startPreview()} onFeedback={(value) => void sendPreviewFeedback(value)} />
 
       <OrchestratorPanel open={orchestratorOpen} onClose={() => setOrchestratorOpen(false)} locale={locale} activeFilePath={selectedFile?.path} activeFileContent={editorText} />
 

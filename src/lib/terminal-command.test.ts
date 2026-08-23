@@ -86,6 +86,12 @@ describe("parseCommand", () => {
     expect(parsed.args).toEqual(["status"]);
   });
 
+  it("allows a relative node script for preview", () => {
+    const parsed = parseCommand("node src/index.js");
+    expect(parsed.name).toBe("node");
+    expect(parsed.args).toEqual(["src/index.js"]);
+  });
+
   it("rejects a command outside the allow-list", () => {
     expect(() => parseCommand("rm -rf /")).toThrow("Command is not allowed: rm");
   });
