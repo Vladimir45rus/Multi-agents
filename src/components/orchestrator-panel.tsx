@@ -178,6 +178,43 @@ export function OrchestratorPanel({ open, onClose, locale, activeFilePath, activ
   } | null>(null);
   const [report, setReport] = useState<ReleaseReport | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const [recoveredTask, setRecoveredTask] = useState<{
+    taskId: string;
+    task: string;
+    iteration: number;
+    maxIterations: number;
+    step: string;
+    lastSavedAt: string;
+    events: Array<{ id: number; type: string; agent: string; iteration: number; proposal: string; status: string; createdAt: string }>;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    void fetch("/api/orchestrate/state", { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          activeTask?: { taskId: string; task: string; iteration: number; maxIterations: number; step: string; lastSavedAt: string } | null;
+          recovery?: { events?: Array<{ id: number; type: string; agent: string; iteration: number; proposal: string; status: string; createdAt: string }> } | null;
+        };
+        if (data.activeTask) {
+          setRecoveredTask({
+            ...data.activeTask,
+            events: data.recovery?.events ?? [],
+          });
+        }
+      })
+      .catch(() => undefined);
+  }, [open]);
+
+  async function dismissRecoveredTask() {
+    setRecoveredTask(null);
+    try {
+      await fetch("/api/orchestrate/state", { method: "DELETE" });
+    } catch {
+      // Best-effort.
+    }
+  }
 
   const loadHistory = useCallback(async () => {
     try {
@@ -473,6 +510,47 @@ export function OrchestratorPanel({ open, onClose, locale, activeFilePath, activ
         </section>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-4">
+          {recoveredTask ? (
+            <div className="mb-4 rounded border border-amber-500/40 bg-amber-500/10 p-3">
+              <div className="mb-2 flex flex-wrap items-center gap-2">
+                <span className="text-sm">⚠️</span>
+                <span className="text-xs font-semibold text-amber-300">
+                  {locale === "ru" ? `Незавершённая задача: итерация ${recoveredTask.iteration}/${recoveredTask.maxIterations}, шаг: ${recoveredTask.step}` : `Unfinished task: iteration ${recoveredTask.iteration}/${recoveredTask.maxIterations}, step: ${recoveredTask.step}`}
+                </span>
+                <span className="text-[10px] text-[#9da3b2]">
+                  {new Date(recoveredTask.lastSavedAt).toLocaleString(locale)}
+                </span>
+              </div>
+              <p className="mb-2 whitespace-pre-wrap text-xs text-[#c6ced8]">{recoveredTask.task}</p>
+              {recoveredTask.events.length > 0 ? (
+                <details className="mb-2">
+                  <summary className="cursor-pointer text-[11px] text-[#9da3b2]">
+                    {locale === "ru" ? `Последние ${recoveredTask.events.length} событий` : `Last ${recoveredTask.events.length} events`}
+                  </summary>
+                  <div className="mt-1 max-h-40 space-y-1 overflow-auto">
+                    {recoveredTask.events.map((event) => (
+                      <div key={event.id} className="flex items-center gap-2 text-[11px]">
+                        <span className="text-[#4fc1ff]">{event.agent}</span>
+                        <span className="text-[#9da3b2]">{event.type}</span>
+                        <span className="text-[#9da3b2]">{event.status}</span>
+                        <span className="text-[#9da3b2]">{event.proposal?.slice(0, 60)}{event.proposal && event.proposal.length > 60 ? "…" : ""}</span>
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              ) : null}
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={dismissRecoveredTask}
+                  className="rounded bg-[#3a3d41] px-3 py-1 text-xs text-white hover:bg-[#4b4e54]"
+                >
+                  {locale === "ru" ? "Отклонить и очистить" : "Dismiss"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
           {report ? <ReportView report={report} locale={locale} /> : null}
 
           {decision && !report ? (

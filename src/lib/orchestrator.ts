@@ -13,6 +13,7 @@ import { parsePatchInstruction } from "@/lib/patch-parser";
 import { ensureWorkspaceBootstrap, getStoredProviderApiKey, getWorkspaceSettingsRow } from "@/lib/workspace";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
+import { saveActiveTaskState, clearActiveTaskState } from "@/lib/orchestrator-state";
 import { applyWorkspacePatch, getWorkspaceRoot, type WorkspacePatchFile } from "@/lib/workspace-files";
 import { runSandboxCommand } from "@/lib/terminal-sandbox";
 import type {
@@ -626,6 +627,10 @@ export async function* runOrchestrator(options: {
     const [mainAgent] = await db.select().from(agents).where(eq(agents.role, "main")).limit(1);
     if (!mainAgent) throw new Error(t(locale, "Главный агент не назначен.", "No Lead agent is assigned."));
 
+    // Persist active task state for crash recovery.
+    const taskStartedAt = new Date().toISOString();
+    void saveActiveTaskState({ taskId, task, mode, iteration: 0, maxIterations, step: "planning", startedAt: taskStartedAt, lastSavedAt: taskStartedAt });
+
     const advisorRows = await db
       .select()
       .from(agents)
@@ -634,6 +639,7 @@ export async function* runOrchestrator(options: {
 
     yield { type: "task_started", taskId, task, maxIterations, mode };
     yield { type: "step", step: "planning" };
+    void saveActiveTaskState({ taskId, task, mode, iteration: 0, maxIterations, step: "planning", startedAt: taskStartedAt, lastSavedAt: new Date().toISOString() });
     yield {
       type: "event",
       event: await recordEvent({
@@ -670,11 +676,13 @@ export async function* runOrchestrator(options: {
     for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
       assertNotAborted(signal, locale);
       yield { type: "iteration", iteration, total: maxIterations };
+      void saveActiveTaskState({ taskId, task, mode, iteration, maxIterations, step: iteration === 1 ? "analysis" : "fix", startedAt: taskStartedAt, lastSavedAt: new Date().toISOString() });
 
       if (iteration === 1) {
-        yield { type: "step", step: "analysis" };
+      yield { type: "step", step: "analysis" };
+      void saveActiveTaskState({ taskId, task, mode, iteration, maxIterations, step: "analysis", startedAt: taskStartedAt, lastSavedAt: new Date().toISOString() });
 
-        const activeAdvisors = resolveAdvisors(advisorRows);
+      const activeAdvisors = resolveAdvisors(advisorRows);
 
         for (const entry of activeAdvisors) {
           yield { type: "agent_status", agent: entry.agent.name, role: entry.role, status: "started" };
@@ -791,6 +799,7 @@ export async function* runOrchestrator(options: {
       }
 
       yield { type: "step", step: "patch" };
+      void saveActiveTaskState({ taskId, task, mode, iteration, maxIterations, step: "patch", startedAt: taskStartedAt, lastSavedAt: new Date().toISOString() });
       yield {
         type: "event",
         event: await recordEvent({
@@ -863,6 +872,7 @@ export async function* runOrchestrator(options: {
             status: "rejected",
           }),
         };
+        void clearActiveTaskState();
         const report = await finalizeReport({
           taskId,
           task,
@@ -878,6 +888,7 @@ export async function* runOrchestrator(options: {
       }
 
       yield { type: "step", step: "checks" };
+      void saveActiveTaskState({ taskId, task, mode, iteration, maxIterations, step: "checks", startedAt: taskStartedAt, lastSavedAt: new Date().toISOString() });
 
       const tester = findAdvisor(advisorRows, "tester");
       yield {
@@ -959,6 +970,7 @@ export async function* runOrchestrator(options: {
       }
 
       yield { type: "step", step: "done" };
+      void clearActiveTaskState();
 
       const reviewer = findAdvisor(advisorRows, "reviewer") ?? findAdvisor(advisorRows, "advisor");
       yield {
@@ -998,6 +1010,7 @@ export async function* runOrchestrator(options: {
     }
 
     yield { type: "step", step: "done" };
+    void clearActiveTaskState();
     const report = await finalizeReport({
       taskId,
       task,
@@ -1011,8 +1024,10 @@ export async function* runOrchestrator(options: {
     yield { type: "task_completed", taskId, iterations: maxIterations, decision: lastDecision };
   } catch (error) {
     if (signal?.aborted || error instanceof OrchestratorCancelledError) {
+      void clearActiveTaskState();
       yield { type: "cancelled", taskId };
     } else {
+      void clearActiveTaskState();
       const message = error instanceof Error ? error.message : t(locale, "Оркестратор завершился с ошибкой.", "Orchestrator failed.");
       yield { type: "error", message };
 
