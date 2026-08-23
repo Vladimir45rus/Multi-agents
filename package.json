@@ -1,9 +1,9 @@
 {
   "name": "multi-agent-code-studio",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "private": true,
   "main": "electron/main.cjs",
-  "author": "Multi-Agent Code Studio",
+  "author": "Vladimir <nasha_masha45@mail.ru>",
   "description": "Multi-agent AI code editor with orchestrator, auto-fix loop and desktop packaging.",
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
@@ -68,6 +68,9 @@
         "to": "standalone/node_modules"
       }
     ],
+    "mac": {
+      "x64ArchFiles": "*/*.node"
+    },
     "win": {
       "target": [
         {
