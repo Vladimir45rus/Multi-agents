@@ -18,6 +18,13 @@ function isLoopbackIp(ip: string) {
 
 export function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  if (pathname === "/mobile" && !request.nextUrl.searchParams.get("token")?.trim()) {
+    return new NextResponse(JSON.stringify({ error: "Mobile access token is required" }), {
+      status: 401,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
   if (!pathname.startsWith("/api/")) return NextResponse.next();
 
   const host = request.headers.get("host");

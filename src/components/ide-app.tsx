@@ -878,7 +878,7 @@ export function IdeApp() {
     }
   }
 
-  async function loadWorkspace(nextFileId?: number | null, activeLocale?: UiLocale) {
+  async function loadWorkspace(nextFileId?: number | null, activeLocale?: UiLocale, options?: { clearSelection?: boolean }) {
     const l = activeLocale ?? locale;
     const [workspaceResponse, treeResponse] = await Promise.all([
       fetch("/api/workspace", { cache: "no-store" }),
@@ -909,10 +909,10 @@ export function IdeApp() {
     setLocaltunnelUrl(payload.settings.localtunnelUrl ?? "");
     setAgentDrafts(toDrafts(payload.agents));
 
-    const requestedTarget = nextFileId ?? selectedFileId;
+    const requestedTarget = options?.clearSelection ? null : nextFileId ?? selectedFileId;
     const target = requestedTarget != null && payload.files.some((file) => file.id === requestedTarget)
       ? requestedTarget
-      : payload.files[0]?.id ?? null;
+      : options?.clearSelection ? null : payload.files[0]?.id ?? null;
     setSelectedFileId(target);
     const validFileIds = new Set(payload.files.map((file) => file.id));
     setOpenTabs((previous) => previous.filter((tab) => validFileIds.has(tab.id)));
@@ -930,7 +930,7 @@ export function IdeApp() {
     const l: UiLocale = saved === "en" ? "en" : "ru";
     const savedFile = Number(localStorage.getItem("ui-selected-file"));
     const timer = window.setTimeout(() => {
-      void loadWorkspace(Number.isFinite(savedFile) ? savedFile : null, l)
+      void loadWorkspace(Number.isFinite(savedFile) && savedFile > 0 ? savedFile : undefined, l)
         .then(async () => {
           const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
           const recovered = await bridge?.wasRecoveredFromCrash?.().catch(() => false);
@@ -1210,7 +1210,7 @@ export function IdeApp() {
         setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Rename failed");
         return;
       }
-      await loadWorkspace(null, locale);
+      await loadWorkspace(null, locale, { clearSelection: true });
       setStatus(locale === "ru" ? `Переименовано: ${nextPath.trim()}` : `Renamed: ${nextPath.trim()}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Rename failed");
@@ -1236,7 +1236,7 @@ export function IdeApp() {
         setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Delete failed");
         return;
       }
-      await loadWorkspace(null, locale);
+      await loadWorkspace(null, locale, { clearSelection: true });
       setStatus(locale === "ru" ? `Удалено: ${filePath}` : `Deleted: ${filePath}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Delete failed");
