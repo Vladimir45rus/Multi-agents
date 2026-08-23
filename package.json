@@ -1,6 +1,7 @@
 {
   "name": "multi-agent-code-studio",
-  "version": "1.5.17",
+  "version": "1.5.18",
+  "license": "MIT",
   "private": true,
   "main": "electron/main.cjs",
   "author": "Vladimir <nasha_masha45@mail.ru>",
@@ -52,7 +53,6 @@
   "build": {
     "appId": "com.multiagent.codestudio",
     "productName": "Multi-Agent Code Studio",
-    "license": "MIT",
     "asar": true,
     "directories": {
       "output": "release"
