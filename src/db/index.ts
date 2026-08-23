@@ -5,11 +5,7 @@ import { migrate } from "drizzle-orm/sqlite-proxy/migrator";
 import { sql } from "drizzle-orm";
 import * as schema from "@/db/schema";
 
-const databaseUrl = process.env.DATABASE_URL;
-
-if (!databaseUrl) {
-  throw new Error("DATABASE_URL is required (use file:./dev.db for SQLite)");
-}
+const databaseUrl = process.env.DATABASE_URL || "file:./dev.db";
 
 if (!databaseUrl.startsWith("file:")) {
   throw new Error("DATABASE_URL must use the SQLite file: protocol, for example file:./dev.db");
