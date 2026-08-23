@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
     ipcRenderer.on("update-downloaded", (_event, data) => callback(data));
   },
   installUpdate: () => ipcRenderer.invoke("update:install"),
+  notify: ({ title, body }) => ipcRenderer.invoke("app:notify", { title, body }),
   safeStorage: {
     isAvailable: () => ipcRenderer.invoke("secrets:isAvailable"),
     encryptString: (plaintext) => ipcRenderer.invoke("secrets:encrypt", plaintext),

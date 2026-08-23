@@ -144,6 +144,7 @@ type DesktopBridge = {
   onUpdateAvailable?: (callback: (data: { version: string }) => void) => void;
   onUpdateDownloaded?: (callback: (data: { version: string }) => void) => void;
   installUpdate?: () => Promise<void>;
+  notify?: (opts: { title: string; body: string }) => Promise<void>;
   safeStorage?: {
     isAvailable: () => Promise<boolean>;
     encryptString: (plaintext: string) => Promise<string>;

@@ -10,6 +10,7 @@ import type {
   ReleaseReport,
 } from "@/lib/orchestrator-types";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
+import { MarkdownContent } from "@/components/markdown-content";
 
 type UiLocale = "ru" | "en";
 
@@ -280,6 +281,15 @@ export function OrchestratorPanel({ open, onClose, locale, activeFilePath, activ
     if (event.type === "task_completed") {
       setDecision(event.decision);
       setStatusText(`${t.completed} (${event.iterations} ${t.iterationShort})`);
+      try {
+        const bridge = (window as unknown as { desktopBridge?: { notify?: (opts: { title: string; body: string }) => Promise<void> } }).desktopBridge;
+        void bridge?.notify?.({
+          title: locale === "ru" ? "✅ Задача выполнена" : "✅ Task completed",
+          body: (event.decision || task).slice(0, 120),
+        });
+      } catch {
+        // Best-effort notification.
+      }
       return;
     }
     if (event.type === "cancelled") {
@@ -288,6 +298,15 @@ export function OrchestratorPanel({ open, onClose, locale, activeFilePath, activ
     }
     if (event.type === "error") {
       setError(event.message);
+      try {
+        const bridge = (window as unknown as { desktopBridge?: { notify?: (opts: { title: string; body: string }) => Promise<void> } }).desktopBridge;
+        void bridge?.notify?.({
+          title: locale === "ru" ? "❌ Ошибка оркестратора" : "❌ Orchestrator error",
+          body: event.message.slice(0, 120),
+        });
+      } catch {
+        // Best-effort notification.
+      }
     }
   }
 
@@ -497,7 +516,7 @@ export function OrchestratorPanel({ open, onClose, locale, activeFilePath, activ
             <div className="mt-3 flex flex-wrap items-center gap-3 rounded border border-amber-500/40 bg-amber-500/10 p-3">
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-semibold text-amber-300">{t.confirmTitle}</p>
-                <p className="whitespace-pre-wrap text-xs text-[#c6ced8]">{pendingConfirmation.prompt}</p>
+                <MarkdownContent content={pendingConfirmation.prompt} className="text-[#c6ced8]" />
               </div>
               <button type="button" onClick={() => void confirm(true)} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white">
                 {t.approve}
@@ -556,7 +575,7 @@ export function OrchestratorPanel({ open, onClose, locale, activeFilePath, activ
           {decision && !report ? (
             <section className="mb-4 rounded border border-[#007acc] bg-[#252526] p-3">
               <h3 className="mb-2 text-xs font-bold uppercase text-[#4fc1ff]">{t.decision}</h3>
-              <p className="whitespace-pre-wrap text-xs text-[#d4d4d4]">{decision}</p>
+              <MarkdownContent content={decision} />
             </section>
           ) : null}
 
@@ -597,9 +616,8 @@ function ReportView({ report, locale }: { report: ReleaseReport; locale: UiLocal
         </span>
       </div>
 
-      <p className="mb-2 whitespace-pre-wrap text-xs text-[#d4d4d4]">
-        {t.summary}: {report.summary}
-      </p>
+      <p className="mb-2 text-[11px] font-semibold text-[#9da3b2]">{t.summary}</p>
+      <MarkdownContent content={report.summary} className="text-[#d4d4d4]" />
 
       <div className="mb-2">
         <p className="mb-1 text-[11px] font-semibold text-[#9da3b2]">{t.changedFiles}</p>
@@ -681,14 +699,15 @@ function EventList({ events, locale }: { events: AgentEvent[]; locale: UiLocale 
             </p>
           ) : null}
           {event.proposal ? (
-            <p className="whitespace-pre-wrap text-xs text-[#d4d4d4]">
-              {t.proposal}: {event.proposal}
-            </p>
+            <div>
+              <span className="text-[11px] text-[#9da3b2]">{t.proposal}: </span>
+              <MarkdownContent content={event.proposal} className="text-[#d4d4d4]" />
+            </div>
           ) : null}
           {event.arguments && event.arguments !== event.proposal ? (
             <details className="mt-1">
               <summary className="cursor-pointer text-[11px] text-[#9da3b2]">{t.arguments}</summary>
-              <p className="mt-1 whitespace-pre-wrap text-xs text-[#c6ced8]">{event.arguments}</p>
+              <MarkdownContent content={event.arguments} className="mt-1 text-[#c6ced8]" />
             </details>
           ) : null}
         </article>

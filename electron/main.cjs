@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, safeStorage, shell } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, session, safeStorage, shell, Notification } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { fork } = require("node:child_process");
 const path = require("node:path");
@@ -500,6 +500,22 @@ ipcMain.handle("secrets:decrypt", (_event, encrypted) => {
 });
 
 ipcMain.handle("app:recovered-from-crash", () => recoveredFromCrash);
+
+ipcMain.handle("app:notify", (_event, { title, body }) => {
+  if (!Notification.isSupported()) return;
+  const notification = new Notification({
+    title: String(title || "Multi-Agent Code Studio"),
+    body: String(body || ""),
+    silent: false,
+  });
+  notification.on("click", () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+  notification.show();
+});
 
 // --- autoUpdater ---
 

@@ -79,6 +79,33 @@ function stripContent(text: string, max = 140) {
   return text.length > max ? text.slice(0, max) + "…" : text;
 }
 
+function MarkdownInline({ content, maxLen }: { content: string; maxLen?: number }) {
+  const text = maxLen ? stripContent(content, maxLen) : content;
+  // Lightweight: split code blocks, bold, inline code
+  const parts = text.split(/(```[\s\S]*?```|`[^`]+`|\*\*[^*]+\*\*)/g);
+  return (
+    <>
+      {parts.map((part, i) => {
+        if (part.startsWith("```") && part.endsWith("```") && part.length > 6) {
+          const code = part.slice(3, -3).replace(/^[\w]*\n/, "");
+          return (
+            <pre key={i} style={{ background: "#161b22", border: "1px solid #30363d", borderRadius: 4, padding: "2px 6px", fontSize: 9, overflowX: "auto", marginTop: 2, marginBottom: 2 }}>
+              <code>{code}</code>
+            </pre>
+          );
+        }
+        if (part.startsWith("`") && part.endsWith("`")) {
+          return <code key={i} style={{ background: "#30363d", borderRadius: 2, padding: "0 3px", fontSize: 9 }}>{part.slice(1, -1)}</code>;
+        }
+        if (part.startsWith("**") && part.endsWith("**")) {
+          return <strong key={i} style={{ color: "#e6edf3", fontWeight: 600 }}>{part.slice(2, -2)}</strong>;
+        }
+        return <span key={i}>{part}</span>;
+      })}
+    </>
+  );
+}
+
 export default function OverlayPage() {
   const [workspace, setWorkspace] = useState<WorkspaceData | null>(null);
   const [orchestrator, setOrchestrator] = useState<OrchestratorState | null>(null);
@@ -408,8 +435,8 @@ export default function OverlayPage() {
                   {timeAgo(msg.createdAt)}
                 </span>
               </div>
-              <div style={{ color: "#8b949e", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-                {stripContent(msg.content, 200)}
+              <div style={{ color: "#8b949e", wordBreak: "break-word" }}>
+                <MarkdownInline content={msg.content} maxLen={200} />
               </div>
             </div>
           );
