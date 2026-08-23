@@ -5,27 +5,29 @@
    ============================================================ */
 :root,
 html[data-theme="dark"] {
-  --bg-app: #1e1e1e;
-  --bg-panel: #252526;
-  --bg-panel-alt: #2d2d30;
-  --bg-input: #3c3c3c;
-  --bg-hover: #2a2d2e;
-  --bg-selection: #264f78;
-  --bg-status: #007acc;
-  --bg-message-user: #0e639c;
-  --bg-message-agent: #252526;
+  --bg-app: #090d16;
+  --bg-panel: #111827;
+  --bg-panel-alt: #172033;
+  --bg-input: #0d1422;
+  --bg-hover: #1a263a;
+  --bg-selection: #17345d;
+  --bg-status: #2563eb;
+  --bg-message-user: #163b68;
+  --bg-message-agent: #111827;
+  --bg-system: #0d1422;
+  --bg-terminal: #070b14;
 
-  --border-default: #2d2d30;
-  --border-input: #3e3e42;
+  --border-default: #1f2937;
+  --border-input: #334155;
 
-  --text-primary: #d4d4d4;
-  --text-secondary: #9da3b2;
-  --text-muted: #6e7681;
-  --text-accent: #4fc1ff;
-  --text-link: #569cd6;
+  --text-primary: #f3f4f6;
+  --text-secondary: #9ca3af;
+  --text-muted: #64748b;
+  --text-accent: #60a5fa;
+  --text-link: #93c5fd;
 
-  --scrollbar-thumb: #3a3d41;
-  --scrollbar-track: #1e1e1e;
+  --scrollbar-thumb: #334155;
+  --scrollbar-track: #090d16;
 
   color-scheme: dark;
 }
@@ -43,6 +45,8 @@ html[data-theme="light"] {
   --bg-status: #007acc;
   --bg-message-user: #0078d4;
   --bg-message-agent: #f3f3f3;
+  --bg-system: #eef2f7;
+  --bg-terminal: #f8fafc;
 
   --border-default: #d9d9d9;
   --border-input: #c0c0c0;
@@ -71,6 +75,8 @@ html, body, #root {
   padding: 0;
   height: 100vh;
   width: 100vw;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -78,11 +84,17 @@ html, body, #root {
   color: var(--text-primary);
 }
 
+body > div {
+  min-height: 0;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
 /* ============================================================
    PANEL HEADERS
    ============================================================ */
 .panel-header {
-  height: 36px;
+  height: 32px;
   border-bottom: 1px solid var(--border-default);
   background: var(--bg-panel);
   padding: 0 12px;
@@ -90,7 +102,7 @@ html, body, #root {
   align-items: center;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   color: var(--text-secondary);
   gap: 6px;
   flex-shrink: 0;
@@ -118,14 +130,16 @@ html, body, #root {
   right: 0;
   bottom: 0;
   height: 24px;
-  background: var(--bg-status);
-  color: white;
+  background: #0d1422;
+  border-top: 1px solid var(--border-default);
+  color: var(--text-secondary);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 10px;
-  font-size: 11px;
+  font-size: 10px;
   z-index: 20;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
 }
 
 /* ============================================================
@@ -156,28 +170,4 @@ html * {
   transition: background-color 0.15s ease,
               border-color 0.15s ease,
               color 0.15s ease;
-}
-
-/* ============================================================
-   SKELETON LOADER (prevents white flash)
-   ============================================================ */
-.app-loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  height: 100vh;
-  background: var(--bg-app);
-  color: var(--text-secondary);
-  font-size: 14px;
-  font-family: system-ui, sans-serif;
-}
-
-.app-loading::after {
-  content: "Загрузка...";
-  animation: pulse 1.5s ease-in-out infinite;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.4; }
-  50% { opacity: 1; }
 }

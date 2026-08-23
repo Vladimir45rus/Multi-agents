@@ -25,7 +25,12 @@ export function proxy(request: NextRequest) {
   const forwardedIp = forwardedFor?.split(",")[0]?.trim() ?? "";
 
   const fromLoopback = (host && LOOPBACK_HOSTS.has(hostWithoutPort(host))) || (forwardedIp && isLoopbackIp(forwardedIp));
-  if (fromLoopback) return NextResponse.next();
+  const isRemoteMobileRoute = pathname === "/api/workspace"
+    || pathname === "/api/settings"
+    || pathname === "/api/chat/stream"
+    || pathname === "/api/preview"
+    || pathname.startsWith("/api/preview/proxy");
+  if (fromLoopback || isRemoteMobileRoute) return NextResponse.next();
 
   return new NextResponse(JSON.stringify({ error: "Forbidden: API is only accessible from localhost" }), {
     status: 403,

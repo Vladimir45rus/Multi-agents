@@ -1,9 +1,16 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceSnapshot } from "@/lib/workspace";
+import { isLoopbackRequest, mobileAccessError } from "@/lib/mobile-auth";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
-    return NextResponse.json(await getWorkspaceSnapshot(), {
+    const accessError = await mobileAccessError(request);
+    if (accessError) return accessError;
+    const workspace = await getWorkspaceSnapshot();
+    if (!isLoopbackRequest(request)) {
+      workspace.settings.mobileAuthToken = "";
+    }
+    return NextResponse.json(workspace, {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {

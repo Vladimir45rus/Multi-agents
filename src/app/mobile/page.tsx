@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
@@ -33,6 +33,11 @@ function msgName(m: ChatMsg) { return m.agentName || (m.senderType === "user" ? 
 export default function MobilePage() {
   const sp = useSearchParams();
   const urlToken = sp.get("token") ?? "";
+  const mobileFetch = useCallback((input: RequestInfo | URL, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    if (urlToken) headers.set("x-mobile-access-token", urlToken);
+    return fetch(input, { ...init, headers });
+  }, [urlToken]);
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [tab, setTab] = useState<MobileTab>("lead");
   const [data, setData] = useState<{ messages: ChatMsg[]; agents: AgentInfo[]; settings: { autoApprove: boolean; mobileAuthToken: string; previewUrl?: string } } | null>(null);
@@ -56,21 +61,23 @@ export default function MobilePage() {
 
   // Auth check: if token set but mismatch, block access
   useEffect(() => {
-    fetch("/api/workspace").then(r => r.json()).then(d => {
+    mobileFetch("/api/workspace").then(async (response) => {
+      if (!response.ok) throw new Error("Mobile authorization failed");
+      const d = await response.json();
       const saved = d?.settings?.mobileAuthToken ?? "";
       if (!saved || urlToken === saved) setAuthed(true);
       else setAuthed(false);
-    }).catch(() => setAuthed(true)); // fail open
-  }, [urlToken]);
+    }).catch(() => setAuthed(false));
+  }, [mobileFetch, urlToken]);
 
-  const f = async () => { try { const r = await fetch("/api/workspace"); if (r.ok) { const next = await r.json(); setData(next); setPreviewUrl(next?.settings?.previewUrl ? "/api/preview/proxy" : ""); } } catch { /* */ } };
+  const f = useCallback(async () => { try { const r = await mobileFetch("/api/workspace"); if (r.ok) { const next = await r.json(); setData(next); setPreviewUrl(next?.settings?.previewUrl ? `/api/preview/proxy?token=${encodeURIComponent(urlToken)}` : ""); } } catch { /* */ } }, [mobileFetch, urlToken]);
   // Initial fetch + poll — external data sync, not cascading state
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void f();
     pollRef.current = setInterval(f, 3000);
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
-  }, []);
+  }, [f]);
   useEffect(() => { endRef.current?.scrollIntoView?.({ behavior: "smooth" }); }, [data?.messages?.length, stream]);
 
   const msgs = useMemo(() => {
@@ -86,10 +93,10 @@ export default function MobilePage() {
   async function startPreview() {
     setPreviewLoading(true);
     try {
-      const response = await fetch("/api/preview", { method: "POST" });
+      const response = await mobileFetch("/api/preview", { method: "POST" });
       const payload = await response.json().catch(() => ({})) as { url?: string; error?: string };
       if (!response.ok) throw new Error(payload.error ?? "Preview failed");
-      setPreviewUrl(payload.url ? "/api/preview/proxy" : "");
+      setPreviewUrl(payload.url ? `/api/preview/proxy?token=${encodeURIComponent(urlToken)}` : "");
       setStatus("Preview запущен");
     } catch (error) {
       setStatus(error instanceof Error ? `Ошибка: ${error.message}` : "Ошибка preview");
@@ -100,7 +107,7 @@ export default function MobilePage() {
 
   async function sendPreviewFeedback(value: string) {
     try {
-      const response = await fetch("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ feedback: value }) });
+      const response = await mobileFetch("/api/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ feedback: value }) });
       if (!response.ok) throw new Error("Feedback failed");
       setStatus("Комментарий отправлен Дизайнеру");
     } catch (error) {
@@ -115,7 +122,7 @@ export default function MobilePage() {
     setStream({}); setStatus("...");
     abortRef.current = new AbortController();
     try {
-      const res = await fetch("/api/chat/stream", {
+      const res = await mobileFetch("/api/chat/stream", {
         method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
         body: JSON.stringify({ message: msg, locale: "ru", channel: tab === "lead" ? "lead" : "group", duplicateToLead: false }),
         signal: abortRef.current.signal,
@@ -146,7 +153,7 @@ export default function MobilePage() {
   );
   if (authed === null) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100dvh", background: "var(--bg-app)", color: "var(--text-secondary)" }}>Загрузка...</div>;
 
-  if (tab === "settings") return <MobileSettings onBack={() => setTab("lead")} agents={data?.agents ?? []} />;
+  if (tab === "settings") return <MobileSettings onBack={() => setTab("lead")} agents={data?.agents ?? []} accessToken={urlToken} />;
 
   const vars = (k: string) => `var(--${k})`;
 

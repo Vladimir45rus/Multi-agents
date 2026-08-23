@@ -22,6 +22,7 @@ type ChatRetryRequest = {
 
 type UiLocale = "ru" | "en";
 type ChatChannel = "group" | "lead";
+type GroupRoleFilter = "all" | "tester" | "uiux" | "architect";
 
 type ChatAttachment = {
   type: "image" | "link";
@@ -204,6 +205,42 @@ type ContextMenuState = {
   y: number;
   entry: WorkspaceTreeEntry;
 };
+
+type WorkspaceTreeNode = WorkspaceTreeEntry & {
+  children: WorkspaceTreeNode[];
+};
+
+type CreateEntryDraft = {
+  kind: "file" | "directory";
+  parentPath: string;
+};
+
+function buildWorkspaceTree(entries: WorkspaceTreeEntry[]) {
+  const nodes = new Map<string, WorkspaceTreeNode>();
+  const roots: WorkspaceTreeNode[] = [];
+
+  for (const entry of entries) {
+    nodes.set(entry.path, { ...entry, children: [] });
+  }
+
+  for (const node of nodes.values()) {
+    const parentPath = node.path.split("/").slice(0, -1).join("/");
+    const parent = parentPath ? nodes.get(parentPath) : undefined;
+    if (parent?.kind === "directory") parent.children.push(node);
+    else roots.push(node);
+  }
+
+  const sortNodes = (items: WorkspaceTreeNode[]) => {
+    items.sort((left, right) => {
+      if (left.kind !== right.kind) return left.kind === "directory" ? -1 : 1;
+      return left.path.localeCompare(right.path);
+    });
+    items.forEach((item) => sortNodes(item.children));
+  };
+
+  sortNodes(roots);
+  return roots;
+}
 
 const dict = {
   ru: {
@@ -424,6 +461,7 @@ export function IdeApp() {
   const [leadMessage, setLeadMessage] = useState("");
   const [groupMessage, setGroupMessage] = useState("");
   const [duplicateToLead, setDuplicateToLead] = useState(false);
+  const [groupRoleFilter, setGroupRoleFilter] = useState<GroupRoleFilter>("all");
   const [terminalCommand, setTerminalCommand] = useState("");
   const [status, setStatus] = useState(dict.ru.loading);
   const [busy, setBusy] = useState(false);
@@ -443,11 +481,16 @@ export function IdeApp() {
     terminal: false,
     logs: false,
   });
-  const [topProportions, setTopProportions] = useState([0.15, 0.35, 0.25, 0.25]);
+  const [topProportions, setTopProportions] = useState([240, 560, 320, 320]);
   const [bottomProportions, setBottomProportions] = useState([0.5, 0.5]);
   const [bottomRowHeight, setBottomRowHeight] = useState(220);
   const [workspaceTreeEntries, setWorkspaceTreeEntries] = useState<WorkspaceTreeEntry[]>([]);
   const [fileStatuses, setFileStatuses] = useState<Record<string, "new" | "modified" | "saved">>({});
+  const [selectedDirectory, setSelectedDirectory] = useState("");
+  const [expandedDirectories, setExpandedDirectories] = useState<string[]>([]);
+  const expandedDirectoriesInitializedRef = useRef(false);
+  const [createEntryDraft, setCreateEntryDraft] = useState<CreateEntryDraft | null>(null);
+  const [createEntryName, setCreateEntryName] = useState("");
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [openTabs, setOpenTabs] = useState<Array<{ id: number; path: string; content: string }>>([]);
   const [searchQuery, setSearchQuery] = useState("");
@@ -497,6 +540,13 @@ export function IdeApp() {
   const chatAbortRef = useRef<AbortController | null>(null);
 
   const t = dict[locale];
+  const workspaceTree = useMemo(() => buildWorkspaceTree(workspaceTreeEntries), [workspaceTreeEntries]);
+
+  useEffect(() => {
+    if (expandedDirectoriesInitializedRef.current || workspaceTreeEntries.length === 0) return;
+    expandedDirectoriesInitializedRef.current = true;
+    setExpandedDirectories(workspaceTreeEntries.filter((entry) => entry.kind === "directory").map((entry) => entry.path));
+  }, [workspaceTreeEntries]);
 
   // Collapse/expand helpers moved outside via useMemo render functions
   const renderCollapseButton = (name: PanelName) => {
@@ -570,10 +620,11 @@ export function IdeApp() {
     const optimistic = optimisticMessages.filter((m) => m.chatChannel === "lead" && m.senderType === "user");
     return [...existing, ...optimistic];
   }, [data?.messages, data?.agents, optimisticMessages]);
-  const groupMessages = useMemo(
-    () => [...(data?.messages.filter((m) => m.chatChannel === "group" && m.senderType !== "system") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")],
-    [data?.messages, optimisticMessages],
-  );
+  const groupMessages = useMemo(() => {
+    const messages = [...(data?.messages.filter((m) => m.chatChannel === "group" && m.senderType !== "system") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")];
+    if (groupRoleFilter === "all") return messages;
+    return messages.filter((message) => message.metadata?.identity?.role === groupRoleFilter);
+  }, [data?.messages, groupRoleFilter, optimisticMessages]);
   const liveMessages = useMemo(() => Object.values(streamingMessages), [streamingMessages]);
   const liveMessagesVersion = liveMessages.map((message) => `${message.identity.agentId}:${message.content.length}:${message.status}`).join("|");
 
@@ -744,8 +795,8 @@ export function IdeApp() {
         body: JSON.stringify({ query: searchQuery, maxResults: 20 }),
       });
       if (!res.ok) return;
-      const payload = (await res.json()) as { results?: Array<{ path: string; line: number; content: string }> };
-      setSearchResults(payload.results ?? []);
+      const payload = (await res.json()) as { matches?: Array<{ path: string; line: number; text: string }> };
+      setSearchResults((payload.matches ?? []).map((match) => ({ path: match.path, line: match.line, content: match.text })));
     } catch {
       setSearchResults([]);
     }
@@ -794,9 +845,14 @@ export function IdeApp() {
       const text = await file.text();
       const agents = JSON.parse(text) as Array<{ name: string; provider: string; baseUrl: string; model: string; role: string; description: string; skill: string; systemPrompt: string; color: string }>;
       for (const agent of agents) {
-        await fetch("/api/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...agent, locale }) });
+        const response = await fetch("/api/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...agent, locale }) });
+        if (!response.ok) {
+          const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? "Agent import failed");
+        }
       }
       await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? `Импортировано агентов: ${agents.length}` : `Imported agents: ${agents.length}`);
     } catch {
       setStatus(locale === "ru" ? "Не удалось импортировать агентов" : "Failed to import agents");
     }
@@ -832,7 +888,9 @@ export function IdeApp() {
 
     const payload = (await workspaceResponse.json()) as WorkspaceData;
     const treePayload = treeResponse.ok ? (await treeResponse.json()) as { entries?: WorkspaceTreeEntry[] } : null;
-    setWorkspaceTreeEntries(treePayload?.entries ?? payload.files.map((file) => ({ path: file.path, language: file.language, size: file.content.length, updatedAt: file.updatedAt, kind: "file" })));
+    const nextTreeEntries = treePayload?.entries ?? payload.files.map((file) => ({ path: file.path, language: file.language, size: file.content.length, updatedAt: file.updatedAt, kind: "file" as const }));
+    setWorkspaceTreeEntries(nextTreeEntries);
+    setSelectedDirectory((previous) => previous && nextTreeEntries.some((entry) => entry.kind === "directory" && entry.path === previous) ? previous : "");
     setData(payload);
     setWorkspaceRootDraft(payload.settings?.projectRoot ?? "");
     setApiKeysDraft(payload.settings?.apiKeys ?? {});
@@ -851,8 +909,13 @@ export function IdeApp() {
     setLocaltunnelUrl(payload.settings.localtunnelUrl ?? "");
     setAgentDrafts(toDrafts(payload.agents));
 
-    const target = nextFileId ?? selectedFileId ?? payload.files[0]?.id ?? null;
+    const requestedTarget = nextFileId ?? selectedFileId;
+    const target = requestedTarget != null && payload.files.some((file) => file.id === requestedTarget)
+      ? requestedTarget
+      : payload.files[0]?.id ?? null;
     setSelectedFileId(target);
+    const validFileIds = new Set(payload.files.map((file) => file.id));
+    setOpenTabs((previous) => previous.filter((tab) => validFileIds.has(tab.id)));
     if (target != null) localStorage.setItem("ui-selected-file", String(target));
     const file = payload.files.find((f) => f.id === target) ?? payload.files[0];
     setEditorText(file?.content ?? "");
@@ -893,17 +956,21 @@ export function IdeApp() {
 
   const startTopResize = useCallback((index: number, event: React.PointerEvent<HTMLDivElement>) => {
     event.preventDefault();
-    topResizeRef.current = { index, startX: event.clientX, startProps: [...topProportions] };
+    const containerWidth = event.currentTarget.parentElement?.getBoundingClientRect().width ?? window.innerWidth;
+    const proportionSum = topProportions.reduce((sum, value) => sum + value, 0) || 1;
+    const startProps = topProportions.map((value) => (value / proportionSum) * containerWidth);
+    topResizeRef.current = { index, startX: event.clientX, startProps };
     const onMove = (e: PointerEvent) => {
       if (!topResizeRef.current) return;
       const delta = e.clientX - topResizeRef.current.startX;
-      const totalWidth = (topResizeRef.current.startProps.reduce((a, b) => a + b, 0)) || 1;
-      const deltaFrac = delta / (window.innerWidth || 1000);
       const next = [...topResizeRef.current.startProps];
-      const minFrac = 0.03;
-      next[index] = Math.max(minFrac, topResizeRef.current.startProps[index] + deltaFrac);
-      next[index + 1] = Math.max(minFrac, topResizeRef.current.startProps[index + 1] - deltaFrac);
-      const sum = next.reduce((a, b) => a + b, 0);
+      const minWidth = index === 0 ? 160 : 220;
+      const leftStart = topResizeRef.current.startProps[index];
+      const rightStart = topResizeRef.current.startProps[index + 1];
+      const safeDelta = Math.max(minWidth - leftStart, Math.min(rightStart - minWidth, delta));
+      next[index] = leftStart + safeDelta;
+      next[index + 1] = rightStart - safeDelta;
+      const sum = next.reduce((a, b) => a + b, 0) || 1;
       setTopProportions(next.map((v) => v / sum));
     };
     const onUp = () => {
@@ -944,7 +1011,7 @@ export function IdeApp() {
 
   function panelClass(name: string) {
     if (!fullscreenPanel) return "";
-    return fullscreenPanel === name ? "fixed inset-0 z-50 flex flex-col" + (typeof window !== "undefined" && document.documentElement.getAttribute("data-theme") === "light" ? " bg-white" : " bg-[#1e1e1e]") : "hidden";
+    return fullscreenPanel === name ? "fixed inset-0 z-50 flex flex-col" + (typeof window !== "undefined" && document.documentElement.getAttribute("data-theme") === "light" ? " bg-white" : " bg-[var(--bg-app)]") : "hidden";
   }
 
   // --- Collapse-aware flex proportions ---
@@ -959,7 +1026,7 @@ export function IdeApp() {
     if (idx < 0) return 0;
     const activeProps = active.map((n) => topProportions[panelNames.indexOf(n)]);
     const sum = activeProps.reduce((a, b) => a + b, 0) || 1;
-    return (activeProps[idx] / sum) * 100;
+    return activeProps[idx] / sum;
   }
 
   function bottomFlexGrow(index: number) {
@@ -972,67 +1039,210 @@ export function IdeApp() {
     if (idx < 0) return 0;
     const activeProps = active.map((n) => bottomProportions[panelNames.indexOf(n)]);
     const sum = activeProps.reduce((a, b) => a + b, 0) || 1;
-    return (activeProps[idx] / sum) * 100;
+    return activeProps[idx] / sum;
   }
 
   // --- File tree operations ---
+
+  function renderWorkspaceTreeNode(node: WorkspaceTreeNode, depth: number): React.ReactNode {
+    const file = node.kind === "file" ? data?.files.find((candidate) => candidate.path === node.path) : null;
+    const fileStatus = fileStatuses[node.path];
+    const isSelected = selectedFileId === file?.id;
+    const isSelectedDirectory = selectedDirectory === node.path;
+    const isExpanded = node.kind === "directory" && expandedDirectories.includes(node.path);
+    const isCreatingHere = createEntryDraft?.parentPath === node.path;
+
+    return (
+      <div key={`${node.kind}-${node.path}`}>
+        <div className="group mb-0.5 flex items-center gap-0.5">
+          {node.kind === "directory" ? (
+            <button
+              type="button"
+              onClick={() => setExpandedDirectories((previous) => isExpanded ? previous.filter((path) => path !== node.path) : [...previous, node.path])}
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
+              title={isExpanded ? "Свернуть папку" : "Развернуть папку"}
+            >
+              {isExpanded ? "▾" : "▸"}
+            </button>
+          ) : <span className="h-6 w-6 shrink-0" />}
+          <button
+            type="button"
+            onClick={() => {
+              if (node.kind === "directory") {
+                setSelectedDirectory(node.path);
+                setStatus(locale === "ru" ? `Папка выбрана для создания: ${node.path}` : `Folder selected for creation: ${node.path}`);
+              } else {
+                void selectWorkspaceFile(node);
+              }
+            }}
+            onContextMenu={(event) => handleTreeContextMenu(event, node)}
+            style={{ paddingLeft: `${Math.max(0, depth) * 10 + 4}px` }}
+            className={`block min-w-0 flex-1 truncate rounded px-2 py-1 text-left text-sm ${node.kind === "directory" ? isSelectedDirectory ? "bg-[var(--bg-selection)] text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]" : isSelected ? "bg-[#37373d] text-white" : "hover:bg-[var(--bg-hover)]"}`}
+            title={node.path}
+          >
+            <span className="mr-1 text-[var(--text-accent)]">{node.kind === "directory" ? "📁" : "◆"}</span>
+            <span className="truncate">{node.path.split("/").pop() || node.path}</span>
+            {node.kind === "file" && fileStatus && fileStatus !== "saved" ? (
+              <span className={`ml-1 text-[10px] ${fileStatus === "modified" ? "text-amber-300" : "text-[var(--text-accent)]"}`}>
+                {fileStatus === "modified" ? "●" : "＋"}
+              </span>
+            ) : null}
+          </button>
+        </div>
+        {node.kind === "directory" && isExpanded ? (
+          <div>
+            {isCreatingHere ? (
+              <div className="mb-1 flex items-center gap-1 rounded border border-blue-400/60 bg-blue-500/10 px-2 py-1" style={{ marginLeft: `${(depth + 1) * 10 + 26}px` }}>
+                <span className="text-[var(--text-accent)]">{createEntryDraft.kind === "directory" ? "📁" : "📄"}</span>
+                <input
+                  autoFocus
+                  value={createEntryName}
+                  onChange={(event) => setCreateEntryName(event.target.value)}
+                  onKeyDown={handleCreateInputKeyDown}
+                  placeholder={createEntryDraft.kind === "directory" ? "Имя новой папки" : "Имя нового файла"}
+                  className="min-w-0 flex-1 bg-transparent text-xs outline-none"
+                />
+                <button type="button" onClick={() => void submitCreateEntry()} className="text-emerald-300" title={t.create}>✓</button>
+                <button type="button" onClick={cancelCreateEntry} className="text-red-300" title={t.close}>✕</button>
+              </div>
+            ) : null}
+            {node.children.map((child) => renderWorkspaceTreeNode(child, depth + 1))}
+          </div>
+        ) : null}
+      </div>
+    );
+  }
 
   function handleTreeContextMenu(e: React.MouseEvent, entry: WorkspaceTreeEntry) {
     e.preventDefault();
     setContextMenu({ x: e.clientX, y: e.clientY, entry });
   }
 
-  async function createTreeEntry(kind: "file" | "directory", parentPath = "") {
-    if (!mainAgent) return;
-    const defaultName = kind === "file" ? "new-file.ts" : "new-folder";
-    const basePath = parentPath ? `${parentPath}/` : "";
-    let path = `${basePath}${defaultName}`;
-    let suffix = 1;
-    while (workspaceTreeEntries.some((entry) => entry.path === path)) {
-      path = kind === "file" ? `${basePath}new-file-${suffix}.ts` : `${basePath}new-folder-${suffix}`;
-      suffix += 1;
-    }
-    const response = await fetch("/api/workspace/entry", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actorAgentId: mainAgent.id, path, kind }),
-    });
-    if (!response.ok) {
-      setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "File operation failed");
+  function beginCreateEntry(kind: "file" | "directory", parentPath = selectedDirectory) {
+    if (!mainAgent) {
+      setStatus(locale === "ru" ? "Сначала должен быть назначен Главный агент" : "Assign a Lead Agent first");
       return;
     }
-    await loadWorkspace(selectedFileId, locale);
-    if (kind === "file") setFileStatuses((previous) => ({ ...previous, [path]: "new" }));
+    if (busy) return;
+    if (parentPath) {
+      setExpandedDirectories((previous) => previous.includes(parentPath) ? previous : [...previous, parentPath]);
+      setSelectedDirectory(parentPath);
+    }
+    setCreateEntryDraft({ kind, parentPath });
+    setCreateEntryName(kind === "file" ? "" : "");
+    setContextMenu(null);
+    setStatus(locale === "ru" ? `Введите имя ${kind === "file" ? "файла" : "папки"}` : `Enter ${kind === "file" ? "file" : "folder"} name`);
+  }
+
+  function cancelCreateEntry() {
+    setCreateEntryDraft(null);
+    setCreateEntryName("");
+  }
+
+  async function submitCreateEntry() {
+    if (!createEntryDraft || !mainAgent) return;
+    const rawName = createEntryName.trim();
+    if (!rawName) {
+      setStatus(locale === "ru" ? "Введите имя" : "Enter a name");
+      return;
+    }
+    if (/[\\\\/:*?"<>|]/.test(rawName) || rawName === "." || rawName === "..") {
+      setStatus(locale === "ru" ? "Недопустимое имя файла или папки" : "Invalid file or folder name");
+      return;
+    }
+
+    const name = rawName;
+    const path = createEntryDraft.parentPath ? `${createEntryDraft.parentPath}/${name}` : name;
+    if (workspaceTreeEntries.some((entry) => entry.path === path)) {
+      setStatus(locale === "ru" ? "Файл или папка с таким именем уже существуют" : "An entry with this name already exists");
+      return;
+    }
+
+    setBusy(true);
+    try {
+      const response = await fetch("/api/workspace/entry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actorAgentId: mainAgent.id, path, kind: createEntryDraft.kind }),
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "File operation failed");
+
+      const createdKind = createEntryDraft.kind;
+      const createdParent = createEntryDraft.parentPath;
+      cancelCreateEntry();
+      await loadWorkspace(selectedFileId, locale);
+      if (createdKind === "file") setFileStatuses((previous) => ({ ...previous, [path]: "new" }));
+      setStatus(locale === "ru" ? `${createdKind === "file" ? "Файл" : "Папка"} создан: ${path}` : `${createdKind === "file" ? "File" : "Folder"} created: ${path}`);
+      if (createdParent) setExpandedDirectories((previous) => previous.includes(createdParent) ? previous : [...previous, createdParent]);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "File operation failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function handleCreateInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      void submitCreateEntry();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      cancelCreateEntry();
+    }
   }
 
   async function renameTreeEntry(filePath: string) {
-    if (!mainAgent) return;
-    const nextPath = window.prompt(locale === "ru" ? "Новое имя или путь" : "New name or path", filePath);
-    if (!nextPath?.trim() || nextPath.trim() === filePath) return;
-    const response = await fetch("/api/workspace/entry", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actorAgentId: mainAgent.id, path: filePath, nextPath: nextPath.trim() }),
-    });
-    if (!response.ok) {
-      setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Rename failed");
+    if (!mainAgent) {
+      setStatus(locale === "ru" ? "Сначала должен быть назначен Главный агент" : "Assign a Lead Agent first");
       return;
     }
-    await loadWorkspace(null, locale);
+    const nextPath = window.prompt(locale === "ru" ? "Новое имя или путь" : "New name or path", filePath);
+    if (!nextPath?.trim() || nextPath.trim() === filePath) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/workspace/entry", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actorAgentId: mainAgent.id, path: filePath, nextPath: nextPath.trim() }),
+      });
+      if (!response.ok) {
+        setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Rename failed");
+        return;
+      }
+      await loadWorkspace(null, locale);
+      setStatus(locale === "ru" ? `Переименовано: ${nextPath.trim()}` : `Renamed: ${nextPath.trim()}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Rename failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function deleteTreeEntry(filePath: string) {
-    if (!mainAgent || !window.confirm(`${locale === "ru" ? "Удалить" : "Delete"} ${filePath}?`)) return;
-    const response = await fetch("/api/workspace/entry", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ actorAgentId: mainAgent.id, path: filePath }),
-    });
-    if (!response.ok) {
-      setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Delete failed");
+    if (!mainAgent) {
+      setStatus(locale === "ru" ? "Сначала должен быть назначен Главный агент" : "Assign a Lead Agent first");
       return;
     }
-    await loadWorkspace(null, locale);
+    if (!window.confirm(`${locale === "ru" ? "Удалить" : "Delete"} ${filePath}?`)) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/workspace/entry", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actorAgentId: mainAgent.id, path: filePath }),
+      });
+      if (!response.ok) {
+        setStatus(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Delete failed");
+        return;
+      }
+      await loadWorkspace(null, locale);
+      setStatus(locale === "ru" ? `Удалено: ${filePath}` : `Deleted: ${filePath}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Delete failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   function switchLocale(next: UiLocale) {
@@ -1077,7 +1287,10 @@ export function IdeApp() {
   }
 
   async function saveApiKeys() {
-    if (!settingsDirty) return;
+    if (!settingsDirty) {
+      setStatus(locale === "ru" ? "Нет изменений для сохранения" : "No settings changes to save");
+      return;
+    }
     setBusy(true);
     try {
       let apiKeysPayload = apiKeysDraft;
@@ -1134,6 +1347,10 @@ export function IdeApp() {
       await loadWorkspace(selectedFileId, locale);
       setApiKeysDraft({});
       setGithubTokenDraft("");
+      setTelegramTokenDraft("");
+      setStatus(locale === "ru" ? "Настройки сохранены" : "Settings saved");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Settings update failed");
     } finally {
       setBusy(false);
     }
@@ -1163,7 +1380,10 @@ export function IdeApp() {
   }
 
   async function createAgent() {
-    if (!newAgent.name.trim()) return;
+    if (!newAgent.name.trim()) {
+      setStatus(locale === "ru" ? "Введите имя агента" : "Enter an agent name");
+      return;
+    }
 
     setBusy(true);
     try {
@@ -1172,9 +1392,16 @@ export function IdeApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...newAgent, locale }),
       });
-      if (!res.ok) throw new Error("error");
+      if (!res.ok) {
+        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Agent creation failed");
+      }
       setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? "")));
       await loadWorkspace(selectedFileId, locale);
+      setShowAddAgent(false);
+      setStatus(locale === "ru" ? "Агент создан" : "Agent created");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Agent creation failed");
     } finally {
       setBusy(false);
     }
@@ -1183,12 +1410,19 @@ export function IdeApp() {
   async function setMainCoder(agentId: number) {
     setBusy(true);
     try {
-      await fetch("/api/agents/main", {
+      const response = await fetch("/api/agents/main", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agentId, locale }),
       });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Failed to set Lead agent");
+      }
       await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? "Главный агент назначен" : "Lead agent assigned");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to set Lead agent");
     } finally {
       setBusy(false);
     }
@@ -1562,20 +1796,30 @@ export function IdeApp() {
     if (!terminalCommand.trim()) return;
     setBusy(true);
     try {
-      await fetch("/api/terminal", {
+      const response = await fetch("/api/terminal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ command: terminalCommand, locale }),
       });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Terminal command failed");
+      }
       setTerminalCommand("");
       await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? "Команда выполнена" : "Command completed");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Terminal command failed");
     } finally {
       setBusy(false);
     }
   }
 
   async function importOwnFiles() {
-    if (importFiles.length === 0) return;
+    if (importFiles.length === 0) {
+      setStatus(locale === "ru" ? "Выберите файлы для импорта" : "Choose files to import");
+      return;
+    }
     setBusy(true);
     try {
       const filesPayload: Array<{ path: string; content: string }> = [];
@@ -1590,9 +1834,15 @@ export function IdeApp() {
         body: JSON.stringify({ files: filesPayload, locale }),
       });
 
-      if (!res.ok) throw new Error("import error");
+      if (!res.ok) {
+        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Import failed");
+      }
       setImportFiles([]);
       await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? `Импортировано файлов: ${filesPayload.length}` : `Imported files: ${filesPayload.length}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Import failed");
     } finally {
       setBusy(false);
     }
@@ -1627,17 +1877,17 @@ export function IdeApp() {
       <div className="mt-2 space-y-2">
         {list?.map((att, index) =>
           att.type === "image" ? (
-            <div key={`img-${index}`} className="rounded border border-[#3a3d41] p-2">
-              {att.name ? <p className="mb-1 text-[11px] text-[#9da3b2]">{att.name}</p> : null}
+            <div key={`img-${index}`} className="rounded border border-[var(--border-default)] p-2">
+              {att.name ? <p className="mb-1 text-[11px] text-[var(--text-secondary)]">{att.name}</p> : null}
               {att.url ? (
                 // eslint-disable-next-line @next/next/no-img-element -- user-uploaded data URLs
                 <img src={att.url} alt={att.name ?? "attachment"} className="max-h-44 rounded object-contain" />
               ) : null}
             </div>
           ) : (
-            <div key={`link-${index}`} className="rounded border border-[#3a3d41] bg-[#1e1e1e] p-2 text-xs">
+            <div key={`link-${index}`} className="rounded border border-[var(--border-default)] bg-[var(--bg-app)] p-2 text-xs">
               {att.url ? (
-                <a href={att.url} target="_blank" rel="noreferrer" className="text-[#4fc1ff] underline">
+                <a href={att.url} target="_blank" rel="noreferrer" className="text-[var(--text-accent)] underline">
                   {att.title || att.url}
                 </a>
               ) : null}
@@ -1658,10 +1908,51 @@ export function IdeApp() {
   }
 
   function statusClass(messageStatus: ChatMessageStatus | ChatStreamState["status"]) {
-    if (messageStatus === "error") return "text-[#f48771]";
-    if (messageStatus === "cancelled") return "text-[#dcdcaa]";
-    if (messageStatus === "sending" || messageStatus === "streaming") return "text-[#4fc1ff]";
-    return "text-[#9cdcfe]";
+    if (messageStatus === "error") return "text-red-300";
+    if (messageStatus === "cancelled") return "text-amber-200";
+    if (messageStatus === "sending" || messageStatus === "streaming") return "text-blue-300";
+    return "text-emerald-300";
+  }
+
+  function eventTone(level: string) {
+    if (level === "error") return { border: "border-red-500/30", background: "bg-red-500/10", text: "text-red-200", dot: "bg-red-400" };
+    if (level === "warning") return { border: "border-amber-500/30", background: "bg-amber-500/10", text: "text-amber-200", dot: "bg-amber-400" };
+    if (level === "success") return { border: "border-emerald-500/30", background: "bg-emerald-500/10", text: "text-emerald-200", dot: "bg-emerald-400" };
+    return { border: "border-slate-700", background: "bg-slate-900/60", text: "text-slate-200", dot: "bg-blue-400" };
+  }
+
+  async function toggleAutoApprove(enabled: boolean) {
+    setAutoApproveDraft(enabled);
+    setBusy(true);
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ autoApprove: enabled }),
+      });
+      if (!response.ok) throw new Error(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Auto mode update failed");
+      await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? `AUTO ${enabled ? "включён" : "выключен"}` : `AUTO ${enabled ? "enabled" : "disabled"}`);
+    } catch (error) {
+      setAutoApproveDraft(!enabled);
+      setStatus(error instanceof Error ? error.message : "Auto mode update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function clearTerminal() {
+    setBusy(true);
+    try {
+      const response = await fetch("/api/terminal", { method: "DELETE" });
+      if (!response.ok) throw new Error(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Terminal clear failed");
+      await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? "Терминал очищен" : "Terminal cleared");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Terminal clear failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function copyMessage(messageId: number | string, content: string) {
@@ -1717,9 +2008,9 @@ export function IdeApp() {
     return liveMessages
       .filter((message) => message.channel === channel)
       .map((message) => (
-        <article key={`stream-${message.identity.agentId}`} className="mr-auto w-fit max-w-[92%] rounded border border-[#007acc] bg-[#252526] p-2 text-sm">
+        <article key={`stream-${message.identity.agentId}`} className="mr-auto w-fit max-w-[92%] rounded border border-[#007acc] bg-[var(--bg-panel)] p-2 text-sm">
           <div className="flex items-center justify-between gap-2">
-            <p className="flex items-center gap-1 text-[11px] text-[#4fc1ff]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: agentColorForIdentity(message.identity) }} />{agentHeader(message.identity, message.identity.displayName)}</p>
+            <p className="flex items-center gap-1 text-[11px] text-[var(--text-accent)]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: agentColorForIdentity(message.identity) }} />{agentHeader(message.identity, message.identity.displayName)}</p>
             <span className={`text-[10px] ${statusClass(message.status)}`}>{statusLabel(message.status)}</span>
           </div>
           <p className="mt-1 whitespace-pre-wrap">{message.content || "…"}</p>
@@ -1761,66 +2052,59 @@ export function IdeApp() {
   const bottomGrows = [bottomFlexGrow(0), bottomFlexGrow(1)];
 
   return (
-    <main className="relative h-screen overflow-hidden pb-6" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
-      <header className="flex h-10 items-center justify-between border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
-        <div className="flex items-center gap-3">
-          <span className="text-sm font-semibold">Multi-Agent Code Studio</span>
-          <div className="relative">
-            <input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder={t.searchPlaceholder}
-              className="w-[200px] rounded border px-2 py-1 text-[11px] outline-none focus:border-[#007acc]" style={{ borderColor: "var(--border-input)", background: "var(--bg-app)", color: "var(--text-primary)" }}
-            />
-            {searchQuery && searchResults.length > 0 && (
-              <div className="absolute left-0 top-full z-40 mt-1 max-h-[300px] w-[400px] overflow-y-auto rounded border border-[#3a3d41] bg-[#252526] shadow-lg">
-                {searchResults.map((r, i) => (
-                  <button
-                    key={`${r.path}:${r.line}:${i}`}
-                    type="button"
-                    onClick={() => {
-                      const entry = workspaceTreeEntries.find((e) => e.path === r.path);
-                      if (entry) { selectWorkspaceFile(entry); setSearchQuery(""); setSearchResults([]); }
-                    }}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs hover:bg-[#37373d]"
-                  >
-                    <span className="text-[#6a9955]">{r.path}</span>
-                    <span className="text-[#9da3b2]">:{r.line}</span>
-                    <span className="ml-auto truncate text-[#9da3b2]">{r.content.slice(0, 50)}</span>
-                  </button>
-                ))}
-              </div>
-            )}
+    <main className="relative flex h-screen flex-col overflow-hidden pb-6" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
+      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-lg">👑</span>
+          <div className="min-w-0">
+            <div className="truncate text-sm font-bold text-amber-300">Multi-Agent Code Studio</div>
+            <div className="truncate text-[9px] tracking-[0.08em] text-slate-500">AUTONOMOUS AI DEVELOPMENT COMPLEX</div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={() => setPreviewOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs" title={locale === "ru" ? "Предпросмотр проекта" : "Project preview"}>
+        <div className="hidden min-w-0 items-center gap-2 xl:flex">
+          <span className={`rounded-full border px-3 py-1 text-[10px] ${busy ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
+            {busy ? "🟡 Выполняется" : "🟢 Статус: Ожидание"}
+          </span>
+          {[
+            ["Ключей", Object.values(data?.settings.apiKeysConfigured ?? {}).filter(Boolean).length],
+            ["Агентов", data?.agents.length ?? 0],
+            ["Сообщений", data?.messages.length ?? 0],
+            ["Файлов", data?.files.length ?? 0],
+          ].map(([label, value]) => (
+            <span key={label} className="min-w-[58px] rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-center">
+              <strong className="block text-xs text-slate-100">{value}</strong>
+              <small className="block text-[9px] text-slate-500">{label}</small>
+            </span>
+          ))}
+        </div>
+        <div className="flex shrink-0 items-center gap-1.5">
+          <button type="button" onClick={() => setPreviewOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400" title={locale === "ru" ? "Предпросмотр проекта" : "Project preview"}>
             👁️ {locale === "ru" ? "Предпросмотр" : "Preview"}
           </button>
-          <button type="button" onClick={() => void pushToGithub()} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white" disabled={busy}>
+          <button type="button" onClick={() => void pushToGithub()} className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500 disabled:opacity-50" disabled={busy}>
             {t.pushGithub}
           </button>
           <button
             type="button"
             onClick={() => setSupportOpen(true)}
-            className="rounded bg-gradient-to-r from-amber-400 to-yellow-400 px-3 py-1 text-xs font-bold text-black shadow-[0_0_12px_rgba(251,191,36,0.6)] transition-all hover:from-amber-300 hover:to-yellow-300 hover:shadow-[0_0_18px_rgba(251,191,36,0.9)]"
+            className="rounded-md bg-amber-500 px-3 py-1 text-xs font-semibold text-black shadow-lg shadow-amber-500/20 transition hover:bg-amber-400"
           >
             {t.donateBtn}
           </button>
-          <button type="button" onClick={() => setOrchestratorOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
+          <button type="button" onClick={() => setOrchestratorOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
             🤖 {locale === "ru" ? "Оркестратор" : "Orchestrator"}
           </button>
           <ThemeToggle />
-          <button type="button" onClick={() => setSettingsOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
+          <button type="button" onClick={() => setSettingsOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
             ⚙️ {t.settings}
           </button>
         </div>
       </header>
 
       {/* Main content area: flex column, top flex area + resizer + bottom area */}
-      <div className="flex flex-col" style={{ height: "calc(100% - 40px)" }}>
-        {/* Top row: Tree | Editor | Lead Chat | Group Chat */}
-        <div className="flex min-h-0" style={{ flex: "1 1 auto", height: `calc(100% - ${bottomRowHeight}px)` }}>
+      <div className="relative flex min-h-0 flex-1 flex-col">
+        {/* Full-height side panels with a central editor/terminal work area. */}
+        <div className="flex min-h-0 flex-1">
           {/* Explorer / File Tree */}
           <div className={`relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("explorer", t.explorer)}
@@ -1829,39 +2113,41 @@ export function IdeApp() {
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.explorer}</span>
                   <div className="flex items-center gap-0.5">
-                    <button type="button" onClick={() => createTreeEntry("file")} title={t.newFile} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📄</button>
-                    <button type="button" onClick={() => createTreeEntry("directory")} title={t.newFolder} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📁</button>
+                    <button type="button" onClick={() => beginCreateEntry("file")} title={selectedDirectory ? `${t.newFile}: ${selectedDirectory}` : t.newFile} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📄</button>
+                    <button type="button" onClick={() => beginCreateEntry("directory")} title={selectedDirectory ? `${t.newFolder}: ${selectedDirectory}` : t.newFolder} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📁</button>
                     {renderCollapseButton("explorer")}
                     {renderExpandButton("explorer")}
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto p-1">
-                  {workspaceTreeEntries.map((entry) => {
-                    const file = entry.kind === "file" ? data?.files.find((candidate) => candidate.path === entry.path) : null;
-                    const fileStatus = fileStatuses[entry.path];
-                    const isSelected = selectedFileId === file?.id;
-                    return (
-                      <div key={`${entry.kind}-${entry.path}`} className="group mb-0.5 flex items-center gap-0.5">
-                        <button
-                          type="button"
-                          disabled={entry.kind === "directory"}
-                          onClick={() => { void selectWorkspaceFile(entry); }}
-                          onContextMenu={(e) => handleTreeContextMenu(e, entry)}
-                          style={{ paddingLeft: `${8 + entry.path.split("/").length * 10}px` }}
-                          className={`block min-w-0 flex-1 truncate rounded px-2 py-1 text-left text-sm ${entry.kind === "directory" ? "text-[#9da3b2]" : isSelected ? "bg-[#37373d] text-white" : "hover:bg-[#2a2d2e]"}`}
-                          title={entry.path}
-                        >
-                          <span className="mr-1 text-[#4fc1ff]">{entry.kind === "directory" ? "▾" : "◆"}</span>
-                          <span className="truncate">{entry.path.split("/").pop() || entry.path}</span>
-                          {entry.kind === "file" && fileStatus && fileStatus !== "saved" ? (
-                            <span className={`ml-1 text-[10px] ${fileStatus === "modified" ? "text-amber-300" : "text-[#4fc1ff]"}`}>
-                              {fileStatus === "modified" ? "●" : "＋"}
-                            </span>
-                          ) : null}
-                        </button>
+                <div className="border-b border-[var(--border-default)] p-2">
+                  <div className="relative">
+                    <input
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder={t.searchPlaceholder}
+                      className="w-full rounded-md border border-[var(--border-input)] bg-[var(--bg-app)] px-2 py-1.5 text-[10px] outline-none focus:border-blue-400"
+                    />
+                    {searchQuery && searchResults.length > 0 ? (
+                      <div className="absolute left-0 right-0 top-full z-40 mt-1 max-h-[260px] overflow-y-auto rounded-md border border-[var(--border-default)] bg-[var(--bg-panel)] shadow-xl">
+                        {searchResults.map((r, i) => (
+                          <button key={`${r.path}:${r.line}:${i}`} type="button" onClick={() => { const entry = workspaceTreeEntries.find((e) => e.path === r.path); if (entry) { void selectWorkspaceFile(entry); setSearchQuery(""); setSearchResults([]); } }} className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[10px] hover:bg-[var(--bg-hover)]">
+                            <span className="truncate text-emerald-300">{r.path}</span><span className="text-slate-500">:{r.line}</span>
+                          </button>
+                        ))}
                       </div>
-                    );
-                  })}
+                    ) : null}
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                  {createEntryDraft?.parentPath === "" ? (
+                    <div className="mb-1 flex items-center gap-1 rounded border border-blue-400/60 bg-blue-500/10 px-2 py-1">
+                      <span className="text-[var(--text-accent)]">{createEntryDraft.kind === "directory" ? "📁" : "📄"}</span>
+                      <input autoFocus value={createEntryName} onChange={(event) => setCreateEntryName(event.target.value)} onKeyDown={handleCreateInputKeyDown} placeholder={createEntryDraft.kind === "directory" ? t.newFolder : t.newFile} className="min-w-0 flex-1 bg-transparent text-xs outline-none" />
+                      <button type="button" onClick={() => void submitCreateEntry()} className="text-emerald-300" title={t.create}>✓</button>
+                      <button type="button" onClick={cancelCreateEntry} className="text-red-300" title={t.close}>✕</button>
+                    </div>
+                  ) : null}
+                  {workspaceTree.map((node) => renderWorkspaceTreeNode(node, 0))}
                 </div>
               </section>
             )}
@@ -1891,22 +2177,22 @@ export function IdeApp() {
                   </div>
                 </div>
                 {/* Tab bar */}
-                {openTabs.length > 0 && (
-                  <div className="flex items-center border-b border-[#2d2d30] bg-[#1e1e1e] overflow-x-auto">
-                    {openTabs.map((tab) => (
-                      <div
-                        key={tab.id}
-                        onClick={() => { setSelectedFileId(tab.id); setEditorText(tab.content); }}
-                        className={`flex items-center gap-1 shrink-0 cursor-pointer border-r px-3 py-1 text-[11px] ${tab.id === selectedFileId ? "bg-[#37373d] text-white" : "hover:bg-[#2a2d2e]"}`} style={{ borderColor: "var(--border-default)", color: tab.id === selectedFileId ? undefined : "var(--text-secondary)" }}
-                      >
-                        <span className="truncate max-w-[120px]">{tab.path.split("/").pop() || tab.path}</span>
-                        <button type="button" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} className="ml-1 rounded-full px-1 text-[10px] hover:bg-[#555]">✕</button>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                <div className="flex items-center overflow-x-auto border-b border-[var(--border-default)] bg-[var(--bg-app)]">
+                  {openTabs.map((tab) => (
+                    <div
+                      key={tab.id}
+                      onClick={() => { setSelectedFileId(tab.id); setEditorText(tab.content); }}
+                      className={`flex shrink-0 cursor-pointer items-center gap-1 border-r px-3 py-1 text-[11px] ${tab.id === selectedFileId ? "bg-[var(--bg-selection)] text-white" : "hover:bg-[var(--bg-hover)]"}`}
+                      style={{ borderColor: "var(--border-default)", color: tab.id === selectedFileId ? undefined : "var(--text-secondary)" }}
+                    >
+                      <span className="max-w-[120px] truncate">{tab.path.split("/").pop() || tab.path}</span>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} className="ml-1 rounded-full px-1 text-[10px] hover:bg-slate-700">✕</button>
+                    </div>
+                  ))}
+                  <button type="button" onClick={() => beginCreateEntry("file")} disabled={busy || !mainAgent} title={selectedDirectory ? `${t.newFile}: ${selectedDirectory}` : t.newFile} className="shrink-0 px-3 py-1 text-[11px] text-[var(--text-secondary)] hover:text-white disabled:opacity-50">＋ Новый файл</button>
+                </div>
                 {selectedFile ? (
-                  <Suspense fallback={<div className="flex min-h-0 flex-1 items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">Loading editor...</div>}>
+                  <Suspense fallback={<div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--bg-app)] text-xs text-[var(--text-secondary)]">Loading editor...</div>}>
                     <CodeEditor
                       filePath={selectedFile.path}
                       value={editorText}
@@ -1919,7 +2205,7 @@ export function IdeApp() {
                     />
                   </Suspense>
                 ) : (
-                  <div className="flex min-h-0 flex-1 items-center justify-center bg-[#1e1e1e] text-xs text-[#9da3b2]">{t.noFile}</div>
+                  <div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--bg-app)] text-xs text-[var(--text-secondary)]">{t.noFile}</div>
                 )}
               </section>
             )}
@@ -1938,7 +2224,7 @@ export function IdeApp() {
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.leadChat}</span>
                   <div className="flex items-center gap-0.5">
-                    <span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
                     <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
                     {renderCollapseButton("lead")}
                     {renderExpandButton("lead")}
@@ -1946,9 +2232,9 @@ export function IdeApp() {
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
                   {leadMessages?.map((msg) => (
-                    <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[#3a3d41] bg-[#252526]"}`}>
+                    <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[var(--border-default)] bg-[var(--bg-panel)]"}`}>
                       <div className="flex items-center justify-between gap-2">
-                        <p className="flex items-center gap-1 text-[11px] text-[#9da3b2]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                        <p className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                         {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
                       </div>
                       <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
@@ -1963,14 +2249,14 @@ export function IdeApp() {
                 <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="border-t border-[#2d2d30] p-3">
                   <div className="mb-1 flex flex-wrap gap-1">
                     {["/fix", "/explain", "/test", "/refactor", "/docs"].map((cmd) => (
-                      <button key={cmd} type="button" onClick={() => quickCommand(`${cmd} `, "lead")} className="rounded bg-[#2d2d30] px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41]">{cmd}</button>
+                      <button key={cmd} type="button" onClick={() => quickCommand(`${cmd} `, "lead")} className="rounded bg-[var(--bg-panel-alt)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] hover:bg-[#3a3d41]">{cmd}</button>
                     ))}
                     {sortAgents(data?.agents ?? []).map((agent) => (
-                      <button key={`@-lead-${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "lead")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[#2d2d30]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
+                      <button key={`@-lead-${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "lead")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[var(--bg-panel-alt)]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
                     ))}
                   </div>
                   <div className="flex gap-2">
-                    <input value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <input value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value)} disabled={chatRunning} className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -1991,18 +2277,27 @@ export function IdeApp() {
               <section className="panel h-full">
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.allChat}</span>
-                  <div className="flex items-center gap-0.5">
-                    <span className="text-[10px] text-[#9da3b2]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
-                    <button type="button" onClick={() => void clearHistory("group")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
+                  <div className="flex items-center gap-1">
+                    <span className="hidden text-[10px] text-[var(--text-secondary)] 2xl:inline">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
+                      <button key={filter} type="button" onClick={() => setGroupRoleFilter(filter)} className={`rounded-full border px-1.5 py-0.5 text-[9px] ${groupRoleFilter === filter ? "border-blue-400 bg-blue-500/20 text-blue-200" : "border-[var(--border-default)] text-[var(--text-muted)] hover:text-white"}`}>
+                        {filter === "all" ? "Все" : filter === "tester" ? "QA" : filter === "uiux" ? "UI/UX" : "Архитектор"}
+                      </button>
+                    ))}
+                    <label className="hidden items-center gap-1 text-[9px] text-[var(--text-muted)] xl:flex" title="Автоматически утверждать цикл">
+                      <span>AUTO</span>
+                      <input type="checkbox" checked={autoApproveDraft} onChange={(event) => void toggleAutoApprove(event.target.checked)} disabled={busy} />
+                    </label>
+                    <button type="button" onClick={() => void clearHistory("group")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[var(--bg-panel-alt)]">🗑️</button>
                     {renderCollapseButton("group")}
                     {renderExpandButton("group")}
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
                   {groupMessages?.map((msg) => (
-                    <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[#3a3d41] bg-[#252526]"}`}>
+                    <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[var(--border-default)] bg-[var(--bg-panel)]"}`}>
                       <div className="flex items-center justify-between gap-2">
-                        <p className="flex items-center gap-1 text-[11px] text-[#9da3b2]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                        <p className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                         {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
                       </div>
                       <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
@@ -2021,7 +2316,7 @@ export function IdeApp() {
                     {duplicateToLead ? <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>⚠️ {locale === "ru" ? "Только Главный агент виден в чате с Главным" : "Only Lead Agent visible in Lead Chat"}</span> : null}
                   </div>
                   <div className="mb-2 flex gap-2">
-                    <input value={attachmentLink} onChange={(e) => setAttachmentLink(e.target.value)} placeholder={t.attachLink} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-2 py-1 text-xs" />
+                    <input value={attachmentLink} onChange={(e) => setAttachmentLink(e.target.value)} placeholder={t.attachLink} className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-2 py-1 text-xs" />
                     <button type="button" onClick={addLinkAttachment} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.addLink}</button>
                     <label className="cursor-pointer rounded bg-[#3a3d41] px-2 py-1 text-xs">
                       {t.attachImage}
@@ -2029,7 +2324,7 @@ export function IdeApp() {
                     </label>
                   </div>
                   {pendingAttachments.length > 0 ? (
-                    <div className="mb-2 rounded border border-[#3a3d41] bg-[#252526] p-2 text-xs">
+                    <div className="mb-2 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2 text-xs">
                       {pendingAttachments?.map((att, i) => (
                         <div key={`${att.type}-${i}`}>{att.type === "link" ? att.url : att.name || "image"}</div>
                       ))}
@@ -2040,14 +2335,14 @@ export function IdeApp() {
                   ) : null}
                   <div className="mb-1 flex flex-wrap gap-1">
                     {["/fix", "/explain", "/test", "/refactor", "/docs"].map((cmd) => (
-                      <button key={cmd} type="button" onClick={() => quickCommand(`${cmd} `, "group")} className="rounded bg-[#2d2d30] px-1.5 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41]">{cmd}</button>
+                      <button key={cmd} type="button" onClick={() => quickCommand(`${cmd} `, "group")} className="rounded bg-[var(--bg-panel-alt)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] hover:bg-[#3a3d41]">{cmd}</button>
                     ))}
                     {sortAgents(data?.agents ?? []).map((agent) => (
-                      <button key={`@${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "group")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[#2d2d30]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
+                      <button key={`@${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "group")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[var(--bg-panel-alt)]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
                     ))}
                   </div>
                   <div className="flex gap-2">
-                    <input value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value)} disabled={chatRunning} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <input value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value)} disabled={chatRunning} className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -2061,7 +2356,15 @@ export function IdeApp() {
         <div className="z-10 h-1 cursor-row-resize bg-transparent hover:bg-[#007acc]" onPointerDown={startRowResize} />
 
         {/* Bottom row: Terminal | Logs */}
-        <div className="flex border-t border-[#2d2d30]" style={{ height: `${bottomRowHeight}px`, minHeight: collapsedPanels.terminal && collapsedPanels.logs ? `${COLLAPSED_BOTTOM}px` : "auto" }}>
+        <div
+          className="absolute bottom-0 z-10 flex border-t border-[var(--border-default)] bg-[var(--bg-terminal)] shadow-[0_-12px_30px_rgba(0,0,0,0.24)]"
+          style={{
+            left: collapsedPanels.explorer ? `${COLLAPSED_SIDE}px` : `${topGrows[0] * 100}%`,
+            right: `${(topGrows[2] + topGrows[3]) * 100}%`,
+            height: `${bottomRowHeight}px`,
+            minHeight: collapsedPanels.terminal && collapsedPanels.logs ? `${COLLAPSED_BOTTOM}px` : "auto",
+          }}
+        >
           {/* Terminal */}
           <div className={`relative ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("terminal", t.terminal, false)}
@@ -2070,20 +2373,25 @@ export function IdeApp() {
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.terminal}</span>
                   <div className="flex items-center gap-0.5">
+                    <button type="button" onClick={() => void clearTerminal()} disabled={busy} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-0.5 text-[10px] text-slate-300 hover:border-blue-400 disabled:opacity-50">clear</button>
                     {renderCollapseButton("terminal")}
                     {renderExpandButton("terminal")}
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 overflow-y-auto bg-[#111214] p-3 font-mono text-xs">
+                <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--bg-terminal)] p-2 font-mono text-[10px]">
                   {data?.terminal?.map((entry) => (
-                    <div key={entry.id} className="mb-3">
-                      <div className="text-[#4fc1ff]">$ {entry.command}</div>
-                      <pre className="whitespace-pre-wrap">{entry.output}</pre>
+                    <div key={entry.id} className="mb-2 grid grid-cols-[auto_1fr] gap-2">
+                      <span className="text-slate-600">{new Date(entry.createdAt).toLocaleTimeString(locale)}</span>
+                      <div>
+                        <div className={entry.status === "success" ? "text-emerald-400" : entry.status === "timeout" ? "text-amber-300" : "text-red-300"}>$ {entry.command}</div>
+                        <pre className="whitespace-pre-wrap text-slate-300">{entry.output}</pre>
+                      </div>
                     </div>
                   ))}
                 </div>
-                <form onSubmit={runTerminal} className="border-t border-[#2d2d30] p-3">
-                  <input value={terminalCommand} onChange={(e) => setTerminalCommand(e.target.value)} className="w-full rounded border border-[#3a3d41] bg-[#252526] px-3 py-2 text-xs outline-none" />
+                <form onSubmit={runTerminal} className="flex items-center gap-2 border-t border-[var(--border-default)] bg-[var(--bg-terminal)] p-2">
+                  <span className="font-mono text-emerald-400">$</span>
+                  <input value={terminalCommand} onChange={(e) => setTerminalCommand(e.target.value)} placeholder={locale === "ru" ? "Введите команду..." : "Enter command..."} className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-slate-600" />
                 </form>
               </section>
             )}
@@ -2103,16 +2411,16 @@ export function IdeApp() {
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 text-xs">
                   {data?.systemEvents?.map((event) => (
-                    <article key={`event-${event.id}`} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
-                      <p className="text-[10px] text-[#9da3b2]">{event.source} · {new Date(event.createdAt).toLocaleTimeString(locale)}</p>
-                      <p>{event.message}</p>
-                      {event.details ? <pre className="mt-1 whitespace-pre-wrap text-[10px] text-[#9da3b2]">{event.details}</pre> : null}
+                    <article key={`event-${event.id}`} className={`rounded border p-2 ${eventTone(event.level).border} ${eventTone(event.level).background}`}>
+                      <p className="flex items-center gap-1 text-[10px] text-slate-500"><span className={`inline-block h-1.5 w-1.5 rounded-full ${eventTone(event.level).dot}`} />{event.source} · {new Date(event.createdAt).toLocaleTimeString(locale)}</p>
+                      <p className={`mt-0.5 ${eventTone(event.level).text}`}>{event.message}</p>
+                      {event.details ? <pre className="mt-1 whitespace-pre-wrap text-[10px] text-slate-400">{event.details}</pre> : null}
                     </article>
                   ))}
                   {data?.findings?.map((finding) => (
-                    <article key={finding.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
-                      <p className="text-[#9da3b2]">[{finding.severity.toUpperCase()}] {finding.filePath}{finding.line ? `:${finding.line}` : ""}</p>
-                      <p>{finding.message}</p>
+                    <article key={finding.id} className="rounded border border-amber-500/30 bg-amber-500/10 p-2">
+                      <p className="text-amber-300">[{finding.severity.toUpperCase()}] {finding.filePath}{finding.line ? `:${finding.line}` : ""}</p>
+                      <p className="mt-0.5 text-amber-100">{finding.message}</p>
                     </article>
                   ))}
                 </div>
@@ -2125,24 +2433,24 @@ export function IdeApp() {
       {/* Context menu for file tree */}
       {contextMenu ? (
         <div
-          className="context-menu fixed z-50 min-w-[160px] rounded border border-[#3a3d41] bg-[#252526] py-1 shadow-[0_8px_24px_rgba(0,0,0,0.6)]"
+          className="context-menu fixed z-50 min-w-[160px] rounded border border-[var(--border-default)] bg-[var(--bg-panel)] py-1 shadow-[0_8px_24px_rgba(0,0,0,0.6)]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
             type="button"
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
-            onClick={() => { createTreeEntry("file", contextMenu.entry.kind === "directory" ? contextMenu.entry.path : contextMenu.entry.path.split("/").slice(0, -1).join("/")); setContextMenu(null); }}
+            onClick={() => beginCreateEntry("file", contextMenu.entry.kind === "directory" ? contextMenu.entry.path : contextMenu.entry.path.split("/").slice(0, -1).join("/"))}
           >
             📄 {t.newFile}
           </button>
           <button
             type="button"
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
-            onClick={() => { createTreeEntry("directory", contextMenu.entry.kind === "directory" ? contextMenu.entry.path : contextMenu.entry.path.split("/").slice(0, -1).join("/")); setContextMenu(null); }}
+            onClick={() => beginCreateEntry("directory", contextMenu.entry.kind === "directory" ? contextMenu.entry.path : contextMenu.entry.path.split("/").slice(0, -1).join("/"))}
           >
             📁 {t.newFolder}
           </button>
-          <div className="my-1 border-t border-[#3a3d41]" />
+          <div className="my-1 border-t border-[var(--border-default)]" />
           <button
             type="button"
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
@@ -2171,13 +2479,13 @@ export function IdeApp() {
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-10">
-          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
-            <h3 className="mb-2 text-xs uppercase text-[#9da3b2]">{t.projectFolder}</h3>
+          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+            <h3 className="mb-2 text-xs uppercase text-[var(--text-secondary)]">{t.projectFolder}</h3>
             <input
               value={workspaceRootDraft}
               onChange={(e) => setWorkspaceRootDraft(e.target.value)}
               placeholder={t.folderPath}
-              className="mb-2 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+              className="mb-2 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
             />
             <div className="flex gap-2">
               <button type="button" onClick={() => void connectWorkspaceFolder()} disabled={busy} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:opacity-60">
@@ -2187,64 +2495,64 @@ export function IdeApp() {
                 {t.browseFolder}
               </button>
             </div>
-            <p className="mt-2 text-[11px] text-[#9da3b2]">{workspaceRootDraft || t.noFile}</p>
+            <p className="mt-2 text-[11px] text-[var(--text-secondary)]">{workspaceRootDraft || t.noFile}</p>
           </section>
 
           <section className="mb-5">
-            <h3 className="mb-2 text-xs uppercase text-[#9da3b2]">{t.lang}</h3>
+            <h3 className="mb-2 text-xs uppercase text-[var(--text-secondary)]">{t.lang}</h3>
             <div className="flex gap-2">
-              <button type="button" onClick={() => switchLocale("ru")} className={`rounded px-2 py-1 text-sm ${locale === "ru" ? "bg-[#007acc]" : "bg-[#2d2d30]"}`}>🇷🇺</button>
-              <button type="button" onClick={() => switchLocale("en")} className={`rounded px-2 py-1 text-sm ${locale === "en" ? "bg-[#007acc]" : "bg-[#2d2d30]"}`}>🇺🇸</button>
+              <button type="button" onClick={() => switchLocale("ru")} className={`rounded px-2 py-1 text-sm ${locale === "ru" ? "bg-[#007acc]" : "bg-[var(--bg-panel-alt)]"}`}>🇷🇺</button>
+              <button type="button" onClick={() => switchLocale("en")} className={`rounded px-2 py-1 text-sm ${locale === "en" ? "bg-[#007acc]" : "bg-[var(--bg-panel-alt)]"}`}>🇺🇸</button>
             </div>
           </section>
 
           <section className="mb-5">
-            <h3 className="mb-2 text-xs uppercase text-[#9da3b2]">{t.importCode}</h3>
-            <p className="mb-2 text-xs text-[#9da3b2]">{t.importHint}</p>
+            <h3 className="mb-2 text-xs uppercase text-[var(--text-secondary)]">{t.importCode}</h3>
+            <p className="mb-2 text-xs text-[var(--text-secondary)]">{t.importHint}</p>
             <input type="file" multiple onChange={onPickImportFiles} className="mb-2 block w-full text-xs" />
             <button type="button" onClick={importOwnFiles} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white">{t.importBtn}</button>
           </section>
 
           <section className="mb-5">
-            <button type="button" onClick={() => setProvidersOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t?.apiKeys}</span><span className="text-sm">{providersOpen ? "▼" : "▶"}</span></button>
+            <button type="button" onClick={() => setProvidersOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[var(--text-secondary)]"><span>{t?.apiKeys}</span><span className="text-sm">{providersOpen ? "▼" : "▶"}</span></button>
             {providersOpen ? <>
-            <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="mb-2 inline-block text-xs text-[#4fc1ff] underline">
+            <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="mb-2 inline-block text-xs text-[var(--text-accent)] underline">
               {t.freeOpenRouter}
             </a>
             <div className="space-y-3">
               {PROVIDER_PRESETS.filter((p) => p.id !== "custom" && p.id !== "mock")?.map((provider) => (
-                <div key={provider.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
+                <div key={provider.id} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
                   <p className="text-xs font-semibold text-white">{provider.label}</p>
-                  <p className="text-[11px] text-[#9da3b2]">{t.baseUrl}: {provider.baseUrl}</p>
-                  <p className="text-[11px] text-[#9da3b2]">{t.defaultModel}: {provider.defaultModel}</p>
+                  <p className="text-[11px] text-[var(--text-secondary)]">{t.baseUrl}: {provider.baseUrl}</p>
+                  <p className="text-[11px] text-[var(--text-secondary)]">{t.defaultModel}: {provider.defaultModel}</p>
                   <input
                     value={apiKeysDraft[provider.id] ?? ""}
                     onChange={(e) => setApiKeysDraft((prev) => ({ ...prev, [provider.id]: e.target.value }))}
                     type="password"
-                    className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                    className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                     placeholder={`${provider.label} API key`}
                   />
                 </div>
               ))}
             </div>
 
-            <div className="mt-3 rounded border border-[#3a3d41] bg-[#252526] p-2">
+            <div className="mt-3 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
               <p className="mb-2 text-xs font-semibold text-white">{t.github}</p>
-              <label className="mb-1 block text-[11px] text-[#9da3b2]">
+              <label className="mb-1 block text-[11px] text-[var(--text-secondary)]">
                 {t?.githubToken}
                 <input
                   value={githubTokenDraft}
                   onChange={(e) => setGithubTokenDraft(e.target.value)}
                   type="password"
-                  className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                  className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                 />
               </label>
-              <label className="mb-1 block text-[11px] text-[#9da3b2]">
+              <label className="mb-1 block text-[11px] text-[var(--text-secondary)]">
                 {t?.githubRepo}
                 <input
                   value={githubRepoDraft}
                   onChange={(e) => setGithubRepoDraft(e.target.value)}
-                  className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                  className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                   placeholder="username/repository"
                 />
               </label>
@@ -2265,9 +2573,9 @@ export function IdeApp() {
                 {locale === "ru" ? "Авто-утверждение (автономный цикл)" : "Auto-Approve (autonomous cycle)"}
               </label>
               <div className="mt-2">
-                <p className="text-xs text-[#9da3b2]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>
+                <p className="text-xs text-[var(--text-secondary)]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>
                 <div className="flex gap-2 mt-1">
-                  <input value={mobileTokenDraft} onChange={(e) => setMobileTokenDraft(e.target.value)} placeholder={locale === "ru" ? "Оставьте пустым чтобы отключить" : "Leave empty to disable"} className="flex-1 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                  <input value={mobileTokenDraft} onChange={(e) => setMobileTokenDraft(e.target.value)} placeholder={locale === "ru" ? "Оставьте пустым чтобы отключить" : "Leave empty to disable"} className="flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
                 {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:3210/mobile?token={mobileTokenDraft}</span> : null}
               </div>
               <div className="mt-3 border-t border-[#2d2d30] pt-3">
@@ -2286,14 +2594,14 @@ export function IdeApp() {
                     <div className="mt-2">
                       <div className="flex items-center gap-2 rounded bg-[#1e3323] p-2 text-xs">
                         <span className="text-[#6a9955]">🟢 {locale === "ru" ? "Активен" : "Active"}</span>
-                        <a href={mobileUrl} target="_blank" rel="noopener noreferrer" className="truncate text-[#4fc1ff] underline">{mobileUrl}</a>
-                        <button type="button" onClick={() => { navigator.clipboard?.writeText(mobileUrl); setStatus(locale === "ru" ? "Ссылка скопирована" : "Link copied"); }} className="whitespace-nowrap text-[10px] text-[#9da3b2] hover:text-white">{locale === "ru" ? "Копировать" : "Copy"}</button>
+                        <a href={mobileUrl} target="_blank" rel="noopener noreferrer" className="truncate text-[var(--text-accent)] underline">{mobileUrl}</a>
+                        <button type="button" onClick={() => { navigator.clipboard?.writeText(mobileUrl); setStatus(locale === "ru" ? "Ссылка скопирована" : "Link copied"); }} className="whitespace-nowrap text-[10px] text-[var(--text-secondary)] hover:text-white">{locale === "ru" ? "Копировать" : "Copy"}</button>
                       </div>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={`/api/qrcode?url=${encodeURIComponent(mobileUrl)}`} alt="QR code" className="mt-2 h-[140px] w-[140px] rounded border border-[#2d2d30]" />
                     </div>
                   );
-                })() : <p className="mt-2 text-[10px] text-[#9da3b2]">{locale === "ru" ? "Без регистрации, токенов и VPN." : "No registration, tokens, or VPN required."}</p>}
+                })() : <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Без регистрации, токенов и VPN." : "No registration, tokens, or VPN required."}</p>}
               </div>
               </div>
             </div>
@@ -2302,51 +2610,51 @@ export function IdeApp() {
             </> : null}
           </section>
 
-          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
+          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-semibold">{locale === "ru" ? "Live Preview проекта" : "Project Live Preview"}</p>
-                <p className="text-[10px] text-[#9da3b2]">{previewUrl || `${previewCommandDraft} · :${previewPortDraft}`}</p>
+                <p className="text-[10px] text-[var(--text-secondary)]">{previewUrl || `${previewCommandDraft} · :${previewPortDraft}`}</p>
               </div>
               <button type="button" onClick={() => setPreviewOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">👁️ {locale === "ru" ? "Открыть" : "Open"}</button>
             </div>
             <div className="mt-2 flex gap-2">
-              <input value={previewCommandDraft} onChange={(e) => setPreviewCommandDraft(e.target.value)} className="min-w-0 flex-1 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" placeholder="npm run dev" />
-              <input type="number" min={1} max={65535} value={previewPortDraft} onChange={(e) => setPreviewPortDraft(Number(e.target.value) || 4173)} className="w-20 rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+              <input value={previewCommandDraft} onChange={(e) => setPreviewCommandDraft(e.target.value)} className="min-w-0 flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" placeholder="npm run dev" />
+              <input type="number" min={1} max={65535} value={previewPortDraft} onChange={(e) => setPreviewPortDraft(Number(e.target.value) || 4173)} className="w-20 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             </div>
           </section>
 
-          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
+          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-semibold">{locale === "ru" ? "Пресет проекта" : "Project preset"}</p>
-                <p className="text-[10px] text-[#9da3b2]">{data?.settings.projectTemplate || (locale === "ru" ? "Не выбран" : "Not selected")}</p>
+                <p className="text-[10px] text-[var(--text-secondary)]">{data?.settings.projectTemplate || (locale === "ru" ? "Не выбран" : "Not selected")}</p>
               </div>
               <button type="button" onClick={() => setTemplateOpen(true)} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white">⚡ {locale === "ru" ? "Выбрать" : "Choose"}</button>
             </div>
           </section>
 
-          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
+          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">Telegram</p>
-            <label className="mb-2 block text-[11px] text-[#9da3b2]">Telegram Bot Token
-              <input value={telegramTokenDraft} onChange={(e) => setTelegramTokenDraft(e.target.value)} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "••••••••" : "123456:ABC..."} className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+            <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Bot Token
+              <input value={telegramTokenDraft} onChange={(e) => setTelegramTokenDraft(e.target.value)} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "••••••••" : "123456:ABC..."} className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             </label>
-            <label className="mb-2 block text-[11px] text-[#9da3b2]">Telegram Chat ID
-              <input value={telegramChatIdDraft} onChange={(e) => setTelegramChatIdDraft(e.target.value)} placeholder="-100..." className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+            <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Chat ID
+              <input value={telegramChatIdDraft} onChange={(e) => setTelegramChatIdDraft(e.target.value)} placeholder="-100..." className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             </label>
             <button type="button" onClick={() => void testTelegram()} disabled={telegramTesting || !telegramChatIdDraft.trim()} className="rounded bg-[#229ed9] px-3 py-1 text-xs text-white disabled:opacity-50">{telegramTesting ? "..." : (locale === "ru" ? "Проверить связь" : "Test connection")}</button>
-            <p className="mt-2 text-[10px] text-[#9da3b2]">{locale === "ru" ? "Режим: long polling. Сохраните настройки перед проверкой." : "Mode: long polling. Save settings before testing."}</p>
+            <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Режим: long polling. Сохраните настройки перед проверкой." : "Mode: long polling. Save settings before testing."}</p>
           </section>
 
-          <section className="mb-5 rounded border border-[#3a3d41] bg-[#252526] p-2">
+          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">{locale === "ru" ? "Fallback Chain моделей" : "Fallback model chain"}</p>
-            <textarea value={fallbackModelsDraft} onChange={(e) => setFallbackModelsDraft(e.target.value)} placeholder={locale === "ru" ? "По одной модели на строку\nнапример: gpt-4o-mini\nclaude-3-5-haiku" : "One model per line\ne.g. gpt-4o-mini\nclaude-3-5-haiku"} className="min-h-16 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-            <p className="mt-1 text-[10px] text-[#9da3b2]">{locale === "ru" ? "Используется при 403, 429, 5xx и timeout." : "Used for 403, 429, 5xx and timeouts."}</p>
+            <textarea value={fallbackModelsDraft} onChange={(e) => setFallbackModelsDraft(e.target.value)} placeholder={locale === "ru" ? "По одной модели на строку\nнапример: gpt-4o-mini\nclaude-3-5-haiku" : "One model per line\ne.g. gpt-4o-mini\nclaude-3-5-haiku"} className="min-h-16 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+            <p className="mt-1 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Используется при 403, 429, 5xx и timeout." : "Used for 403, 429, 5xx and timeouts."}</p>
           </section>
 
           <section className="mb-5">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs uppercase text-[#9da3b2]">{locale === "ru" ? "ЭКСПОРТ / ИМПОРТ" : "EXPORT / IMPORT"}</span>
+              <span className="text-xs uppercase text-[var(--text-secondary)]">{locale === "ru" ? "ЭКСПОРТ / ИМПОРТ" : "EXPORT / IMPORT"}</span>
               <div className="flex gap-2">
                 <button type="button" onClick={exportAgents} className="rounded bg-[#3a3d41] px-2 py-1 text-xs text-white">{t.exportAgents}</button>
                 <label className="cursor-pointer rounded bg-[#3a3d41] px-2 py-1 text-xs text-white">
@@ -2355,11 +2663,11 @@ export function IdeApp() {
                 </label>
               </div>
             </div>
-            <p className="text-[10px] text-[#9da3b2]">{t.importAgentsDesc}</p>
+            <p className="text-[10px] text-[var(--text-secondary)]">{t.importAgentsDesc}</p>
           </section>
 
           <section>
-            <button type="button" onClick={() => setAgentsOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[#9da3b2]"><span>{t.agents}</span><span className="text-sm">{agentsOpen ? "▼" : "▶"}</span></button>
+            <button type="button" onClick={() => setAgentsOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[var(--text-secondary)]"><span>{t.agents}</span><span className="text-sm">{agentsOpen ? "▼" : "▶"}</span></button>
             {agentsOpen ? <div className="space-y-2">
               {sortAgents(data?.agents ?? [])?.map((agent) => {
                 const draft =
@@ -2380,16 +2688,16 @@ export function IdeApp() {
                 const draftDirty = isAgentDraftDirty(agent, draft);
 
                 return (
-                  <article key={agent.id} className="rounded border border-[#3a3d41] bg-[#252526] p-2">
+                  <article key={agent.id} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
                     <div className="mb-1 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <span className="inline-block h-3 w-3 shrink-0 rounded-full border border-[#555]" style={{ backgroundColor: draft.color || ROLE_COLORS[agent.role] || "#4fc1ff" }} />
                         <div>
                           <span className="text-sm">{agent.name}</span>
-                          <p className="text-[10px] text-[#4fc1ff]">{providerModelLabel(draft.provider, draft.model)}</p>
+                          <p className="text-[10px] text-[var(--text-accent)]">{providerModelLabel(draft.provider, draft.model)}</p>
                         </div>
                       </div>
-                      <span className="text-[10px] text-[#9da3b2]">{draftDirty ? t.unsaved : roleLabel(agent.role)}</span>
+                      <span className="text-[10px] text-[var(--text-secondary)]">{draftDirty ? t.unsaved : roleLabel(agent.role)}</span>
                     </div>
 
                     <select
@@ -2402,14 +2710,14 @@ export function IdeApp() {
                         }));
                         void fetchModels(preset.id, preset.baseUrl, apiKeysDraft[preset.id]);
                       }}
-                      className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                      className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                     >
                       {PROVIDER_PRESETS?.map((preset) => (
                         <option key={preset.id} value={preset.id}>{preset.label}</option>
                       ))}
                     </select>
 
-                    <input value={draft.baseUrl} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, baseUrl: e.target.value } }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                    <input value={draft.baseUrl} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, baseUrl: e.target.value } }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
 
                     <div className="mb-1 flex gap-1">
                       <select
@@ -2421,7 +2729,7 @@ export function IdeApp() {
                             setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value, manualModel: false } }));
                           }
                         }}
-                        className="w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                        className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                       >
                         {(modelOptions[draft.provider] ?? getProviderPreset(draft.provider).fallbackModels)?.map((model) => (
                           <option key={model} value={model}>{model}</option>
@@ -2434,24 +2742,24 @@ export function IdeApp() {
                       </button>
                     </div>
 
-                    {draft.manualModel ? <input value={draft.model} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value } }))} placeholder={t.model} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" /> : null}
+                    {draft.manualModel ? <input value={draft.model} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value } }))} placeholder={t.model} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" /> : null}
 
                     <select value={draft.role} onChange={(e) => {
                       const newRole = e.target.value;
                       const newColor = ROLE_COLORS[newRole] ?? "#4fc1ff";
                       setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, role: newRole, color: draft.color === (ROLE_COLORS[draft.role] ?? "") ? newColor : draft.color } }));
-                    }} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs">
+                    }} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs">
                       {roleOptions?.map((role) => <option key={role} value={role}>{roleLabel(role)} ({role})</option>)}
                     </select>
 
                     <div className="mb-1 flex items-center gap-2">
-                      <span className="text-[10px] text-[#9da3b2]">Цвет:</span>
-                      <input type="color" value={draft.color} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, color: e.target.value } }))} className="h-6 w-8 cursor-pointer rounded border border-[#3a3d41] bg-[#1e1e1e]" />
+                      <span className="text-[10px] text-[var(--text-secondary)]">Цвет:</span>
+                      <input type="color" value={draft.color} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, color: e.target.value } }))} className="h-6 w-8 cursor-pointer rounded border border-[var(--border-default)] bg-[var(--bg-app)]" />
                     </div>
 
-                    <input value={draft.description} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, description: e.target.value } }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-                    <textarea value={draft.skill} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, skill: e.target.value } }))} placeholder={t.skill} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-                    <textarea value={draft.systemPrompt} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, systemPrompt: e.target.value } }))} placeholder={t.prompt} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                    <input value={draft.description} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, description: e.target.value } }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                    <textarea value={draft.skill} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, skill: e.target.value } }))} placeholder={t.skill} className="mb-1 min-h-10 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                    <textarea value={draft.systemPrompt} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, systemPrompt: e.target.value } }))} placeholder={t.prompt} className="mb-1 min-h-10 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
                     <div className="flex gap-2">
                       {!isMain ? <button type="button" onClick={() => setMainCoder(agent.id)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.setMain}</button> : null}
                       <button type="button" onClick={() => saveAgentProfile(agent.id)} disabled={busy || !draftDirty} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.saveProfile}</button>
@@ -2462,19 +2770,19 @@ export function IdeApp() {
 
               {/* Add agent button / form */}
               {!showAddAgent ? (
-                <button type="button" onClick={() => { setShowAddAgent(true); setAddAgentMode(null); setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? ""))); }} className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-[#3a3d41] bg-[#1e1e1e] px-3 py-2 text-xs text-[#9da3b2] hover:border-[#4fc1ff] hover:text-white">
+                <button type="button" onClick={() => { setShowAddAgent(true); setAddAgentMode(null); setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? ""))); }} className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-[var(--border-default)] bg-[var(--bg-app)] px-3 py-2 text-xs text-[var(--text-secondary)] hover:border-[#4fc1ff] hover:text-white">
                   + {locale === "ru" ? "Добавить агента" : "Add agent"}
                 </button>
               ) : (
                 <article className="rounded border border-[#007acc] bg-[#1b1b1c] p-2">
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-xs text-[#9da3b2]">{addAgentMode === "template" ? (locale === "ru" ? "Новый агент (шаблон)" : "New agent (template)") : addAgentMode === "custom" ? (locale === "ru" ? "Новый агент (свой)" : "New agent (custom)") : locale === "ru" ? "Выберите вариант" : "Choose option"}</span>
-                    <button type="button" onClick={() => setShowAddAgent(false)} className="rounded px-1 py-0.5 text-[10px] text-[#9da3b2] hover:bg-[#3a3d41]">✕</button>
+                    <span className="text-xs text-[var(--text-secondary)]">{addAgentMode === "template" ? (locale === "ru" ? "Новый агент (шаблон)" : "New agent (template)") : addAgentMode === "custom" ? (locale === "ru" ? "Новый агент (свой)" : "New agent (custom)") : locale === "ru" ? "Выберите вариант" : "Choose option"}</span>
+                    <button type="button" onClick={() => setShowAddAgent(false)} className="rounded px-1 py-0.5 text-[10px] text-[var(--text-secondary)] hover:bg-[#3a3d41]">✕</button>
                   </div>
 
                   {addAgentMode === null ? (
                     <div className="space-y-1">
-                      <p className="mb-2 text-[10px] text-[#9da3b2]">{locale === "ru" ? "Быстрый старт — готовые роли агентов:" : "Quick start — preset agent roles:"}</p>
+                      <p className="mb-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Быстрый старт — готовые роли агентов:" : "Quick start — preset agent roles:"}</p>
                       {roleOptions.map((role) => (
                         <button
                           key={role}
@@ -2487,10 +2795,10 @@ export function IdeApp() {
                         >
                           <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ROLE_COLORS[role] ?? "#4fc1ff" }} />
                           <span className="font-medium">{roleLabel(role)}</span>
-                          <span className="text-[10px] text-[#9da3b2]">({role})</span>
+                          <span className="text-[10px] text-[var(--text-secondary)]">({role})</span>
                         </button>
                       ))}
-                      <div className="border-t border-[#3a3d41] pt-1">
+                      <div className="border-t border-[var(--border-default)] pt-1">
                         <button
                           type="button"
                           onClick={() => { setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? ""))); setAddAgentMode("custom"); }}
@@ -2502,8 +2810,8 @@ export function IdeApp() {
                     </div>
                   ) : (
                     <>
-                      <input value={newAgent.name} onChange={(e) => setNewAgent((p) => ({ ...p, name: e.target.value }))} placeholder={t.name} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-                      <label className="mb-1 block text-[11px] text-[#9da3b2]">
+                      <input value={newAgent.name} onChange={(e) => setNewAgent((p) => ({ ...p, name: e.target.value }))} placeholder={t.name} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                      <label className="mb-1 block text-[11px] text-[var(--text-secondary)]">
                         {t.provider}
                         <select
                           value={newAgent.provider}
@@ -2512,14 +2820,14 @@ export function IdeApp() {
                             setNewAgent((p) => ({ ...p, provider: preset.id, baseUrl: preset.baseUrl, model: preset.defaultModel, manualModel: false }));
                             void fetchModels(preset.id, preset.baseUrl, apiKeysDraft[preset.id]);
                           }}
-                          className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                          className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                         >
                           {PROVIDER_PRESETS?.map((preset) => (
                             <option key={preset.id} value={preset.id}>{preset.label}</option>
                           ))}
                         </select>
                       </label>
-                      <input value={newAgent.baseUrl} onChange={(e) => setNewAgent((p) => ({ ...p, baseUrl: e.target.value }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                      <input value={newAgent.baseUrl} onChange={(e) => setNewAgent((p) => ({ ...p, baseUrl: e.target.value }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
                       <div className="mb-1 flex gap-1">
                         <select
                           value={newAgent.manualModel ? "__manual__" : newAgent.model}
@@ -2530,7 +2838,7 @@ export function IdeApp() {
                               setNewAgent((p) => ({ ...p, model: e.target.value, manualModel: false }));
                             }
                           }}
-                          className="w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs"
+                          className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                         >
                           {(modelOptions[newAgent.provider] ?? getProviderPreset(newAgent.provider).fallbackModels)?.map((model) => (
                             <option key={model} value={model}>{model}</option>
@@ -2542,20 +2850,20 @@ export function IdeApp() {
                           {t.loadModels}
                         </button>
                       </div>
-                      {newAgent.manualModel ? <input value={newAgent.model} onChange={(e) => setNewAgent((p) => ({ ...p, model: e.target.value }))} placeholder={t.model} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" /> : null}
+                      {newAgent.manualModel ? <input value={newAgent.model} onChange={(e) => setNewAgent((p) => ({ ...p, model: e.target.value }))} placeholder={t.model} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" /> : null}
                       <select value={newAgent.role} onChange={(e) => {
                         const newRole = e.target.value;
                         setNewAgent((p) => ({ ...p, role: newRole, color: ROLE_COLORS[newRole] ?? "#4fc1ff" }));
-                      }} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs">
+                      }} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs">
                         {roleOptions?.map((role) => <option key={role} value={role}>{roleLabel(role)} ({role})</option>)}
                       </select>
                       <div className="mb-1 flex items-center gap-2">
-                        <span className="text-[10px] text-[#9da3b2]">Цвет:</span>
-                        <input type="color" value={newAgent.color} onChange={(e) => setNewAgent((p) => ({ ...p, color: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-[#3a3d41] bg-[#1e1e1e]" />
+                        <span className="text-[10px] text-[var(--text-secondary)]">Цвет:</span>
+                        <input type="color" value={newAgent.color} onChange={(e) => setNewAgent((p) => ({ ...p, color: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-[var(--border-default)] bg-[var(--bg-app)]" />
                       </div>
-                      <input value={newAgent.description} onChange={(e) => setNewAgent((p) => ({ ...p, description: e.target.value }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-                      <textarea value={newAgent.skill} onChange={(e) => setNewAgent((p) => ({ ...p, skill: e.target.value }))} placeholder={t.skill} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
-                      <textarea value={newAgent.systemPrompt} onChange={(e) => setNewAgent((p) => ({ ...p, systemPrompt: e.target.value }))} placeholder={t.prompt} className="mb-1 min-h-10 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-1 text-xs" />
+                      <input value={newAgent.description} onChange={(e) => setNewAgent((p) => ({ ...p, description: e.target.value }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                      <textarea value={newAgent.skill} onChange={(e) => setNewAgent((p) => ({ ...p, skill: e.target.value }))} placeholder={t.skill} className="mb-1 min-h-10 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                      <textarea value={newAgent.systemPrompt} onChange={(e) => setNewAgent((p) => ({ ...p, systemPrompt: e.target.value }))} placeholder={t.prompt} className="mb-1 min-h-10 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
                       <button type="button" onClick={createAgent} disabled={busy || !newAgentDirty} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.createAgent}</button>
                     </>
                   )}
@@ -2571,18 +2879,18 @@ export function IdeApp() {
       {githubModalOpen ? (
         <div className="absolute inset-0 z-50 flex items-center justify-center">
           <button type="button" onClick={() => setGithubModalOpen(false)} className="absolute inset-0 bg-black/60" aria-label={t.close} />
-          <form onSubmit={(event) => { event.preventDefault(); void pushToGithub({ token: githubPushToken, repo: githubPushRepo }); }} className="relative z-10 w-[92%] max-w-[460px] rounded border border-[#3a3d41] bg-[#252526] p-4 shadow-xl">
+          <form onSubmit={(event) => { event.preventDefault(); void pushToGithub({ token: githubPushToken, repo: githubPushRepo }); }} className="relative z-10 w-[92%] max-w-[460px] rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-4 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <h2 className="text-sm font-semibold">{locale === "ru" ? "Пуш в GitHub" : "Push to GitHub"}</h2>
               <button type="button" onClick={() => setGithubModalOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
             </div>
-            <label className="mb-3 block text-xs text-[#9da3b2]">
+            <label className="mb-3 block text-xs text-[var(--text-secondary)]">
               GitHub Personal Access Token (PAT)
-              <input value={githubPushToken} onChange={(event) => setGithubPushToken(event.target.value)} type="password" required className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-2 text-xs" autoComplete="off" />
+              <input value={githubPushToken} onChange={(event) => setGithubPushToken(event.target.value)} type="password" required className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-2 text-xs" autoComplete="off" />
             </label>
-            <label className="mb-4 block text-xs text-[#9da3b2]">
+            <label className="mb-4 block text-xs text-[var(--text-secondary)]">
               {locale === "ru" ? "Репозиторий (owner/repo)" : "Repository (owner/repo)"}
-              <input value={githubPushRepo} onChange={(event) => setGithubPushRepo(event.target.value)} placeholder="owner/repo" required className="mt-1 w-full rounded border border-[#3a3d41] bg-[#1e1e1e] px-2 py-2 text-xs" />
+              <input value={githubPushRepo} onChange={(event) => setGithubPushRepo(event.target.value)} placeholder="owner/repo" required className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-2 text-xs" />
             </label>
             <button type="submit" disabled={githubPushLoading || !githubPushToken.trim() || !githubPushRepo.trim()} className="w-full rounded bg-[#0e639c] px-3 py-2 text-xs text-white disabled:opacity-50">
               {githubPushLoading ? (locale === "ru" ? "Пуш выполняется..." : "Pushing...") : (locale === "ru" ? "Инициализировать и пушнуть" : "Initialize and push")}
@@ -2593,7 +2901,7 @@ export function IdeApp() {
 
       {templateOpen ? (
         <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-3">
-          <section className="w-[92vw] max-w-[620px] rounded border border-[#3a3d41] bg-[#252526] p-4 shadow-xl">
+          <section className="w-[92vw] max-w-[620px] rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-4 shadow-xl">
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-sm font-semibold">{locale === "ru" ? "Выбор пресета проекта" : "Choose project preset"}</h2>
               <button type="button" onClick={() => setTemplateOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
@@ -2606,13 +2914,13 @@ export function IdeApp() {
                 ["all", "⚡ Все в одном", "Web + APK + EXE"],
                 ["telegram", "🤖 Telegram-бот / Backend API", "Node.js / Express"],
               ].map(([id, label, description]) => (
-                <button key={id} type="button" onClick={() => setTemplateId(id)} className={`rounded border p-3 text-left ${templateId === id ? "border-[#007acc] bg-[#264f78]" : "border-[#3a3d41] bg-[#1e1e1e]"}`}>
+                <button key={id} type="button" onClick={() => setTemplateId(id)} className={`rounded border p-3 text-left ${templateId === id ? "border-[#007acc] bg-[#264f78]" : "border-[var(--border-default)] bg-[var(--bg-app)]"}`}>
                   <p className="text-xs font-semibold">{label}</p>
-                  <p className="mt-1 text-[10px] text-[#9da3b2]">{description}</p>
+                  <p className="mt-1 text-[10px] text-[var(--text-secondary)]">{description}</p>
                 </button>
               ))}
             </div>
-            <p className="mt-3 text-[10px] text-[#9da3b2]">{workspaceRootDraft || (locale === "ru" ? "Папка проекта не подключена" : "Project folder is not connected")}</p>
+            <p className="mt-3 text-[10px] text-[var(--text-secondary)]">{workspaceRootDraft || (locale === "ru" ? "Папка проекта не подключена" : "Project folder is not connected")}</p>
             <button type="button" onClick={() => void generateTemplate()} disabled={busy || !workspaceRootDraft.trim()} className="mt-3 w-full rounded bg-[#0e639c] px-3 py-2 text-xs text-white disabled:opacity-50">{locale === "ru" ? "Создать структуру проекта" : "Generate project structure"}</button>
           </section>
         </div>
@@ -2621,7 +2929,7 @@ export function IdeApp() {
       {supportOpen ? (
         <div className="absolute inset-0 z-40 flex items-center justify-center">
           <button type="button" onClick={() => setSupportOpen(false)} className="absolute inset-0 bg-black/60 backdrop-blur-sm" aria-label={t.close} />
-          <article className="relative z-10 w-[92%] max-w-[460px] rounded-xl border border-[#3a3d41] bg-[#252526] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.6)]">
+          <article className="relative z-10 w-[92%] max-w-[460px] rounded-xl border border-[var(--border-default)] bg-[var(--bg-panel)] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.6)]">
             <header className="mb-4 flex items-center justify-between">
               <h2 className="text-base font-semibold text-white">{t.supportTitle}</h2>
               <button type="button" onClick={() => setSupportOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs hover:bg-[#4b4e54]">
@@ -2643,18 +2951,18 @@ export function IdeApp() {
                 </a>
               </section>
 
-              <section className="rounded-lg border border-[#3a3d41] bg-[#1e1e1e] p-4">
+              <section className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-app)] p-4">
                 <h3 className="mb-1 text-sm font-semibold text-white">{t.emailTitle}</h3>
-                <p className="mb-2 text-xs text-[#9da3b2]">{t.emailDesc}</p>
+                <p className="mb-2 text-xs text-[var(--text-secondary)]">{t.emailDesc}</p>
                 <div className="flex items-center gap-2">
-                  <span className="text-xs text-[#9da3b2]">{t.emailLabel}:</span>
-                  <a href="mailto:tsarskiysoft@gmail.com" className="rounded bg-[#2d2d30] px-2 py-1 text-xs font-medium text-[#4fc1ff] hover:underline">
+                  <span className="text-xs text-[var(--text-secondary)]">{t.emailLabel}:</span>
+                  <a href="mailto:tsarskiysoft@gmail.com" className="rounded bg-[var(--bg-panel-alt)] px-2 py-1 text-xs font-medium text-[var(--text-accent)] hover:underline">
                     tsarskiysoft@gmail.com
                   </a>
                 </div>
               </section>
 
-              <p className="text-center text-[11px] text-[#9da3b2]">{t.supportThanks}</p>
+              <p className="text-center text-[11px] text-[var(--text-secondary)]">{t.supportThanks}</p>
             </div>
           </article>
         </div>

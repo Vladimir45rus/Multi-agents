@@ -1,6 +1,16 @@
 import { runSandboxCommand } from "@/lib/terminal-sandbox";
+import { clearTerminalHistory } from "@/lib/workspace";
 
 export const runtime = "nodejs";
+
+export async function DELETE() {
+  try {
+    await clearTerminalHistory();
+    return Response.json({ ok: true });
+  } catch (error) {
+    return Response.json({ error: error instanceof Error ? error.message : "Terminal clear failed" }, { status: 400 });
+  }
+}
 
 export async function POST(request: Request) {
   try {

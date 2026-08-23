@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import Script from "next/script";
 import { AppShell } from "@/components/app-shell";
 import "./globals.css";
 
@@ -14,10 +15,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
     <html lang="ru" suppressHydrationWarning>
       <head>
         {/* Prevent white flash: set theme before first paint */}
-        <script
-          dangerouslySetInnerHTML={{
-            __html: `
-(function() {
+        <Script id="theme-init" strategy="beforeInteractive">
+{`(function() {
   try {
     var t = localStorage.getItem('code-studio-theme');
     if (t === 'light') {
@@ -30,11 +29,10 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       document.documentElement.setAttribute('data-theme', 'dark');
     }
   } catch(e) {}
-})();`,
-          }}
-        />
+})();`}
+        </Script>
       </head>
-      <body>
+      <body suppressHydrationWarning>
         <AppShell>{children}</AppShell>
       </body>
     </html>

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
+import Script from "next/script";
 import { Suspense } from "react";
 import "../globals.css";
 
@@ -13,16 +14,17 @@ export default function MobileLayout({ children }: { children: ReactNode }) {
     <html lang="ru" suppressHydrationWarning>
       <head>
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-        <script dangerouslySetInnerHTML={{ __html: `
-(function() {
+        <Script id="mobile-theme-init" strategy="beforeInteractive">
+{`(function() {
   try {
     var t = localStorage.getItem('code-studio-theme');
     if (t === 'light') document.documentElement.setAttribute('data-theme', 'light');
     else document.documentElement.setAttribute('data-theme', 'dark');
   } catch(e) {}
-})();` }} />
+})();`}
+        </Script>
       </head>
-      <body style={{ background: "var(--bg-app)", color: "var(--text-primary)", fontFamily: "system-ui, sans-serif", margin: 0 }}>
+      <body suppressHydrationWarning style={{ background: "var(--bg-app)", color: "var(--text-primary)", fontFamily: "system-ui, sans-serif", margin: 0 }}>
         <Suspense fallback={<div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100dvh", background: "var(--bg-app)", color: "var(--text-secondary)" }}>Загрузка...</div>}>
           {children}
         </Suspense>

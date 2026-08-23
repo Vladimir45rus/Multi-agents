@@ -827,6 +827,9 @@ export async function* runOrchestrator(options: {
 
       if (patchApproved) {
         const applyResult = await applyStructuredPatches(mainAgent.id, lastPatches);
+        if (lastPatches.length > 0 && !applyResult.applied) {
+          throw new Error(applyResult.error ?? t(locale, "Патч не применён.", "Patch was not applied."));
+        }
         for (const file of applyResult.files) changedFiles.add(file);
         yield {
           type: "event",
@@ -860,6 +863,18 @@ export async function* runOrchestrator(options: {
             status: "rejected",
           }),
         };
+        const report = await finalizeReport({
+          taskId,
+          task,
+          status: "FAILED",
+          changedFiles: [...changedFiles],
+          checkResults: checkHistory,
+          summary: t(locale, "Патч отклонён пользователем; проверки не запускались.", "Patch was rejected by the user; checks were not run."),
+          iterations: iteration,
+        });
+        yield { type: "report", report };
+        yield { type: "task_completed", taskId, iterations: iteration, decision: lastDecision };
+        return;
       }
 
       yield { type: "step", step: "checks" };

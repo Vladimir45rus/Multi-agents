@@ -35,8 +35,25 @@ function filesFor(template: ProjectTemplateId): TemplateFiles {
   };
   if (template === "telegram") return { ...common, "package.json": JSON.stringify({ name: "telegram-backend", version: "0.1.0", private: true, scripts: { dev: "node src/index.js", start: "node src/index.js" }, dependencies: { express: "latest", "node-telegram-bot-api": "latest" } }, null, 2) + "\n", "src/index.js": "const express = require('express');\nconst app = express();\napp.use(express.json());\napp.get('/health', (_req, res) => res.json({ ok: true }));\napp.listen(process.env.PORT || 4173);\n" };
   if (template === "mobile") return { ...common, "package.json": JSON.stringify({ name: "mobile-app", version: "0.1.0", private: true, scripts: { dev: "vite", build: "vite build" }, dependencies: { "@capacitor/core": "latest", react: "latest", "react-dom": "latest" }, devDependencies: { vite: "latest", "@vitejs/plugin-react": "latest" } }, null, 2) + "\n", "index.html": "<div id=\"root\"></div><script type=\"module\" src=\"/src/main.jsx\"></script>\n", "src/main.jsx": "import React from 'react';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')).render(<main>Mobile app</main>);\n" };
-  if (template === "desktop") return { ...common, "package.json": JSON.stringify({ name: "desktop-app", version: "0.1.0", private: true, scripts: { dev: "electron .", start: "electron ." }, devDependencies: { electron: "latest" } }, null, 2) + "\n", "main.cjs": "const { app, BrowserWindow } = require('electron');\napp.whenReady().then(() => { const win = new BrowserWindow({ webPreferences: { contextIsolation: true } }); win.loadURL(process.env.PREVIEW_URL || 'http://localhost:4173'); });\n" };
-  if (template === "all") return { ...filesFor("web"), "capacitor.config.ts": "import type { CapacitorConfig } from '@capacitor/cli';\nconst config: CapacitorConfig = { appId: 'com.example.app', appName: 'Multi Platform App', webDir: 'dist' };\nexport default config;\n", "electron/main.cjs": "const { app, BrowserWindow } = require('electron');\napp.whenReady().then(() => { const win = new BrowserWindow(); win.loadURL('http://localhost:4173'); });\n" };
+  if (template === "desktop") return { ...common, "package.json": JSON.stringify({ name: "desktop-app", version: "0.1.0", private: true, main: "main.cjs", scripts: { dev: "electron .", start: "electron ." }, devDependencies: { electron: "latest" } }, null, 2) + "\n", "main.cjs": "const { app, BrowserWindow } = require('electron');\napp.whenReady().then(() => { const win = new BrowserWindow({ webPreferences: { contextIsolation: true } }); win.loadURL(process.env.PREVIEW_URL || 'http://localhost:4173'); });\n" };
+  if (template === "all") {
+    const webFiles = filesFor("web");
+    const packageJson = JSON.stringify({
+      name: "multi-platform-app",
+      version: "0.1.0",
+      private: true,
+      main: "electron/main.cjs",
+      scripts: {
+        dev: "vite",
+        build: "vite build",
+        "desktop:dev": "electron .",
+        "mobile:sync": "cap sync",
+      },
+      dependencies: { react: "latest", "react-dom": "latest", "@capacitor/core": "latest" },
+      devDependencies: { vite: "latest", "@vitejs/plugin-react": "latest", "@capacitor/cli": "latest", electron: "latest" },
+    }, null, 2) + "\n";
+    return { ...webFiles, "package.json": packageJson, "capacitor.config.ts": "import type { CapacitorConfig } from '@capacitor/cli';\nconst config: CapacitorConfig = { appId: 'com.example.app', appName: 'Multi Platform App', webDir: 'dist' };\nexport default config;\n", "electron/main.cjs": "const { app, BrowserWindow } = require('electron');\napp.whenReady().then(() => { const win = new BrowserWindow({ webPreferences: { contextIsolation: true } }); win.loadURL(process.env.PREVIEW_URL || 'http://localhost:4173'); });\n" };
+  }
   return { ...common, "package.json": JSON.stringify({ name: "web-app", version: "0.1.0", private: true, scripts: { dev: "vite", build: "vite build" }, dependencies: { react: "latest", "react-dom": "latest" }, devDependencies: { vite: "latest", "@vitejs/plugin-react": "latest" } }, null, 2) + "\n", "index.html": "<div id=\"root\"></div><script type=\"module\" src=\"/src/main.jsx\"></script>\n", "src/main.jsx": "import React from 'react';\nimport { createRoot } from 'react-dom/client';\ncreateRoot(document.getElementById('root')).render(<main>Web app</main>);\n" };
 }
 

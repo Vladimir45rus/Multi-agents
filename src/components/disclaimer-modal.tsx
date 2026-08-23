@@ -1,21 +1,27 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 const STORAGE_KEY = "code-studio-disclaimer-accepted";
 
 export function useDisclaimerAccepted() {
-  const [accepted, setAccepted] = useState(() => {
-    if (typeof window === "undefined") return true;
-    return localStorage.getItem(STORAGE_KEY) === "true";
-  });
+  const [hasMounted, setHasMounted] = useState(false);
+  const [accepted, setAccepted] = useState(false);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      setAccepted(localStorage.getItem(STORAGE_KEY) === "true");
+      setHasMounted(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
 
   const accept = () => {
     localStorage.setItem(STORAGE_KEY, "true");
     setAccepted(true);
   };
 
-  return { accepted, accept };
+  return { accepted, hasMounted, accept };
 }
 
 export function DisclaimerModal({ onAccept }: { onAccept: () => void }) {

@@ -11,25 +11,39 @@ const ROLE_LABELS: Record<string, string> = {
   security: "Секурити", observer: "Наблюдатель",
 };
 
-export function MobileSettings({ onBack, agents }: { onBack: () => void; agents: AgentInfo[] }) {
+export function MobileSettings({ onBack, agents, accessToken }: { onBack: () => void; agents: AgentInfo[]; accessToken: string }) {
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
+  const [error, setError] = useState("");
   const [token, setToken] = useState("");
   const [config, setConfig] = useState<{ autoApprove: boolean; mobileAuthToken: string }>({ autoApprove: false, mobileAuthToken: "" });
 
   useEffect(() => {
-    fetch("/api/settings").then(r => r.json()).then(d => {
+    const headers = accessToken ? { "x-mobile-access-token": accessToken } : undefined;
+    fetch("/api/settings", { headers }).then(async (response) => {
+      if (!response.ok) throw new Error("Не удалось загрузить настройки");
+      return response.json();
+    }).then(d => {
       setKeys(d.apiKeys || {});
       setConfig({ autoApprove: d.autoApprove || false, mobileAuthToken: d.mobileAuthToken || "" });
       setToken(d.mobileAuthToken || "");
+    }).catch((reason) => {
+      setSaved(false);
+      setError(reason instanceof Error ? reason.message : "Не удалось загрузить настройки");
     });
-  }, []);
+  }, [accessToken]);
 
   async function saveKeys() {
-    await fetch("/api/settings", {
-      method: "PATCH", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKeys: keys, mobileAuthToken: token }),
+    const headers = new Headers({ "Content-Type": "application/json" });
+    if (accessToken) headers.set("x-mobile-access-token", accessToken);
+    const body: Record<string, unknown> = { apiKeys: keys };
+    if (token.trim()) body.mobileAuthToken = token.trim();
+    const response = await fetch("/api/settings", {
+      method: "PATCH", headers,
+      body: JSON.stringify(body),
     });
+    if (!response.ok) throw new Error("Не удалось сохранить настройки");
+    setError("");
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   }
 
@@ -79,7 +93,8 @@ export function MobileSettings({ onBack, agents }: { onBack: () => void; agents:
             </div>))}
         </div>
 
-        <button onClick={() => void saveKeys()}
+        {error ? <p style={{ color: "#f48771", fontSize: 12, marginBottom: 8 }}>{error}</p> : null}
+        <button onClick={() => void saveKeys().catch((reason) => setError(reason instanceof Error ? reason.message : "Не удалось сохранить настройки"))}
           style={{ width: "100%", padding: "12px", borderRadius: 10, border: "none", background: saved ? "#6a9955" : vars("bg-status"), color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
           {saved ? "✓ Сохранено" : "Сохранить"}
         </button>

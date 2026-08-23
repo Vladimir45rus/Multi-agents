@@ -1,7 +1,10 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceSnapshot, updateWorkspaceSettings } from "@/lib/workspace";
+import { isLoopbackRequest, mobileAccessError } from "@/lib/mobile-auth";
 
 async function handleUpdate(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   const body = (await request.json()) as {
     apiKeys?: Record<string, string>;
     githubToken?: string;
@@ -38,9 +41,12 @@ export async function PATCH(request: Request) {
   catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Settings update failed" }, { status: 400 }); }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const accessError = await mobileAccessError(request);
+    if (accessError) return accessError;
     const workspace = await getWorkspaceSnapshot();
+    if (!isLoopbackRequest(request)) workspace.settings.mobileAuthToken = "";
     return NextResponse.json(workspace.settings);
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : "Settings load failed" }, { status: 500 });

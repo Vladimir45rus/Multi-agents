@@ -42,12 +42,13 @@ export default function CodeEditor({ filePath, value, onChange, onSave, readOnly
     return () => mo.disconnect();
   }, []);
 
-  const handleMount = useCallback((ed: any, mon: any) => {
+  const defineMonacoThemes = useCallback((mon: any) => {
     mon.editor.defineTheme("codebuff-dark", {
       base: "vs-dark", inherit: true, rules: [],
       colors: {
-        "editor.background": "#1e1e1e",
-        "editor.lineHighlightBackground": "#2a2d2e",
+        "editor.background": "#090d16",
+        "editorGutter.background": "#090d16",
+        "editor.lineHighlightBackground": "#172033",
         "editor.selectionBackground": "#264f78",
       },
     });
@@ -55,12 +56,18 @@ export default function CodeEditor({ filePath, value, onChange, onSave, readOnly
       base: "vs", inherit: true, rules: [],
       colors: {
         "editor.background": "#fafafa",
+        "editorGutter.background": "#fafafa",
         "editor.lineHighlightBackground": "#f0f0f0",
         "editor.selectionBackground": "#b3d4fc",
       },
     });
+  }, []);
+
+  const handleMount = useCallback((ed: any, mon: any) => {
+    // Re-apply after mount because Monaco may initially fall back to its default theme.
+    mon.editor.setTheme(editorTheme);
     if (onSave) ed.addCommand(mon.KeyMod.CtrlCmd | mon.KeyCode.KeyS, () => onSave());
-  }, [onSave]);
+  }, [editorTheme, onSave]);
 
   const language = languageFromPath(filePath);
   const options = useMemo(() => ({
@@ -73,7 +80,7 @@ export default function CodeEditor({ filePath, value, onChange, onSave, readOnly
 
   return (
     <div className="min-h-0 flex-1">
-      <MonacoEditor height="100%" language={language} value={value} onChange={(v: string) => onChange(v ?? "")} theme={editorTheme} options={options} onMount={handleMount} />
+      <MonacoEditor height="100%" language={language} value={value} onChange={(v: string) => onChange(v ?? "")} theme={editorTheme} options={options} beforeMount={defineMonacoThemes} onMount={handleMount} />
     </div>
   );
 }

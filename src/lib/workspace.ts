@@ -1,6 +1,8 @@
 import "server-only";
 
 import { execFile } from "node:child_process";
+import { mkdir, writeFile } from "node:fs/promises";
+import pathModule from "node:path";
 import { promisify } from "node:util";
 import { db, runMigrations } from "@/db";
 import {
@@ -27,6 +29,7 @@ import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
+import { resolveWithinRoot } from "@/lib/workspace-paths";
 import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
 
 const execFileAsync = promisify(execFile);
@@ -528,7 +531,8 @@ export async function ensureWorkspaceBootstrap() {
   }
 
   const existingMessages = await db.select().from(chatMessages).limit(1);
-  if (existingMessages.length === 0) {
+  const isFreshWorkspace = existingMessages.length === 0;
+  if (isFreshWorkspace) {
     await pushMessage({
       chatChannel: "group",
       senderType: "system",
@@ -538,7 +542,7 @@ export async function ensureWorkspaceBootstrap() {
   }
 
   const existingTerminal = await db.select().from(terminalEntries).limit(1);
-  if (existingTerminal.length === 0) {
+  if (existingTerminal.length === 0 && isFreshWorkspace) {
     await db.insert(terminalEntries).values({
       command: "boot",
       output: "IDE runtime initialized.",
@@ -552,7 +556,8 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
 
   const settingsRow = await getWorkspaceSettingsRow();
   const agentRows = await db.select().from(agents).orderBy(asc(agents.id));
-  const fileRows = await db.select().from(projectFiles).orderBy(asc(projectFiles.path));
+  const fileRows = (await db.select().from(projectFiles).orderBy(asc(projectFiles.path)))
+    .filter((row) => row.language !== "directory" && !row.path.startsWith(".multi-agent-virtual-dirs/"));
   const historyRows = await db.select().from(fileHistory).orderBy(desc(fileHistory.id)).limit(100);
   const messageRows = await db.select().from(chatMessages).orderBy(asc(chatMessages.id));
   const terminalRows = await db.select().from(terminalEntries).orderBy(desc(terminalEntries.id)).limit(30);
@@ -685,6 +690,12 @@ export async function clearChatHistory(channel?: ChatChannel) {
   await recordSystemEvent("info", "chat", channel ? `Chat history cleared: ${channel}` : "All chat history cleared");
 }
 
+export async function clearTerminalHistory() {
+  await ensureWorkspaceBootstrap();
+  await db.delete(terminalEntries);
+  await recordSystemEvent("info", "terminal", "Terminal history cleared");
+}
+
 export async function importProjectFiles(files: Array<{ path: string; content: string }>, locale?: string) {
   const activeLocale = normalizeLocale(locale);
   await ensureWorkspaceBootstrap();
@@ -692,10 +703,22 @@ export async function importProjectFiles(files: Array<{ path: string; content: s
   let imported = 0;
 
   for (const file of files) {
-    const path = compact(file.path);
-    if (!path) continue;
+    const path = compact(file.path).replace(/\\/g, "/");
+    if (!path || path.startsWith("/") || /^[A-Za-z]:\//.test(path) || path.split("/").some((part) => part === ".." || part === ".")) {
+      throw new Error(`Invalid imported file path: ${file.path}`);
+    }
 
     const content = file.content ?? "";
+    if (Buffer.byteLength(content, "utf8") > 2 * 1024 * 1024) {
+      throw new Error(`Imported file is too large: ${path}`);
+    }
+
+    const settings = await getWorkspaceSettingsRow();
+    if (settings.projectRoot) {
+      const target = resolveWithinRoot(settings.projectRoot, path);
+      await mkdir(pathModule.dirname(target.absolutePath), { recursive: true });
+      await writeFile(target.absolutePath, content, { encoding: "utf8" });
+    }
 
     await db
       .insert(projectFiles)
@@ -1185,7 +1208,7 @@ async function* streamAgentReply(
   const agentRows = await db.select({ name: agents.name, role: agents.role, color: agents.color }).from(agents).where(eq(agents.isActive, true));
   const allAgentNames = agentRows.map((a) => ({ name: a.name, role: a.role, color: a.color ?? "" }));
 
-  const [workspaceSettingsRow] = await db.select({ projectTemplatePrompt: workspaceSettings.projectTemplatePrompt }).from(workspaceSettings).limit(1);
+  const [workspaceSettingsRow] = await db.select({ projectTemplatePrompt: workspaceSettings.projectTemplatePrompt, fallbackModels: workspaceSettings.fallbackModels }).from(workspaceSettings).limit(1);
   const templatePrompt = compact(workspaceSettingsRow?.projectTemplatePrompt);
   const gatewayMessages: GatewayMessage[] = [
     { role: "system", content: templatePrompt ? `${agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix)}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix) },
@@ -1217,7 +1240,14 @@ async function* streamAgentReply(
     if (options.signal?.aborted) throw new Error("Chat request cancelled");
 
     let chunkText = "";
-    for await (const chunk of streamProviderResponse(request, gatewayMessages, { ...options, tools: tools.length ? tools : undefined })) {
+    for await (const chunk of streamProviderResponse(request, gatewayMessages, {
+      ...options,
+      tools: tools.length ? tools : undefined,
+      fallbackModels: Array.isArray(workspaceSettingsRow?.fallbackModels) ? workspaceSettingsRow.fallbackModels : [],
+      onFallback: async (model, error) => {
+        await recordSystemEvent("warning", "fallback", `${agent.name}: ${agent.model} failed (${error.status ?? "timeout"}); switched to ${model}`);
+      },
+    })) {
       chunkText += chunk;
       yield { type: "delta", channel, identity, text: chunk };
     }

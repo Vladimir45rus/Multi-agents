@@ -426,7 +426,7 @@ export async function* streamProviderResponse(
       if (options.signal?.aborted) throw error;
       if (error instanceof ProviderGatewayError) {
         lastError = error;
-        const canFallback = error.status === 403 || error.status === 429 || error.status === 500 || error.status === 502 || error.status === 503 || error.status === 504 || error.retryable;
+        const canFallback = error.status === 403 || error.status === 408 || error.status === 429 || error.status === 500 || error.status === 502 || error.status === 503 || error.status === 504 || error.retryable;
         if (canFallback && model !== models[models.length - 1]) {
           await options.onFallback?.(models[models.indexOf(model) + 1], error);
           continue;

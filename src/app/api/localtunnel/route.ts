@@ -1,12 +1,18 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceSettingsRow, updateWorkspaceSettings } from "@/lib/workspace";
+import { ensureMobileAccessToken } from "@/lib/mobile-auth";
 import { recordSystemEvent } from "@/lib/system-events";
 import { startLocalTunnel, type LocalTunnelHandle } from "@/lib/localtunnel";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const DEFAULT_PORT = 3210;
+const DEFAULT_PORT = 3000;
+
+function applicationPort() {
+  const configured = Number(process.env.ELECTRON_SERVER_PORT || process.env.PORT || DEFAULT_PORT);
+  return Number.isInteger(configured) && configured > 0 && configured <= 65535 ? configured : DEFAULT_PORT;
+}
 let tunnel: LocalTunnelHandle | null = null;
 let starting: Promise<LocalTunnelHandle> | null = null;
 
@@ -14,7 +20,8 @@ async function start() {
   if (tunnel) return tunnel;
   if (starting) return starting;
 
-  starting = startLocalTunnel(DEFAULT_PORT)
+  const port = applicationPort();
+  starting = startLocalTunnel(port)
     .then(async (handle) => {
       tunnel = handle;
       await updateWorkspaceSettings({ localtunnelUrl: handle.url });
@@ -42,6 +49,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, running: false, url: "" });
     }
 
+    await ensureMobileAccessToken();
     const handle = await start();
     await updateWorkspaceSettings({ localtunnelEnabled: true, localtunnelUrl: handle.url });
     return NextResponse.json({ ok: true, running: true, url: handle.url });

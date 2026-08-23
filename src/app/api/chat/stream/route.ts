@@ -1,5 +1,6 @@
 import { streamWorkspaceMessage, type ChatAttachment, type ChatChannel, type ChatStreamEvent, type UiLocale } from "@/lib/workspace";
 import type { ProjectContextInput } from "@/lib/project-context";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,9 @@ function encodeEvent(encoder: TextEncoder, event: ChatStreamEvent | { type: "err
 }
 
 export async function POST(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
+
   let body: {
     message?: string;
     channel?: ChatChannel;
