@@ -1,6 +1,6 @@
 {
   "name": "multi-agent-code-studio",
-  "version": "1.5.2",
+  "version": "1.5.3",
   "private": true,
   "main": "electron/main.cjs",
   "author": "Multi-Agent Code Studio",

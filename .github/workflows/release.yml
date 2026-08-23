@@ -75,6 +75,8 @@ jobs:
         run: npm run build:standalone
 
       - name: Package Windows installer and portable build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win nsis portable --x64 --publish never
 
       - name: Upload Windows artifacts
@@ -107,6 +109,8 @@ jobs:
         run: npm run build:standalone
 
       - name: Package universal macOS builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --mac dmg zip --universal --publish never
 
       - name: Upload macOS artifacts
@@ -140,6 +144,8 @@ jobs:
         run: npm run build:standalone
 
       - name: Package Linux builds
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --linux AppImage deb --x64 --publish never
 
       - name: Upload Linux artifacts
