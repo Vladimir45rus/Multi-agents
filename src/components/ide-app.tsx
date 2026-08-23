@@ -141,6 +141,9 @@ type DesktopBridge = {
   isOverlayOpen?: () => Promise<boolean>;
   expandFromOverlay?: () => Promise<void>;
   closeOverlay?: () => Promise<void>;
+  onUpdateAvailable?: (callback: (data: { version: string }) => void) => void;
+  onUpdateDownloaded?: (callback: (data: { version: string }) => void) => void;
+  installUpdate?: () => Promise<void>;
   safeStorage?: {
     isAvailable: () => Promise<boolean>;
     encryptString: (plaintext: string) => Promise<string>;
@@ -472,6 +475,8 @@ export function IdeApp() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [supportOpen, setSupportOpen] = useState(false);
   const [orchestratorOpen, setOrchestratorOpen] = useState(false);
+  const [updateVersion, setUpdateVersion] = useState<string | null>(null);
+  const [updateDownloaded, setUpdateDownloaded] = useState(false);
   const [providersOpen, setProvidersOpen] = useState(true);
   const [agentsOpen, setAgentsOpen] = useState(true);
   const [showAddAgent, setShowAddAgent] = useState(false);
@@ -542,6 +547,19 @@ export function IdeApp() {
   const [retryRequest, setRetryRequest] = useState<ChatRetryRequest | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<number | string | null>(null);
   const chatAbortRef = useRef<AbortController | null>(null);
+
+  // Listen for auto-updater events from Electron main process.
+  useEffect(() => {
+    const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+    bridge?.onUpdateAvailable?.((data: { version: string }) => {
+      setUpdateVersion(data.version);
+      setUpdateDownloaded(false);
+    });
+    bridge?.onUpdateDownloaded?.((data: { version: string }) => {
+      setUpdateVersion(data.version);
+      setUpdateDownloaded(true);
+    });
+  }, []);
 
   const t = dict[locale];
   const workspaceTree = useMemo(() => buildWorkspaceTree(workspaceTreeEntries), [workspaceTreeEntries]);
@@ -2057,6 +2075,47 @@ export function IdeApp() {
 
   return (
     <main className="relative flex h-screen flex-col overflow-hidden pb-6" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
+      {/* Auto-update banner */}
+      {updateVersion && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            padding: "6px 16px",
+            background: updateDownloaded ? "linear-gradient(135deg, #1a3a1a, #0d2818)" : "linear-gradient(135deg, #1a2a4a, #0d1a30)",
+            borderBottom: updateDownloaded ? "1px solid #2ea04360" : "1px solid #1f6feb60",
+            color: "#e6edf3",
+            fontSize: 12,
+          }}
+        >
+          <span style={{ fontSize: 16 }}>{updateDownloaded ? "✅" : "🔄"}</span>
+          <span style={{ flex: 1 }}>
+            {updateDownloaded
+              ? locale === "ru" ? `Обновление v${updateVersion} загружено и готово к установке.` : `Update v${updateVersion} downloaded and ready to install.`
+              : locale === "ru" ? `Доступна новая версия v${updateVersion}` : `New version v${updateVersion} available`}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+              void bridge?.installUpdate?.();
+            }}
+            style={{
+              background: updateDownloaded ? "#238636" : "#1f6feb",
+              border: "none",
+              borderRadius: 4,
+              color: "#fff",
+              padding: "4px 14px",
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            {locale === "ru" ? "Перезапустить для обновления" : "Restart to update"}
+          </button>
+        </div>
+      )}
       <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-lg">👑</span>

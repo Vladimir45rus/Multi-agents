@@ -1,6 +1,6 @@
 {
   "name": "multi-agent-code-studio",
-  "version": "1.5.12",
+  "version": "1.5.13",
   "private": true,
   "main": "electron/main.cjs",
   "author": "Vladimir <nasha_masha45@mail.ru>",
@@ -23,6 +23,7 @@
     "@monaco-editor/react": "^4.7.0",
     "dotenv": "17.3.1",
     "drizzle-orm": "0.45.2",
+    "electron-updater": "^6.8.9",
     "localtunnel": "^2.0.2",
     "monaco-editor": "^0.56.0",
     "next": "16.2.6",
@@ -68,6 +69,11 @@
         "to": "standalone/node_modules"
       }
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "Vladimir45rus",
+      "repo": "Multi-agents"
+    },
     "mac": {
       "x64ArchFiles": "**/*.{node,dylib}"
     },

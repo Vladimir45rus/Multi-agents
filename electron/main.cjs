@@ -1,4 +1,5 @@
 const { app, BrowserWindow, Menu, dialog, ipcMain, session, safeStorage, shell } = require("electron");
+const { autoUpdater } = require("electron-updater");
 const { fork } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
@@ -500,6 +501,41 @@ ipcMain.handle("secrets:decrypt", (_event, encrypted) => {
 
 ipcMain.handle("app:recovered-from-crash", () => recoveredFromCrash);
 
+// --- autoUpdater ---
+
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on("checking-for-update", () => {
+  log("updater", "Checking for update…");
+});
+
+autoUpdater.on("update-available", (info) => {
+  log("updater", `Update available: ${info.version}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("update-available", { version: info.version });
+  }
+});
+
+autoUpdater.on("update-downloaded", (info) => {
+  log("updater", `Update ${info.version} downloaded — ready to install.`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send("update-downloaded", { version: info.version });
+  }
+});
+
+autoUpdater.on("update-not-available", () => {
+  log("updater", "No updates available.");
+});
+
+autoUpdater.on("error", (error) => {
+  log("updater", `Update error: ${error.message}`);
+});
+
+ipcMain.handle("update:install", () => {
+  autoUpdater.quitAndInstall();
+});
+
 // --- lifecycle ---
 
 process.on("uncaughtException", (error) => {
@@ -534,6 +570,11 @@ app.whenReady().then(async () => {
   }
 
   createWindow(startUrl);
+
+  // Start checking for updates 10 s after window is ready.
+  setTimeout(() => {
+    autoUpdater.checkForUpdates().catch((err) => log("updater", `Check failed: ${err.message}`));
+  }, 10000);
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow(startUrl);
