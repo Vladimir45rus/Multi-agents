@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { generateProjectTemplate, PROJECT_TEMPLATES, type ProjectTemplateId } from "@/lib/project-templates";
 
+export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET() {

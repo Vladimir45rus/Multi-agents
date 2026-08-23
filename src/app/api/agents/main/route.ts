@@ -1,5 +1,7 @@
 import { assignMainCoder } from "@/lib/workspace";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as { agentId?: number; locale?: "ru" | "en" };

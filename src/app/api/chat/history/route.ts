@@ -1,5 +1,6 @@
 import { clearChatHistory, ensureWorkspaceBootstrap } from "@/lib/workspace";
 
+export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function DELETE(request: Request) {

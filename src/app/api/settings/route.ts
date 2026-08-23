@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getWorkspaceSnapshot, updateWorkspaceSettings } from "@/lib/workspace";
 import { isLoopbackRequest, mobileAccessError } from "@/lib/mobile-auth";
 
+export const dynamic = "force-dynamic";
+
 async function handleUpdate(request: Request) {
   const accessError = await mobileAccessError(request);
   if (accessError) return accessError;

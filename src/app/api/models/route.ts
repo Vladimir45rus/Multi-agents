@@ -3,6 +3,8 @@ import { fetchProviderModels } from "@/lib/provider-models";
 import { getStoredProviderApiKey } from "@/lib/workspace";
 import { validateApiKey } from "@/lib/provider-gateway";
 
+export const dynamic = "force-dynamic";
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json().catch(() => ({}))) as {

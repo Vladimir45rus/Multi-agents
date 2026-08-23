@@ -1,6 +1,7 @@
 import { getWorkspaceSnapshot, rollbackFileContent } from "@/lib/workspace";
 import { getWorkspaceRoot, rollbackWorkspaceFile } from "@/lib/workspace-files";
 
+export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
