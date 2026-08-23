@@ -320,8 +320,8 @@ function createOverlayWindow(startUrl) {
   overlayWindow = new BrowserWindow({
     width: overlayState.width,
     height: overlayState.height,
-    minWidth: 280,
-    minHeight: 180,
+    minWidth: 320,
+    minHeight: 200,
     x: overlayState.x,
     y: overlayState.y,
     title: "Multi-Agent Overlay",
@@ -449,6 +449,24 @@ ipcMain.handle("overlay:toggle", () => {
 
 ipcMain.handle("overlay:isOpen", () => {
   return !!(overlayWindow && !overlayWindow.isDestroyed());
+});
+
+ipcMain.handle("overlay:expand", () => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.close();
+    overlayWindow = null;
+  }
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.show();
+    mainWindow.focus();
+  }
+});
+
+ipcMain.handle("overlay:close", () => {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.close();
+    overlayWindow = null;
+  }
 });
 
 ipcMain.handle("workspace:select-directory", async () => {

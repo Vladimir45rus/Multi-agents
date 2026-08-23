@@ -139,6 +139,8 @@ type DesktopBridge = {
   selectDirectory: () => Promise<string | null>;
   toggleOverlay?: () => Promise<boolean>;
   isOverlayOpen?: () => Promise<boolean>;
+  expandFromOverlay?: () => Promise<void>;
+  closeOverlay?: () => Promise<void>;
   safeStorage?: {
     isAvailable: () => Promise<boolean>;
     encryptString: (plaintext: string) => Promise<string>;
