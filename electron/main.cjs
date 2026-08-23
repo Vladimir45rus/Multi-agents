@@ -11,6 +11,7 @@ const MAX_SERVER_RESTARTS = 5;
 const SERVER_READY_TIMEOUT_MS = 90_000;
 
 let mainWindow = null;
+let overlayWindow = null;
 let serverChild = null;
 let isQuitting = false;
 let serverRestarts = 0;
@@ -305,6 +306,95 @@ function createWindow(startUrl) {
   mainWindow.loadURL(startUrl);
 }
 
+// --- overlay widget window ---
+
+function createOverlayWindow(startUrl) {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.focus();
+    return;
+  }
+
+  const state = loadSessionState();
+  const overlayState = state.overlayBounds || { width: 420, height: 320 };
+
+  overlayWindow = new BrowserWindow({
+    width: overlayState.width,
+    height: overlayState.height,
+    minWidth: 280,
+    minHeight: 180,
+    x: overlayState.x,
+    y: overlayState.y,
+    title: "Multi-Agent Overlay",
+    backgroundColor: "#0d1117",
+    frame: false,
+    transparent: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: true,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, "preload.cjs"),
+    },
+  });
+
+  overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  overlayWindow.setAlwaysOnTop(true, "floating");
+
+  overlayWindow.once("ready-to-show", () => overlayWindow?.show());
+
+  let overlaySaveTimer = null;
+  const scheduleOverlaySave = () => {
+    clearTimeout(overlaySaveTimer);
+    overlaySaveTimer = setTimeout(() => {
+      if (!overlayWindow || overlayWindow.isDestroyed()) return;
+      try {
+        const state = {
+          ...loadSessionState(),
+          overlayBounds: overlayWindow.getBounds(),
+        };
+        fs.writeFileSync(statePath(), JSON.stringify(state, null, 2), "utf8");
+      } catch {
+        // ignore
+      }
+    }, 500);
+  };
+  overlayWindow.on("resize", scheduleOverlaySave);
+  overlayWindow.on("move", scheduleOverlaySave);
+
+  overlayWindow.on("closed", () => {
+    overlayWindow = null;
+  });
+
+  const overlayUrl = typeof startUrl === "string"
+    ? startUrl.replace(/\/[^/]*$/, "") + "/overlay"
+    : `http://127.0.0.1:${DEFAULT_SERVER_PORT}/overlay`;
+  log("app", `Opening overlay at ${overlayUrl}`);
+  overlayWindow.loadURL(overlayUrl);
+}
+
+function toggleOverlay(startUrl) {
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.close();
+    overlayWindow = null;
+  } else {
+    createOverlayWindow(startUrl);
+  }
+}
+
+function getOverlayPort(startUrl) {
+  if (typeof startUrl === "string") {
+    try {
+      return new URL(startUrl).port || DEFAULT_SERVER_PORT;
+    } catch {
+      return DEFAULT_SERVER_PORT;
+    }
+  }
+  return DEFAULT_SERVER_PORT;
+}
+
 function installApplicationMenu() {
   const template = [
     ...(process.platform === "darwin" ? [{ role: "appMenu" }] : []),
@@ -328,6 +418,20 @@ function installApplicationMenu() {
         { role: "zoomOut" },
         { type: "separator" },
         { role: "togglefullscreen" },
+        { type: "separator" },
+        {
+          label: "Toggle Overlay Widget",
+          accelerator: "Ctrl+Shift+O",
+          click: () => {
+            if (overlayWindow && !overlayWindow.isDestroyed()) {
+              overlayWindow.close();
+              overlayWindow = null;
+            } else {
+              const port = Number(process.env.ELECTRON_SERVER_PORT || DEFAULT_SERVER_PORT);
+              createOverlayWindow(`http://127.0.0.1:${port}`);
+            }
+          },
+        },
       ],
     },
     { role: "windowMenu" },
@@ -336,6 +440,16 @@ function installApplicationMenu() {
 }
 
 // --- IPC handlers ---
+
+ipcMain.handle("overlay:toggle", () => {
+  const port = Number(process.env.ELECTRON_SERVER_PORT || DEFAULT_SERVER_PORT);
+  toggleOverlay(`http://127.0.0.1:${port}`);
+  return !!(overlayWindow && !overlayWindow.isDestroyed());
+});
+
+ipcMain.handle("overlay:isOpen", () => {
+  return !!(overlayWindow && !overlayWindow.isDestroyed());
+});
 
 ipcMain.handle("workspace:select-directory", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
@@ -415,6 +529,9 @@ app.on("before-quit", () => {
     fs.unlinkSync(markerPath());
   } catch {
     // ignore
+  }
+  if (overlayWindow && !overlayWindow.isDestroyed()) {
+    overlayWindow.close();
   }
   if (serverChild) {
     try {

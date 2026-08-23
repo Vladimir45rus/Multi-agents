@@ -137,6 +137,8 @@ type NewAgentDraft = {
 
 type DesktopBridge = {
   selectDirectory: () => Promise<string | null>;
+  toggleOverlay?: () => Promise<boolean>;
+  isOverlayOpen?: () => Promise<boolean>;
   safeStorage?: {
     isAvailable: () => Promise<boolean>;
     encryptString: (plaintext: string) => Promise<string>;
@@ -2090,6 +2092,17 @@ export function IdeApp() {
             className="rounded-md bg-amber-500 px-3 py-1 text-xs font-semibold text-black shadow-lg shadow-amber-500/20 transition hover:bg-amber-400"
           >
             {t.donateBtn}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+              bridge?.toggleOverlay?.();
+            }}
+            className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400"
+            title={locale === "ru" ? "Поверх всех окон (Ctrl+Shift+O)" : "Always on top (Ctrl+Shift+O)"}
+          >
+            📌 {locale === "ru" ? "Виджет" : "Widget"}
           </button>
           <button type="button" onClick={() => setOrchestratorOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
             🤖 {locale === "ru" ? "Оркестратор" : "Orchestrator"}
