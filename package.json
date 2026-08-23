@@ -1,6 +1,6 @@
 {
   "name": "multi-agent-code-studio",
-  "version": "1.5.7",
+  "version": "1.5.8",
   "private": true,
   "main": "electron/main.cjs",
   "author": "Vladimir <nasha_masha45@mail.ru>",
@@ -69,7 +69,7 @@
       }
     ],
     "mac": {
-      "x64ArchFiles": "*/*.node"
+      "x64ArchFiles": "**/*.node"
     },
     "win": {
       "target": [
