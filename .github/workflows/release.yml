@@ -200,7 +200,8 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --title "Multi-Agent Code Studio $TAG" \
-              --generate-notes
+              --generate-notes \
+              --draft=false
           fi
 
           mapfile -d '' assets < <(find release -type f \( \
