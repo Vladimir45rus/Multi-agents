@@ -57,6 +57,7 @@ export default function MobilePage() {
   const [previewUrl, setPreviewUrl] = useState("");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const endRef = useRef<HTMLDivElement>(null);
+  const systemEventsEndRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   // Voice input
@@ -103,9 +104,9 @@ export default function MobilePage() {
   }, [mobileFetch]);
 
   useEffect(() => {
-    void refreshState();
+    const initialTimer = window.setTimeout(() => void refreshState(), 0);
     const timer = setInterval(() => void refreshState(), 2000);
-    return () => clearInterval(timer);
+    return () => { window.clearTimeout(initialTimer); clearInterval(timer); };
   }, [refreshState]);
   // Initial fetch + poll — external data sync, not cascading state
   useEffect(() => {
@@ -115,6 +116,7 @@ export default function MobilePage() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [f]);
   useEffect(() => { endRef.current?.scrollIntoView?.({ behavior: "smooth" }); }, [data?.messages?.length, stream]);
+  useEffect(() => { systemEventsEndRef.current?.scrollIntoView?.({ behavior: "smooth" }); }, [systemEvents.length]);
 
   const msgs = useMemo(() => {
     const all = data?.messages ?? [];
@@ -258,7 +260,7 @@ export default function MobilePage() {
             </section>
             <section style={{ background: vars("bg-panel"), border: `1px solid ${vars("border-default")}`, borderRadius: 10, padding: 12 }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>Последние системные события</div>
-              {systemEvents.length === 0 ? <div style={{ color: vars("text-secondary"), fontSize: 12 }}>Событий нет</div> : systemEvents.slice(0, 5).map(event => {
+              {systemEvents.length === 0 ? <div style={{ color: vars("text-secondary"), fontSize: 12 }}>Событий нет</div> : systemEvents.slice(0, 5).reverse().map(event => {
                 const isError = event.level === "error";
                 const isWarning = event.level === "warning";
                 return <div key={event.id} style={{ borderLeft: `3px solid ${isError ? "#f85149" : isWarning ? "#d29922" : "#3fb950"}`, background: isError ? "#3b1618" : vars("bg-input"), borderRadius: 6, padding: "7px 8px", marginBottom: 6 }}>
@@ -266,6 +268,7 @@ export default function MobilePage() {
                   <div style={{ fontSize: 12, color: isError ? "#ffb4b4" : vars("text-primary"), wordBreak: "break-word" }}>{event.message}</div>
                 </div>;
               })}
+              <div ref={systemEventsEndRef} aria-hidden="true" />
             </section>
           </div>
         ) : null}
@@ -292,9 +295,11 @@ export default function MobilePage() {
 
       {tab !== "state" && <form onSubmit={e => { e.preventDefault(); void send(); }}
         style={{ padding: "8px 10px", borderTop: `1px solid ${vars("border-default")}`, background: vars("bg-panel"), display: "flex", gap: 8, alignItems: "center" }}>
-        <input value={tab === "lead" ? leadMsg : groupMsg}
+        <textarea value={tab === "lead" ? leadMsg : groupMsg}
           onChange={e => tab === "lead" ? setLeadMsg(e.target.value) : setGroupMsg(e.target.value)}
-          style={{ flex: 1, padding: "10px 14px", borderRadius: 20, border: `1px solid ${vars("border-input")}`, background: vars("bg-input"), color: vars("text-primary"), fontSize: 14, outline: "none" }}
+          onKeyDown={e => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
+          rows={2}
+          style={{ flex: 1, padding: "10px 14px", borderRadius: 14, border: `1px solid ${vars("border-input")}`, background: vars("bg-input"), color: vars("text-primary"), fontSize: 14, outline: "none", resize: "vertical" }}
           placeholder="Сообщение..." disabled={sending} />
         {voice.supported ? (
           <button type="button" onClick={voice.toggle}

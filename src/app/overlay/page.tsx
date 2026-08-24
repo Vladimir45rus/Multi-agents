@@ -475,12 +475,13 @@ export default function OverlayPage() {
           ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
         }}
       >
-        <input
+        <textarea
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) sendChat(e); }}
+          onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
           placeholder={activeTask ? "Ответить агентам…" : "Сообщение в общий чат…"}
           disabled={busy}
+          rows={2}
           style={{
             flex: 1,
             background: "#0d1117",
@@ -490,6 +491,7 @@ export default function OverlayPage() {
             padding: "3px 8px",
             fontSize: 11,
             outline: "none",
+            resize: "vertical",
           }}
         />
         <button

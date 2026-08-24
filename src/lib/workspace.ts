@@ -203,6 +203,9 @@ function providerModelLabel(provider: string, model: string) {
 }
 
 function agentFailureMessage(locale: UiLocale, agent: typeof agents.$inferSelect, error: unknown) {
+  if (error instanceof ProviderGatewayError && !error.retryable) {
+    return t(locale, `Ошибка подключения к модели ${getProviderPreset(agent.provider).label}. Повторите попытку`, `Connection error for model ${getProviderPreset(agent.provider).label}. Please try again`);
+  }
   const message = error instanceof Error ? error.message : t(locale, "неизвестная ошибка", "unknown error");
   return t(
     locale,

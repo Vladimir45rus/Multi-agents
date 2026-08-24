@@ -556,6 +556,7 @@ export function IdeApp() {
   const optimisticMessageIdRef = useRef(-1);
   const leadChatEndRef = useRef<HTMLDivElement>(null);
   const groupChatEndRef = useRef<HTMLDivElement>(null);
+  const systemEventsEndRef = useRef<HTMLDivElement>(null);
   const [streamingMessages, setStreamingMessages] = useState<Record<number, ChatStreamState>>({});
   const [chatRunning, setChatRunning] = useState(false);
   const [retryRequest, setRetryRequest] = useState<ChatRetryRequest | null>(null);
@@ -669,6 +670,10 @@ export function IdeApp() {
     leadChatEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
     groupChatEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
   }, [leadMessages.length, groupMessages.length, liveMessagesVersion]);
+
+  useEffect(() => {
+    systemEventsEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
+  }, [data?.systemEvents?.length]);
 
   useEffect(() => () => chatAbortRef.current?.abort(), []);
 
@@ -2365,7 +2370,7 @@ export function IdeApp() {
                     ))}
                   </div>
                   <div className="flex gap-2">
-                    <input value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value)} disabled={chatRunning} className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <textarea value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -2451,7 +2456,7 @@ export function IdeApp() {
                     ))}
                   </div>
                   <div className="flex gap-2">
-                    <input value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value)} disabled={chatRunning} className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <textarea value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -2533,6 +2538,7 @@ export function IdeApp() {
                       <p className="mt-0.5 text-amber-100">{finding.message}</p>
                     </article>
                   ))}
+                  <div ref={systemEventsEndRef} aria-hidden="true" />
                 </div>
               </section>
             )}

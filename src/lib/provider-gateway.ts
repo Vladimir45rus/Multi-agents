@@ -31,6 +31,7 @@ export type ProviderGatewayOptions = {
 
 const DEFAULT_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_RETRIES = 2;
+const RETRY_DELAY_MS = 2_000;
 const MAX_KEY_LENGTH = 2_048;
 const MAX_MODEL_LENGTH = 256;
 
@@ -54,6 +55,10 @@ function compact(value: string | undefined) {
 
 function providerLabel(provider: string) {
   return getProviderPreset(provider).label || provider;
+}
+
+function connectionErrorMessage(provider: string) {
+  return `Ошибка подключения к модели ${providerLabel(provider)}. Повторите попытку`;
 }
 
 export function validateApiKey(apiKey: string | undefined) {
@@ -116,11 +121,8 @@ function retryableStatus(status: number) {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
 
-function retryAfterMs(response: Response, attempt: number) {
-  const header = response.headers.get("retry-after");
-  const seconds = header ? Number(header) : NaN;
-  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(seconds * 1_000, 10_000);
-  return Math.min(500 * 2 ** attempt, 8_000);
+function retryAfterMs(_response: Response, _attempt: number) {
+  return RETRY_DELAY_MS;
 }
 
 function redact(value: string, apiKey: string) {
@@ -140,9 +142,9 @@ async function responseError(response: Response, provider: string, apiKey: strin
 }
 
 function abortError(provider: string) {
-  return new ProviderGatewayError(`${providerLabel(provider)} request timed out or was cancelled`, {
+  return new ProviderGatewayError(connectionErrorMessage(provider), {
     provider,
-    retryable: true,
+    retryable: false,
   });
 }
 
@@ -276,7 +278,7 @@ async function fetchWithRetry(
         if (!error.retryable || attempt >= maxRetries) throw error;
       } else if (attempt >= maxRetries) {
         if (error instanceof DOMException && error.name === "AbortError") throw abortError(request.provider);
-        throw new ProviderGatewayError(`${providerLabel(request.provider)} request failed`, {
+        throw new ProviderGatewayError(connectionErrorMessage(request.provider), {
           provider: request.provider,
           retryable: false,
         });
@@ -286,13 +288,13 @@ async function fetchWithRetry(
         throw abortError(request.provider);
       }
 
-      await new Promise((resolve) => setTimeout(resolve, Math.min(500 * 2 ** attempt, 8_000)));
+      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
     } finally {
       if (!handedOff) cleanup();
     }
   }
 
-  throw new ProviderGatewayError(`${providerLabel(request.provider)} request failed`, {
+  throw new ProviderGatewayError(connectionErrorMessage(request.provider), {
     provider: request.provider,
     retryable: false,
   });
