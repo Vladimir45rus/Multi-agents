@@ -2351,7 +2351,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
   const bottomGrows = [bottomFlexGrow(0), bottomFlexGrow(1)];
 
   return (
-    <main className="relative flex h-screen flex-col overflow-hidden pb-6" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
+    <main className="workspace-shell relative flex h-screen min-w-0 flex-col overflow-hidden pb-6" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
       {/* Auto-update banner */}
       {updateVersion && (
         <div
@@ -2393,7 +2393,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </button>
         </div>
       )}
-      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
+      <header className="flex h-14 min-w-0 shrink-0 items-center justify-between gap-4 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-lg">👑</span>
           <div className="min-w-0">
@@ -2417,7 +2417,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </span>
           ))}
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="flex min-w-0 shrink-0 items-center gap-1.5 overflow-x-auto overflow-y-hidden">
           <button type="button" onClick={() => setPreviewOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400" title={locale === "ru" ? "Предпросмотр проекта" : "Project preview"}>
             👁️ {locale === "ru" ? "Предпросмотр" : "Preview"}
           </button>
@@ -2458,7 +2458,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       {/* Main content area: flex column, top flex area + resizer + bottom area */}
       <div className="relative flex min-h-0 flex-1 flex-col">
         {/* Full-height side panels with a central editor/terminal work area. */}
-        <div className="flex min-h-0 flex-1">
+        <div className="workspace-top-row flex min-w-0 min-h-0 flex-1">
           {/* Explorer / File Tree */}
           <div className={`relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("explorer", t.explorer)}
@@ -2577,8 +2577,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
                   <span className="flex min-w-0 items-center gap-2"><span className="truncate">{t.leadChat}</span><span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span></span>
-                  <div className="relative flex items-center gap-0.5">
-                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                  <div className="relative flex min-w-0 items-center gap-0.5">
+                    <span className="panel-agent-count min-w-0 truncate text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "lead" ? null : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("lead")}
                     <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
@@ -2602,7 +2602,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   {renderStreamingMessages("lead")}
                   <div ref={leadChatEndRef} aria-hidden="true" />
                 </div>
-                <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="border-t border-[#2d2d30] p-3">
+                <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="min-w-0 border-t border-[#2d2d30] p-3">
                   <div className="mb-1 flex flex-wrap gap-1">
                     {["/fix", "/explain", "/test", "/refactor", "/docs"].map((cmd) => (
                       <button key={cmd} type="button" onClick={() => quickCommand(`${cmd} `, "lead")} className="rounded bg-[var(--bg-panel-alt)] px-1.5 py-0.5 text-[10px] text-[var(--text-secondary)] hover:bg-[#3a3d41]">{cmd}</button>
@@ -2611,9 +2611,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <button key={`@-lead-${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "lead")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[var(--bg-panel-alt)]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
                     ))}
                   </div>
-                  <div className="relative flex gap-2">
+                  <div className="relative flex min-w-0 gap-2">
                     {renderMentionSuggestions("lead")}
-                    <textarea data-chat-channel="lead" value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <textarea data-chat-channel="lead" value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="min-w-0 flex-1 resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -2634,8 +2634,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <section className="panel h-full">
                 <div className="panel-header flex items-center justify-between">
                   <span className="flex min-w-0 items-center gap-2"><span className="truncate">{t.allChat}</span><span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span></span>
-                  <div className="relative flex items-center gap-1">
-                    <span className="hidden text-[10px] text-[var(--text-secondary)] 2xl:inline">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                  <div className="relative flex min-w-0 items-center gap-1">
+                    <span className="panel-agent-count hidden min-w-0 truncate text-[10px] text-[var(--text-secondary)] 2xl:inline">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "group" ? null : "group")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("group")}
                     {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
@@ -2668,7 +2668,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   {renderStreamingMessages("group")}
                   <div ref={groupChatEndRef} aria-hidden="true" />
                 </div>
-                <form onSubmit={(e) => { e.preventDefault(); void sendChat("group", groupMessage, duplicateToLead); }} className="border-t border-[#2d2d30] p-3">
+                <form onSubmit={(e) => { e.preventDefault(); void sendChat("group", groupMessage, duplicateToLead); }} className="min-w-0 border-t border-[#2d2d30] p-3">
                               <div className="mb-2 flex items-center gap-2 text-xs">
                     <input id="dup" type="checkbox" checked={duplicateToLead} onChange={(e) => setDuplicateToLead(e.target.checked)} />
                     <label htmlFor="dup">{t.duplicate}</label>
@@ -2700,9 +2700,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <button key={`@${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "group")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[var(--bg-panel-alt)]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
                     ))}
                   </div>
-                  <div className="relative flex gap-2">
+                  <div className="relative flex min-w-0 gap-2">
                     {renderMentionSuggestions("group")}
-                    <textarea data-chat-channel="group" value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <textarea data-chat-channel="group" value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="min-w-0 flex-1 resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -2831,7 +2831,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       ) : null}
 
       {/* Settings drawer */}
-      <aside className={`absolute inset-y-0 right-0 z-30 flex max-h-[85vh] min-h-0 w-[460px] max-w-[calc(100vw-16px)] flex-col overflow-y-auto border-l transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`} style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
+      <aside className={`absolute inset-y-0 right-0 z-30 flex h-full min-h-0 w-[460px] max-w-[calc(100vw-16px)] flex-col overflow-hidden border-l transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`} style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="panel-header flex items-center justify-between">
           <span className="flex items-center gap-2">{t.settings}{Object.entries(agentDrafts).some(([agentId, draft]) => {
             const agent = data?.agents.find((candidate) => candidate.id === Number(agentId));
