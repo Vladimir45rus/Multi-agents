@@ -14,3 +14,7 @@ export async function listSystemEvents(limit = 100) {
   const rows = await db.select().from(systemEvents).orderBy(desc(systemEvents.id)).limit(Math.max(1, Math.min(limit, 500)));
   return rows.map((row) => ({ ...row, createdAt: row.createdAt.toISOString() }));
 }
+
+export async function clearSystemEvents() {
+  await db.delete(systemEvents);
+}

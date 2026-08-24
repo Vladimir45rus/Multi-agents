@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   isOverlayOpen: () => ipcRenderer.invoke("overlay:isOpen"),
   expandFromOverlay: () => ipcRenderer.invoke("overlay:expand"),
   closeOverlay: () => ipcRenderer.invoke("overlay:close"),
+  toggleOverlayOnTop: () => ipcRenderer.invoke("overlay:toggle-on-top"),
   onUpdateAvailable: (callback) => {
     ipcRenderer.on("update-available", (_event, data) => callback(data));
   },

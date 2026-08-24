@@ -46,6 +46,7 @@ type OrchestratorState = {
 type DesktopBridge = {
   expandFromOverlay?: () => Promise<void>;
   closeOverlay?: () => Promise<void>;
+  toggleOverlayOnTop?: () => Promise<boolean>;
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -113,6 +114,7 @@ export default function OverlayPage() {
   const [lastEvent, setLastEvent] = useState("");
   const [chatInput, setChatInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [onTop, setOnTop] = useState(true);
   const sseRef = useRef<EventSource | null>(null);
   const lastMsgEndRef = useRef<HTMLDivElement>(null);
 
@@ -126,6 +128,10 @@ export default function OverlayPage() {
 
   const close = useCallback(() => {
     void bridge?.closeOverlay?.();
+  }, [bridge]);
+
+  const toggleOnTop = useCallback(() => {
+    void bridge?.toggleOverlayOnTop?.().then((value) => setOnTop(value));
   }, [bridge]);
 
   // Poll workspace every 3s
@@ -337,6 +343,19 @@ export default function OverlayPage() {
             }}
           >
             ⛶
+          </button>
+          {/* always on top */}
+          <button
+            type="button"
+            onClick={toggleOnTop}
+            title={onTop ? "Открепить поверх окон" : "Закрепить поверх окон"}
+            style={{
+              width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center",
+              borderRadius: 4, border: "none", background: "transparent",
+              color: onTop ? "#58a6ff" : "#8b949e", cursor: "pointer", fontSize: 12,
+            }}
+          >
+            📌
           </button>
           {/* close */}
           <button

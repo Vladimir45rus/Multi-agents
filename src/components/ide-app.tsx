@@ -1986,6 +1986,20 @@ export function IdeApp() {
     }
   }
 
+  async function clearSystemEvents() {
+    setBusy(true);
+    try {
+      const response = await fetch("/api/system-events", { method: "DELETE" });
+      if (!response.ok) throw new Error("System events clear failed");
+      setData((previous) => previous ? { ...previous, systemEvents: [], findings: previous.findings } : previous);
+      setStatus(locale === "ru" ? "Логи очищены" : "Logs cleared");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "System events clear failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function clearTerminal() {
     setBusy(true);
     try {
@@ -2500,8 +2514,9 @@ export function IdeApp() {
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.logsTitle}</span>
                   <div className="flex items-center gap-0.5">
-                    {renderCollapseButton("logs")}
-                    {renderExpandButton("logs")}
+                    <button type="button" onClick={() => toggleFullscreen("logs")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">{t.expand}</button>
+                    <button type="button" onClick={() => toggleCollapse("logs")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">{t.collapse}</button>
+                    <button type="button" onClick={() => void clearSystemEvents()} disabled={busy} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-red-400 disabled:opacity-50">{locale === "ru" ? "Очистить логи" : "Clear logs"}</button>
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 text-xs">

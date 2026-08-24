@@ -8,6 +8,7 @@ import { db } from "@/db";
 import { agentEvents, agents, orchestratorReports } from "@/db/schema";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { completeProviderResponse, providerRequestFromAgent, type GatewayMessage } from "@/lib/provider-gateway";
+import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
 import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction } from "@/lib/patch-parser";
 import { ensureWorkspaceBootstrap, getStoredProviderApiKey, getWorkspaceSettingsRow } from "@/lib/workspace";
@@ -492,14 +493,26 @@ async function completeAgent(
       { role: "system", content: templatePrompt ? `${refreshedSystemPrompt}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : refreshedSystemPrompt },
       { role: "user", content: `${userPrompt}\n\n${context}` },
     ];
-    return await completeProviderResponse(request, messages, {
+    const requestOptions = {
       signal,
       jsonMode,
+      tools: jsonMode ? undefined : getToolDefinitions(agent.role),
       fallbackModels,
-      onFallback: async (model, error) => {
+      onFallback: async (model: string, error: import("@/lib/provider-gateway").ProviderGatewayError) => {
         await recordSystemEvent("warning", "fallback", `${agent.name}: ${agent.model} failed (${error.status ?? "timeout"}); switched to ${model}`);
       },
-    });
+    };
+
+    for (let toolRound = 0; toolRound < 4; toolRound += 1) {
+      const response = await completeProviderResponse(request, messages, requestOptions);
+      const toolCall = parseToolCall(response);
+      if (!toolCall || jsonMode) return response;
+      const result = await executeToolCall(toolCall.name, toolCall.arguments, agent.role, agent.id);
+      messages.push({ role: "assistant", content: response });
+      messages.push(toolResultMessage(toolCall.name, result));
+    }
+
+    return await completeProviderResponse(request, messages, requestOptions);
   } catch (error) {
     throw new Error(agentFailureMessage(locale, agent, error), { cause: error });
   }

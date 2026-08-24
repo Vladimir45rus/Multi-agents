@@ -213,7 +213,7 @@ function headersFor(provider: string, apiKey: string): Record<string, string> {
     Accept: "text/event-stream",
     Authorization: `Bearer ${apiKey}`,
     "Content-Type": "application/json",
-    "HTTP-Referer": "http://localhost:3000",
+    "HTTP-Referer": "https://github.com/Vladimir45rus/Multi-agents",
     "X-Title": "Multi-Agent Code Studio",
   };
 }

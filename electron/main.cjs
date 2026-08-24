@@ -350,6 +350,7 @@ function createOverlayWindow(startUrl) {
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: true,
+    movable: true,
     show: false,
     webPreferences: {
       contextIsolation: true,
@@ -486,6 +487,13 @@ ipcMain.handle("overlay:close", () => {
     overlayWindow.close();
     overlayWindow = null;
   }
+});
+
+ipcMain.handle("overlay:toggle-on-top", () => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  const next = !overlayWindow.isAlwaysOnTop();
+  overlayWindow.setAlwaysOnTop(next, "floating");
+  return next;
 });
 
 ipcMain.handle("workspace:select-directory", async () => {
