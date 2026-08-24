@@ -121,6 +121,15 @@ body > div {
   min-width: 0;
 }
 
+.settings-drawer {
+  animation: settings-drawer-in 0.2s ease-out both;
+}
+
+@keyframes settings-drawer-in {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
 .truncate {
   overflow: hidden;
   text-overflow: ellipsis;

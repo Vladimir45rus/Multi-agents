@@ -2839,16 +2839,15 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           className="absolute inset-0 z-20 cursor-default bg-black/40"
         />
       ) : null}
-      <aside
-        aria-hidden={!settingsOpen}
-        className="absolute inset-y-0 right-0 z-30 flex max-h-[85vh] min-h-0 w-[460px] max-w-[calc(100vw-16px)] flex-col overflow-y-auto border-l transition-transform duration-200 ease-out"
-        style={{
-          borderColor: "var(--border-default)",
-          background: "var(--bg-panel)",
-          transform: settingsOpen ? "translateX(0)" : "translateX(105%)",
-          pointerEvents: settingsOpen ? "auto" : "none",
-        }}
-      >
+      {settingsOpen ? (
+        <aside
+          aria-label={t.settings}
+          className="settings-drawer absolute inset-y-0 right-0 z-30 flex max-h-[85vh] min-h-0 w-[460px] max-w-[calc(100vw-16px)] flex-col overflow-y-auto border-l shadow-2xl"
+          style={{
+            borderColor: "var(--border-default)",
+            background: "var(--bg-panel)",
+          }}
+        >
         <div className="panel-header flex items-center justify-between">
           <span className="flex items-center gap-2">{t.settings}{Object.entries(agentDrafts).some(([agentId, draft]) => {
             const agent = data?.agents.find((candidate) => candidate.id === Number(agentId));
@@ -2857,7 +2856,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <button type="button" onClick={() => setSettingsOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
         </div>
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-10">
+          <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-10">
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <h3 className="mb-2 text-xs uppercase text-[var(--text-secondary)]">{t.projectFolder}</h3>
             <input
@@ -3257,8 +3256,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </section>
         </div>
       </aside>
-
-      {settingsOpen ? <button type="button" onClick={() => setSettingsOpen(false)} className="absolute inset-0 z-20 bg-black/40" aria-label={t.close} /> : null}
+      ) : null}
 
       {githubModalOpen ? (
         <div className="absolute inset-0 z-50 flex items-center justify-center">
