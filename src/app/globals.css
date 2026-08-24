@@ -114,50 +114,6 @@ body > div {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  container-type: inline-size;
-}
-
-/* Keep dense panel headers readable when several panels share a narrow window. */
-.panel-header {
-  min-width: 0;
-  overflow: hidden;
-}
-
-.panel-header > .truncate {
-  min-width: 0;
-  flex: 1 1 auto;
-}
-
-.panel-header > div:last-child {
-  min-width: 0;
-  max-width: 72%;
-  flex: 0 1 auto;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
-}
-
-.panel-header button,
-.panel-header label {
-  flex-shrink: 0;
-}
-
-.panel pre,
-.panel textarea,
-.panel input,
-.panel select {
-  max-width: 100%;
-}
-
-.panel pre {
-  overflow-wrap: anywhere;
-  word-break: break-word;
-}
-
-@container (max-width: 380px) {
-  .panel-header .panel-agent-count {
-    display: none;
-  }
 }
 
 .workspace-shell,
@@ -220,29 +176,4 @@ html * {
   transition: background-color 0.15s ease,
               border-color 0.15s ease,
               color 0.15s ease;
-}
-
-@media (max-width: 1280px) {
-  .workspace-shell > header {
-    gap: 8px;
-  }
-
-  .workspace-shell > header > div:last-child {
-    min-width: 0;
-    max-width: 58%;
-    overflow-x: auto;
-    overflow-y: hidden;
-    scrollbar-width: thin;
-  }
-}
-
-@media (max-width: 900px) {
-  .workspace-shell > header > div:nth-child(2) {
-    display: none;
-  }
-
-  .workspace-shell > header > div:last-child {
-    max-width: 68%;
-    gap: 4px;
-  }
 }
