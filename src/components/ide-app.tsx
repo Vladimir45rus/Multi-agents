@@ -32,6 +32,36 @@ type ChatAttachment = {
   previewText?: string;
 };
 
+type MentionState = {
+  channel: ChatChannel;
+  query: string;
+  start: number;
+  cursor: number;
+};
+
+const TASK_TEMPLATES = [
+  {
+    id: "refactor",
+    label: "Рефакторинг кода",
+    prompt: "Выполни рефакторинг кода: сначала изучи связанные файлы, найди дублирование и слабые места, внеси минимальные безопасные изменения и проверь typecheck и тесты.",
+  },
+  {
+    id: "tests",
+    label: "Покрытие тестами",
+    prompt: "Увеличь покрытие тестами: изучи текущие тесты, добавь проверки основных и пограничных сценариев, не меняй рабочую логику без необходимости и запусти тесты.",
+  },
+  {
+    id: "security",
+    label: "Поиск багов/уязвимостей",
+    prompt: "Проведи поиск багов и уязвимостей: проверь входные данные, обработку ошибок, секреты и права доступа, укажи точные файлы и внеси только подтверждённые исправления.",
+  },
+  {
+    id: "docs",
+    label: "Документирование",
+    prompt: "Подготовь документацию по текущей реализации: изучи код, опиши запуск, основные сценарии, настройки и ограничения, не изменяя рабочую логику.",
+  },
+] as const;
+
 type WorkspaceMessage = {
   id: number;
   chatChannel: ChatChannel;
@@ -561,6 +591,8 @@ export function IdeApp() {
   const [chatRunning, setChatRunning] = useState(false);
   const [retryRequest, setRetryRequest] = useState<ChatRetryRequest | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<number | string | null>(null);
+  const [mentionState, setMentionState] = useState<MentionState | null>(null);
+  const [templateMenu, setTemplateMenu] = useState<ChatChannel | null>(null);
   const [reportOpen, setReportOpen] = useState(false);
   const [reportText, setReportText] = useState("");
   const chatAbortRef = useRef<AbortController | null>(null);
@@ -873,9 +905,73 @@ export function IdeApp() {
     setter(target + cmd + " ");
   }
 
-  function handleMentionInput(channel: ChatChannel, value: string) {
+  function handleMentionInput(channel: ChatChannel, value: string, cursor = value.length) {
     const setter = channel === "lead" ? setLeadMessage : setGroupMessage;
     setter(value);
+    const beforeCursor = value.slice(0, cursor);
+    const match = beforeCursor.match(/(^|\\s)@([^\\s@]*)$/);
+    if (!match) {
+      setMentionState(null);
+      return;
+    }
+    setMentionState({ channel, query: match[2], start: cursor - match[2].length - 1, cursor });
+  }
+
+  function selectMentionFile(file: WorkspaceTreeEntry) {
+    if (!mentionState) return;
+    const current = mentionState.channel === "lead" ? leadMessage : groupMessage;
+    const setter = mentionState.channel === "lead" ? setLeadMessage : setGroupMessage;
+    const next = `${current.slice(0, mentionState.start)}@${file.path} ${current.slice(mentionState.cursor)}`;
+    const nextCursor = mentionState.start + file.path.length + 2;
+    setter(next);
+    setMentionState(null);
+    window.setTimeout(() => {
+      const input = Array.from(document.querySelectorAll<HTMLTextAreaElement>("textarea[data-chat-channel]")).find((candidate) => candidate.dataset.chatChannel === mentionState.channel);
+      input?.focus();
+      input?.setSelectionRange(nextCursor, nextCursor);
+    }, 0);
+  }
+
+  function applyTaskTemplate(channel: ChatChannel, prompt: string) {
+    const setter = channel === "lead" ? setLeadMessage : setGroupMessage;
+    setter(prompt);
+    setTemplateMenu(null);
+    setMentionState(null);
+  }
+
+  function mentionSuggestions(channel: ChatChannel) {
+    if (!mentionState || mentionState.channel !== channel) return [];
+    const query = mentionState.query.toLowerCase();
+    return workspaceTreeEntries
+      .filter((entry) => entry.kind === "file" && entry.path.toLowerCase().includes(query))
+      .slice(0, 8);
+  }
+
+  function renderMentionSuggestions(channel: ChatChannel) {
+    const suggestions = mentionSuggestions(channel);
+    if (suggestions.length === 0) return null;
+    return (
+      <div className="absolute bottom-full left-0 z-50 mb-1 max-h-48 w-full overflow-y-auto rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-1 shadow-xl">
+        {suggestions.map((file) => (
+          <button key={file.path} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => selectMentionFile(file)} className="block w-full truncate rounded px-2 py-1.5 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-hover)]">
+            📄 {file.path}
+          </button>
+        ))}
+      </div>
+    );
+  }
+
+  function renderTaskTemplates(channel: ChatChannel) {
+    if (templateMenu !== channel) return null;
+    return (
+      <div className="absolute right-0 top-full z-50 mt-1 w-56 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-1 shadow-xl">
+        {TASK_TEMPLATES.map((template) => (
+          <button key={template.id} type="button" onClick={() => applyTaskTemplate(channel, template.prompt)} className="block w-full rounded px-2 py-1.5 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-hover)]">
+            {template.label}
+          </button>
+        ))}
+      </div>
+    );
   }
 
   function exportAgents() {
@@ -2481,8 +2577,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
                   <span className="flex min-w-0 items-center gap-2"><span className="truncate">{t.leadChat}</span><span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span></span>
-                  <div className="flex items-center gap-0.5">
+                  <div className="relative flex items-center gap-0.5">
                     <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <button type="button" onClick={() => setTemplateMenu((current) => current === "lead" ? null : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
+                    {renderTaskTemplates("lead")}
                     <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
                     {renderCollapseButton("lead")}
                     {renderExpandButton("lead")}
@@ -2513,8 +2611,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <button key={`@-lead-${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "lead")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[var(--bg-panel-alt)]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
                     ))}
                   </div>
-                  <div className="flex gap-2">
-                    <textarea value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                  <div className="relative flex gap-2">
+                    {renderMentionSuggestions("lead")}
+                    <textarea data-chat-channel="lead" value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -2535,8 +2634,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <section className="panel h-full">
                 <div className="panel-header flex items-center justify-between">
                   <span className="flex min-w-0 items-center gap-2"><span className="truncate">{t.allChat}</span><span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span></span>
-                  <div className="flex items-center gap-1">
+                  <div className="relative flex items-center gap-1">
                     <span className="hidden text-[10px] text-[var(--text-secondary)] 2xl:inline">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <button type="button" onClick={() => setTemplateMenu((current) => current === "group" ? null : "group")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
+                    {renderTaskTemplates("group")}
                     {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
                       <button key={filter} type="button" onClick={() => setGroupRoleFilter(filter)} className={`rounded-full border px-1.5 py-0.5 text-[9px] ${groupRoleFilter === filter ? "border-blue-400 bg-blue-500/20 text-blue-200" : "border-[var(--border-default)] text-[var(--text-muted)] hover:text-white"}`}>
                         {filter === "all" ? "Все" : filter === "tester" ? "QA" : filter === "uiux" ? "UI/UX" : "Архитектор"}
@@ -2599,8 +2700,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <button key={`@${agent.id}`} type="button" onClick={() => quickCommand(`@${agent.name} `, "group")} className="rounded px-1.5 py-0.5 text-[10px] hover:bg-[var(--bg-panel-alt)]" style={{ color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff" }}>@{agent.name}</button>
                     ))}
                   </div>
-                  <div className="flex gap-2">
-                    <textarea value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                  <div className="relative flex gap-2">
+                    {renderMentionSuggestions("group")}
+                    <textarea data-chat-channel="group" value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
