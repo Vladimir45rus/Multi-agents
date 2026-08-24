@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceSnapshot, updateWorkspaceSettings } from "@/lib/workspace";
+import { clearProviderModelCache } from "@/lib/provider-models";
 import { isLoopbackRequest, mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
@@ -41,6 +42,13 @@ export async function PUT(request: Request) {
 export async function PATCH(request: Request) {
   try { return await handleUpdate(request); }
   catch (error) { return NextResponse.json({ error: error instanceof Error ? error.message : "Settings update failed" }, { status: 400 }); }
+}
+
+export async function DELETE(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
+  clearProviderModelCache();
+  return NextResponse.json({ ok: true, cleared: "temporary-agent-cache" });
 }
 
 export async function GET(request: Request) {

@@ -353,9 +353,9 @@ const dict = {
     search: "Поиск по файлам",
     searchPlaceholder: "Поиск по проекту (Ctrl+P)...",
     noResults: "Ничего не найдено",
-    exportAgents: "Экспорт агентов",
-    importAgents: "Импорт агентов",
-    importAgentsDesc: "Выберите .json файл с конфигурацией агентов",
+    exportAgents: "Экспорт настроек и профайлов",
+    importAgents: "Импорт настроек",
+    importAgentsDesc: "JSON без API-ключей и токенов: настройки и профили агентов",
     diff: "Изменения",
   },
   en: {
@@ -448,9 +448,9 @@ const dict = {
     search: "Search files",
     searchPlaceholder: "Search project (Ctrl+P)...",
     noResults: "No results found",
-    exportAgents: "Export agents",
-    importAgents: "Import agents",
-    importAgentsDesc: "Select .json file with agent configuration",
+    exportAgents: "Export settings and profiles",
+    importAgents: "Import settings",
+    importAgentsDesc: "JSON without API keys or tokens: settings and agent profiles",
     diff: "Changes",
   },
 };
@@ -872,11 +872,42 @@ export function IdeApp() {
 
   function exportAgents() {
     if (!data?.agents) return;
-    const json = JSON.stringify(data.agents.map((a) => ({ name: a.name, provider: a.provider, baseUrl: a.baseUrl, model: a.model, role: a.role, description: a.description, skill: a.skill, systemPrompt: a.systemPrompt, color: a.color ?? ROLE_COLORS[a.role] ?? "#4fc1ff" })), null, 2);
+    const settings = data.settings;
+    const payload = {
+      format: "multi-agent-code-studio-settings",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      // Deliberately exclude API keys, GitHub tokens, Telegram tokens and mobile access tokens.
+      settings: {
+        projectRoot: workspaceRootDraft || settings.projectRoot,
+        githubRepo: githubRepoDraft || settings.githubRepo,
+        githubAutoPush: githubAutoPushDraft,
+        autoApprove: autoApproveDraft,
+        localtunnelEnabled: localtunnelEnabledDraft,
+        fallbackModels: fallbackModelsDraft.split(/\\r?\\n|,/).map((value) => value.trim()).filter(Boolean),
+        previewCommand: previewCommandDraft,
+        previewPort: previewPortDraft,
+        projectTemplate: settings.projectTemplate,
+        projectTemplatePrompt: settings.projectTemplatePrompt,
+      },
+      agents: data.agents.map((agent) => ({
+        id: agent.id,
+        name: agent.name,
+        provider: agent.provider,
+        baseUrl: agent.baseUrl,
+        model: agent.model,
+        role: agent.role,
+        description: agent.description,
+        skill: agent.skill,
+        systemPrompt: agent.systemPrompt,
+        color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff",
+      })),
+    };
+    const json = JSON.stringify(payload, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = "agents-config.json";
+    a.href = url; a.download = "multi-agent-settings.json";
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -886,18 +917,85 @@ export function IdeApp() {
     if (!file) return;
     try {
       const text = await file.text();
-      const agents = JSON.parse(text) as Array<{ name: string; provider: string; baseUrl: string; model: string; role: string; description: string; skill: string; systemPrompt: string; color: string }>;
-      for (const agent of agents) {
-        const response = await fetch("/api/agents", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...agent, locale }) });
+      const parsed = JSON.parse(text) as
+        | { settings?: Record<string, unknown>; agents?: Array<Record<string, unknown>> }
+        | Array<Record<string, unknown>>;
+      const importedSettings = Array.isArray(parsed) ? {} : parsed.settings ?? {};
+      const importedAgents = Array.isArray(parsed) ? parsed : parsed.agents ?? [];
+      if (!importedSettings || typeof importedSettings !== "object") throw new Error("Invalid settings payload");
+
+      const settingsPayload: Record<string, unknown> = {};
+      const stringSettings = ["projectRoot", "githubRepo", "previewCommand", "projectTemplate", "projectTemplatePrompt"] as const;
+      for (const key of stringSettings) {
+        if (typeof importedSettings[key] === "string") settingsPayload[key] = importedSettings[key];
+      }
+      const booleanSettings = ["githubAutoPush", "autoApprove", "localtunnelEnabled"] as const;
+      for (const key of booleanSettings) {
+        if (typeof importedSettings[key] === "boolean") settingsPayload[key] = importedSettings[key];
+      }
+      if (Array.isArray(importedSettings.fallbackModels)) settingsPayload.fallbackModels = importedSettings.fallbackModels.filter((value): value is string => typeof value === "string");
+      if (typeof importedSettings.previewPort === "number") settingsPayload.previewPort = importedSettings.previewPort;
+
+      if (Object.keys(settingsPayload).length > 0) {
+        const settingsResponse = await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(settingsPayload),
+        });
+        if (!settingsResponse.ok) {
+          const payload = (await settingsResponse.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(payload?.error ?? "Settings import failed");
+        }
+      }
+
+      let importedCount = 0;
+      for (const importedAgent of importedAgents) {
+        if (typeof importedAgent.name !== "string" || typeof importedAgent.provider !== "string") continue;
+        const current = data?.agents.find((agent) =>
+          (typeof importedAgent.id === "number" && agent.id === importedAgent.id) || agent.name === importedAgent.name,
+        );
+        const agentPayload = {
+          provider: importedAgent.provider,
+          baseUrl: typeof importedAgent.baseUrl === "string" ? importedAgent.baseUrl : undefined,
+          model: typeof importedAgent.model === "string" ? importedAgent.model : undefined,
+          role: typeof importedAgent.role === "string" ? importedAgent.role : undefined,
+          description: typeof importedAgent.description === "string" ? importedAgent.description : undefined,
+          skill: typeof importedAgent.skill === "string" ? importedAgent.skill : "",
+          systemPrompt: typeof importedAgent.systemPrompt === "string" ? importedAgent.systemPrompt : "",
+          color: typeof importedAgent.color === "string" ? importedAgent.color : undefined,
+          locale,
+        };
+        const response = await fetch(current ? `/api/agents/${current.id}` : "/api/agents", {
+          method: current ? "PUT" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(current ? agentPayload : { ...agentPayload, name: importedAgent.name }),
+        });
         if (!response.ok) {
           const payload = (await response.json().catch(() => null)) as { error?: string } | null;
           throw new Error(payload?.error ?? "Agent import failed");
         }
+        importedCount += 1;
       }
+
       await loadWorkspace(selectedFileId, locale);
-      setStatus(locale === "ru" ? `Импортировано агентов: ${agents.length}` : `Imported agents: ${agents.length}`);
-    } catch {
-      setStatus(locale === "ru" ? "Не удалось импортировать агентов" : "Failed to import agents");
+      setStatus(locale === "ru" ? `Импортировано профилей: ${importedCount}` : `Imported profiles: ${importedCount}`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : (locale === "ru" ? "Не удалось импортировать настройки" : "Failed to import settings"));
+    }
+  }
+
+  async function clearAgentMemoryCache() {
+    try {
+      const response = await fetch("/api/settings", { method: "DELETE" });
+      if (!response.ok) throw new Error("Cache clear failed");
+      setModelOptions({});
+      setModelSearch({});
+      setStreamingMessages({});
+      setOptimisticMessages([]);
+      setRetryRequest(null);
+      setStatus(locale === "ru" ? "Временный кэш памяти агентов очищен. Ключи сохранены." : "Temporary agent memory cache cleared. Keys were preserved.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Cache clear failed");
     }
   }
 
@@ -2780,6 +2878,9 @@ export function IdeApp() {
               </div>
             </div>
             <p className="text-[10px] text-[var(--text-secondary)]">{t.importAgentsDesc}</p>
+            <button type="button" onClick={() => void clearAgentMemoryCache()} disabled={busy} className="mt-2 rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs text-amber-200 hover:border-amber-400 disabled:opacity-50">
+              {locale === "ru" ? "Очистить кэш памяти агентов" : "Clear agent memory cache"}
+            </button>
           </section>
 
           <section>

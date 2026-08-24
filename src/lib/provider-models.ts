@@ -108,6 +108,10 @@ export async function fetchProviderModels(provider: string, apiKey?: string, req
   }
 }
 
+export function clearProviderModelCache() {
+  cache.clear();
+}
+
 export function providerCacheTtlMs() {
   return TTL_MS;
 }
