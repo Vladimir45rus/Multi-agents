@@ -77,9 +77,13 @@ jobs:
         run: npm run build:standalone
 
       - name: Package Windows installer and portable build
+        run: npx electron-builder --win nsis portable --x64 --publish never
+
+      - name: Publish Windows assets to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --win nsis portable --x64 --publish onTag
+        shell: bash
+        run: gh release upload "${{ github.ref_name }}" release/*.exe release/latest.yml --clobber
 
       - name: Keep short-lived Windows build diagnostics
         uses: actions/upload-artifact@v4
@@ -114,9 +118,13 @@ jobs:
         run: npm run build:standalone
 
       - name: Package universal macOS builds
+        run: npx electron-builder --mac dmg zip --universal --publish never
+
+      - name: Publish macOS assets to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --mac dmg zip --universal --publish onTag
+        shell: bash
+        run: gh release upload "${{ github.ref_name }}" release/*.dmg release/*.zip release/latest-mac.yml --clobber
 
       - name: Keep short-lived macOS build diagnostics
         uses: actions/upload-artifact@v4
@@ -152,9 +160,13 @@ jobs:
         run: npm run build:standalone
 
       - name: Package Linux builds
+        run: npx electron-builder --linux AppImage deb --x64 --publish never
+
+      - name: Publish Linux assets to GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: npx electron-builder --linux AppImage deb --x64 --publish onTag
+        shell: bash
+        run: gh release upload "${{ github.ref_name }}" release/*.AppImage release/*.deb release/latest-linux.yml --clobber
 
       - name: Keep short-lived Linux build diagnostics
         uses: actions/upload-artifact@v4
