@@ -25,15 +25,15 @@ function languageFromPath(filePath: string): string {
   return map[ext] ?? "plaintext";
 }
 
-function getCurrentTheme(): "codebuff-dark" | "codebuff-light" {
-  if (typeof document === "undefined") return "codebuff-dark";
-  return document.documentElement.getAttribute("data-theme") === "light" ? "codebuff-light" : "codebuff-dark";
+function getCurrentTheme(): "studio-dark" | "studio-light" {
+  if (typeof document === "undefined") return "studio-dark";
+  return document.documentElement.getAttribute("data-theme") === "light" ? "studio-light" : "studio-dark";
 }
 
 export default function CodeEditor({ filePath, value, onChange, onSave, readOnly }: {
   filePath: string; value: string; onChange: (v: string) => void; onSave?: () => void; readOnly?: boolean;
 }) {
-  const [editorTheme, setEditorTheme] = useState<"codebuff-dark" | "codebuff-light">(getCurrentTheme);
+  const [editorTheme, setEditorTheme] = useState<"studio-dark" | "studio-light">(getCurrentTheme);
 
   // Observe external theme changes (DOM mutation from ThemeToggle)
   useEffect(() => {
@@ -43,7 +43,7 @@ export default function CodeEditor({ filePath, value, onChange, onSave, readOnly
   }, []);
 
   const defineMonacoThemes = useCallback((mon: any) => {
-    mon.editor.defineTheme("codebuff-dark", {
+    mon.editor.defineTheme("studio-dark", {
       base: "vs-dark", inherit: true, rules: [],
       colors: {
         "editor.background": "#090d16",
@@ -52,7 +52,7 @@ export default function CodeEditor({ filePath, value, onChange, onSave, readOnly
         "editor.selectionBackground": "#264f78",
       },
     });
-    mon.editor.defineTheme("codebuff-light", {
+    mon.editor.defineTheme("studio-light", {
       base: "vs", inherit: true, rules: [],
       colors: {
         "editor.background": "#fafafa",
