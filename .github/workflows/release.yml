@@ -81,7 +81,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --win nsis portable --x64 --publish onTag
 
-      - name: Upload Windows artifacts
+      - name: Keep short-lived Windows build diagnostics
         uses: actions/upload-artifact@v4
         with:
           name: release-windows
@@ -89,7 +89,7 @@ jobs:
             release/*.exe
             release/latest.yml
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   macos:
     name: macOS (Universal .dmg/.zip)
@@ -118,7 +118,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --mac dmg zip --universal --publish onTag
 
-      - name: Upload macOS artifacts
+      - name: Keep short-lived macOS build diagnostics
         uses: actions/upload-artifact@v4
         with:
           name: release-macos
@@ -127,7 +127,7 @@ jobs:
             release/*.zip
             release/latest-mac.yml
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
 
   linux:
     name: Linux (.AppImage/.deb)
@@ -156,7 +156,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: npx electron-builder --linux AppImage deb --x64 --publish onTag
 
-      - name: Upload Linux artifacts
+      - name: Keep short-lived Linux build diagnostics
         uses: actions/upload-artifact@v4
         with:
           name: release-linux
@@ -165,4 +165,4 @@ jobs:
             release/*.deb
             release/latest-linux.yml
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 1
