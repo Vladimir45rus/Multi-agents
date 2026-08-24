@@ -153,7 +153,19 @@ type DesktopBridge = {
   wasRecoveredFromCrash?: () => Promise<boolean>;
 };
 
-const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "uiux", "security", "observer"];
+const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "uiux", "security", "observer", "auto"];
+
+const ROLE_TEMPLATES: Record<string, { description: string; skill: string; systemPrompt: string }> = {
+  main: { description: "Главный кодер: принимает решения и пишет рабочий код.", skill: "Fullstack-разработка, декомпозиция задач, тестирование и безопасные изменения.", systemPrompt: "Ты Главный агент IDE. Анализируй контекст проекта, вноси минимальные проверяемые изменения и запускай подходящие проверки." },
+  advisor: { description: "Советник: исследует задачу и предлагает конкретные решения.", skill: "Анализ требований, поиск рисков и ясные технические рекомендации.", systemPrompt: "Ты Советник. Не изменяй код самостоятельно; изучай контекст и формулируй конкретные рекомендации Главному агенту." },
+  reviewer: { description: "Ревьюер: находит дефекты и регрессии.", skill: "Code review, типизация, корректность, безопасность и поддерживаемость.", systemPrompt: "Ты Ревьюер. Ищи реальные ошибки и регрессии, указывай файл, строку и способ исправления." },
+  tester: { description: "QA: проверяет поведение и крайние случаи.", skill: "Тест-дизайн, регрессии, интеграционные и негативные сценарии.", systemPrompt: "Ты QA-инженер. Проверяй требования, крайние случаи и тестируемость; предлагай воспроизводимые проверки." },
+  architect: { description: "Архитектор: отвечает за структуру и границы системы.", skill: "Проектирование модулей, API, потоков данных и масштабируемости.", systemPrompt: "Ты Архитектор. Оценивай структуру проекта, зависимости и долгосрочные риски; предлагай простые устойчивые решения." },
+  uiux: { description: "UI/UX: отвечает за удобство и визуальную целостность.", skill: "Адаптивная верстка, доступность, UX-потоки и дизайн-системы.", systemPrompt: "Ты UI/UX дизайнер. Анализируй интерфейс, responsive-поведение, доступность и ясность пользовательских сценариев." },
+  security: { description: "Security: ищет уязвимости и утечки данных.", skill: "Моделирование угроз, валидация входных данных и безопасное хранение секретов.", systemPrompt: "Ты Security-аналитик. Ищи уязвимости, утечки секретов и опасные границы доверия; предлагай практичные исправления." },
+  observer: { description: "Наблюдатель: следит за состоянием процесса и результатами.", skill: "Мониторинг прогресса, диагностика сбоев и контроль критериев готовности.", systemPrompt: "Ты Наблюдатель. Сверяй прогресс с задачей, фиксируй блокеры и критерии готовности." },
+  auto: { description: "AUTO: автономно контролирует цикл выполнения.", skill: "Контроль прогресса, критериев готовности и безопасного завершения цикла.", systemPrompt: "Ты AUTO-агент. Контролируй автономный цикл, фиксируй блокеры и проверяй критерии RELEASE_READY." },
+};
 
 const ROLE_COLORS: Record<string, string> = {
   main: "#8b5cf6",
@@ -452,9 +464,9 @@ const emptyNewAgent = (overrides: Partial<NewAgentDraft> = {}, existingColors: s
     baseUrl: preset.baseUrl,
     model: preset.defaultModel,
     role,
-    description: "",
-    skill: "",
-    systemPrompt: "",
+    description: ROLE_TEMPLATES[role]?.description ?? "",
+    skill: ROLE_TEMPLATES[role]?.skill ?? "",
+    systemPrompt: ROLE_TEMPLATES[role]?.systemPrompt ?? "",
     color: overrides.color ?? pickUniqueColor(existingColors, role),
     manualModel: false,
     ...overrides,
@@ -534,6 +546,7 @@ export function IdeApp() {
   const [agentDrafts, setAgentDrafts] = useState<Record<number, AgentDraft>>({});
   const [newAgent, setNewAgent] = useState<NewAgentDraft>(emptyNewAgent());
   const [modelOptions, setModelOptions] = useState<Record<string, string[]>>({});
+  const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
 
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [workspaceRootDraft, setWorkspaceRootDraft] = useState("");
@@ -687,8 +700,9 @@ export function IdeApp() {
       if (role === "uiux") return "UI/UX Дизайнер";
       if (role === "security") return "Секурити";
       if (role === "observer") return "Наблюдатель";
+      if (role === "auto") return "AUTO";
     }
-    return role;
+    return role === "auto" ? "AUTO" : role;
   }
 
   function providerModelLabel(provider: string, model: string) {
@@ -1301,7 +1315,14 @@ export function IdeApp() {
       if (!res.ok) throw new Error(payload?.error ?? "Failed to connect folder");
       setWorkspaceRootDraft(payload?.root ?? directory);
       setStatus(`${t.folderConnected}: ${payload?.imported ?? 0} files`);
-      await loadWorkspace(selectedFileId, locale);
+      setOpenTabs([]);
+      setSelectedFileId(null);
+      setEditorText("");
+      setExpandedDirectories([]);
+      expandedDirectoriesInitializedRef.current = false;
+      setStreamingMessages({});
+      setOptimisticMessages([]);
+      await loadWorkspace(null, locale, { clearSelection: true });
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Failed to connect folder");
     } finally {
@@ -1692,10 +1713,10 @@ export function IdeApp() {
             const current = previous[identity.agentId];
             return {
               ...previous,
-              [identity.agentId]: finishStream(current, event.channel as ChatChannel, identity, "", "error", event.message, new Date().toISOString(), event.rateLimited ?? event.status === 429),
+              [identity.agentId]: finishStream(current, event.channel as ChatChannel, identity, "", "error", undefined, new Date().toISOString(), false),
             };
           });
-          setStatus(event.message);
+          // Provider errors are stored in System Events and intentionally omitted from chat.
         }
       };
 
@@ -1727,7 +1748,7 @@ export function IdeApp() {
         finishStream(streamMessage, streamMessage.channel, streamMessage.identity, "", cancelled ? "cancelled" : "error", cancelled ? undefined : messageText),
       ])));
       setRetryRequest({ channel, message, duplicate, attachments: outgoingAttachments, optimisticIds });
-      setStatus(messageText);
+      // Details are available in the Logs / System Events panel.
     } finally {
       if (chatAbortRef.current === controller) chatAbortRef.current = null;
       setChatRunning(false);
@@ -2029,7 +2050,7 @@ export function IdeApp() {
 
   function renderStreamingMessages(channel: ChatChannel) {
     return liveMessages
-      .filter((message) => message.channel === channel)
+      .filter((message) => message.channel === channel && message.status !== "error")
       .map((message) => (
         <article key={`stream-${message.identity.agentId}`} className="mr-auto w-fit max-w-[92%] rounded border border-[#007acc] bg-[var(--bg-panel)] p-2 text-sm">
           <div className="flex items-center justify-between gap-2">
@@ -2037,9 +2058,7 @@ export function IdeApp() {
             <span className={`text-[10px] ${statusClass(message.status)}`}>{statusLabel(message.status)}</span>
           </div>
           <p className="mt-1 whitespace-pre-wrap">{message.content || "…"}</p>
-          {message.error ? <p className="mt-1 text-xs text-[#f48771]">{message.error}</p> : null}
-          {message.rateLimited ? <p className="mt-1 rounded bg-[#5a3c2b] px-2 py-1 text-xs text-[#f4c7a1]">{t.error429}</p> : null}
-          {message.status === "error" && !message.rateLimited ? <p className="mt-1 rounded bg-[#3a2b2b] px-2 py-1 text-xs text-[#f4a1a1]">{t.errorDefault}</p> : null}
+          {message.status === "error" ? <p className="mt-1 text-xs text-[var(--text-muted)]">{t.errorStatus}</p> : null}
           {renderMessageActions(`stream-${message.identity.agentId}`, message.content, false)}
         </article>
       ));
@@ -2428,11 +2447,11 @@ export function IdeApp() {
         </div>
 
         {/* Horizontal resizer between top and bottom */}
-        <div className="z-10 h-1 cursor-row-resize bg-transparent hover:bg-[#007acc]" onPointerDown={startRowResize} />
+        <div className="absolute bottom-0 z-20 h-2 w-full cursor-row-resize bg-transparent hover:bg-[#007acc]" style={{ transform: `translateY(-${bottomRowHeight}px)` }} onPointerDown={startRowResize} />
 
         {/* Bottom row: Terminal | Logs */}
         <div
-          className="absolute bottom-0 z-10 flex border-t border-[var(--border-default)] bg-[var(--bg-terminal)] shadow-[0_-12px_30px_rgba(0,0,0,0.24)]"
+          className="relative z-10 flex min-h-0 shrink-0 border-t border-[var(--border-default)] bg-[var(--bg-terminal)] shadow-[0_-12px_30px_rgba(0,0,0,0.24)]"
           style={{
             left: collapsedPanels.explorer ? `${COLLAPSED_SIDE}px` : `${topGrows[0] * 100}%`,
             right: `${(topGrows[2] + topGrows[3]) * 100}%`,
@@ -2441,7 +2460,7 @@ export function IdeApp() {
           }}
         >
           {/* Terminal */}
-          <div className={`relative ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%`, minWidth: 0 }}>
+          <div className={`relative min-h-0 ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("terminal", t.terminal, false)}
             {!collapsedPanels.terminal && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2473,7 +2492,7 @@ export function IdeApp() {
           </div>
 
           {/* Logs / System Events */}
-          <div className={`relative ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%`, minWidth: 0 }}>
+          <div className={`relative min-h-0 ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%`, minWidth: 0 }}>
             {collapsedStrip("logs", t.logsTitle, false)}
             {!collapsedPanels.logs && (
               <section className="panel h-full">
@@ -2806,7 +2825,7 @@ export function IdeApp() {
                         }}
                         className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                       >
-                        {(modelOptions[draft.provider] ?? getProviderPreset(draft.provider).fallbackModels)?.map((model) => (
+                        {(modelOptions[draft.provider] ?? getProviderPreset(draft.provider).fallbackModels).filter((model) => model.toLowerCase().includes((modelSearch[`agent-${agent.id}`] ?? "").toLowerCase())).map((model) => (
                           <option key={model} value={model}>{model}</option>
                         ))}
                         {draft.model && !(modelOptions[draft.provider] ?? []).includes(draft.model) ? <option value={draft.model}>{draft.model}</option> : null}
@@ -2815,6 +2834,7 @@ export function IdeApp() {
                       <button type="button" onClick={() => fetchModels(draft.provider, draft.baseUrl, apiKeysDraft[draft.provider], true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
                         {t.loadModels}
                       </button>
+                      <input value={modelSearch[`agent-${agent.id}`] ?? ""} onChange={(e) => setModelSearch((prev) => ({ ...prev, [`agent-${agent.id}`]: e.target.value }))} placeholder="free / coder / qwen" className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px]" />
                     </div>
 
                     {draft.manualModel ? <input value={draft.model} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value } }))} placeholder={t.model} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" /> : null}
@@ -2915,7 +2935,7 @@ export function IdeApp() {
                           }}
                           className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                         >
-                          {(modelOptions[newAgent.provider] ?? getProviderPreset(newAgent.provider).fallbackModels)?.map((model) => (
+                          {(modelOptions[newAgent.provider] ?? getProviderPreset(newAgent.provider).fallbackModels).filter((model) => model.toLowerCase().includes((modelSearch.new ?? "").toLowerCase())).map((model) => (
                             <option key={model} value={model}>{model}</option>
                           ))}
                           {newAgent.model && !(modelOptions[newAgent.provider] ?? []).includes(newAgent.model) ? <option value={newAgent.model}>{newAgent.model}</option> : null}
@@ -2924,6 +2944,7 @@ export function IdeApp() {
                         <button type="button" onClick={() => fetchModels(newAgent.provider, newAgent.baseUrl, apiKeysDraft[newAgent.provider], true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
                           {t.loadModels}
                         </button>
+                        <input value={modelSearch.new ?? ""} onChange={(e) => setModelSearch((prev) => ({ ...prev, new: e.target.value }))} placeholder="free / coder / qwen" className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px]" />
                       </div>
                       {newAgent.manualModel ? <input value={newAgent.model} onChange={(e) => setNewAgent((p) => ({ ...p, model: e.target.value }))} placeholder={t.model} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" /> : null}
                       <select value={newAgent.role} onChange={(e) => {

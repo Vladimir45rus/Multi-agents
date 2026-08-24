@@ -1,5 +1,6 @@
 import { runSandboxCommand } from "@/lib/terminal-sandbox";
 import { clearTerminalHistory } from "@/lib/workspace";
+import { recordSystemEvent } from "@/lib/system-events";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,7 +10,9 @@ export async function DELETE() {
     await clearTerminalHistory();
     return Response.json({ ok: true });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Terminal clear failed" }, { status: 400 });
+    const message = error instanceof Error ? error.message : "Terminal clear failed";
+    await recordSystemEvent("error", "terminal", message).catch(() => undefined);
+    return Response.json({ error: message }, { status: 400 });
   }
 }
 
@@ -24,6 +27,7 @@ export async function POST(request: Request) {
     return Response.json({ ok: true, ...result });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Terminal command failed";
+    await recordSystemEvent("error", "terminal", message).catch(() => undefined);
     return Response.json({ error: message }, { status: 400 });
   }
 }

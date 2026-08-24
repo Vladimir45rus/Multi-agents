@@ -487,8 +487,9 @@ async function completeAgent(
     const fallbackModels = Array.isArray(settings.fallbackModels) ? settings.fallbackModels : [];
     const context = await buildProjectContext(projectContext);
     const templatePrompt = compact(settings.projectTemplatePrompt);
+    const refreshedSystemPrompt = `${systemPrompt}\n\n=== CURRENT PROJECT CONTEXT (REFRESHED) ===\n${context}`;
     const messages: GatewayMessage[] = [
-      { role: "system", content: templatePrompt ? `${systemPrompt}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : systemPrompt },
+      { role: "system", content: templatePrompt ? `${refreshedSystemPrompt}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : refreshedSystemPrompt },
       { role: "user", content: `${userPrompt}\n\n${context}` },
     ];
     return await completeProviderResponse(request, messages, {

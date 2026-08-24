@@ -6,7 +6,7 @@ const fs = require("node:fs");
 const http = require("node:http");
 
 const ENC_PREFIX = "enc:v1:";
-const DEFAULT_START_URL = "http://localhost:3000";
+const DEFAULT_START_URL = "http://127.0.0.1:3000";
 const DEFAULT_SERVER_PORT = 3210;
 const MAX_SERVER_RESTARTS = 5;
 const SERVER_READY_TIMEOUT_MS = 90_000;
@@ -108,7 +108,23 @@ function scheduleServerRestart() {
   }, 1000);
 }
 
-function startEmbeddedServer() {
+function findAvailablePort(startPort) {
+  return new Promise((resolve, reject) => {
+    const probe = (port) => {
+      const server = http.createServer();
+      server.once("error", () => {
+        server.close(() => probe(port + 1));
+      });
+      server.listen(port, "127.0.0.1", () => {
+        server.close(() => resolve(port));
+      });
+    };
+    probe(startPort);
+    setTimeout(() => reject(new Error("No available localhost port found")), 10000);
+  });
+}
+
+async function startEmbeddedServer() {
   const serverPath = standaloneServerPath();
   if (!fs.existsSync(serverPath)) {
     const message = `Standalone server not found at ${serverPath}. Run "npm run build:standalone" first.`;
@@ -116,7 +132,9 @@ function startEmbeddedServer() {
     return Promise.reject(new Error(message));
   }
 
-  const port = Number(process.env.ELECTRON_SERVER_PORT || DEFAULT_SERVER_PORT);
+  const requestedPort = Number(process.env.ELECTRON_SERVER_PORT || DEFAULT_SERVER_PORT);
+  const port = await findAvailablePort(requestedPort);
+  process.env.ELECTRON_SERVER_PORT = String(port);
   const dbPath = path.join(userDataDir(), "dev.db");
   const migrationsDir = path.join(path.dirname(serverPath), "drizzle");
   const staticDir = path.join(path.dirname(serverPath), ".next", "static");
@@ -128,7 +146,7 @@ function startEmbeddedServer() {
     log("server", `Warning: could not create data dir: ${error.message}`);
   }
 
-  log("server", `Starting embedded Next.js server on 0.0.0.0:${port}`);
+  log("server", `Starting embedded Next.js server on 127.0.0.1:${port}`);
   log("server", `Database: ${dbPath}`);
   log("server", `Migrations dir: ${migrationsDir} (${fs.existsSync(migrationsDir) ? "found" : "MISSING"})`);
   log("server", `Static dir: ${staticDir} (${fs.existsSync(staticDir) ? "found" : "missing"})`);
@@ -141,7 +159,7 @@ function startEmbeddedServer() {
       // Run the child as plain Node.js (not a second Electron instance).
       ELECTRON_RUN_AS_NODE: "1",
       NODE_ENV: "production",
-      HOSTNAME: "0.0.0.0",
+      HOSTNAME: "127.0.0.1",
       PORT: String(port),
       DATABASE_URL: `file:${dbPath}`,
       ELECTRON_VAULT: "1",
@@ -182,7 +200,7 @@ function startEmbeddedServer() {
   });
 
   return new Promise((resolve, reject) => {
-    const healthUrl = `http://0.0.0.0:${port}/api/health`;
+    const healthUrl = `http://127.0.0.1:${port}/api/health`;
     const deadline = Date.now() + SERVER_READY_TIMEOUT_MS;
     let settled = false;
 
@@ -573,12 +591,14 @@ app.whenReady().then(async () => {
   installApplicationMenu();
 
   const embedded = app.isPackaged || process.env.ELECTRON_EMBED_SERVER === "1";
-  const port = Number(process.env.ELECTRON_SERVER_PORT || DEFAULT_SERVER_PORT);
+  let port = Number(process.env.ELECTRON_SERVER_PORT || DEFAULT_SERVER_PORT);
   let startUrl = embedded ? `http://127.0.0.1:${port}` : process.env.ELECTRON_START_URL || DEFAULT_START_URL;
 
   if (embedded) {
     try {
       await startEmbeddedServer();
+      port = Number(process.env.ELECTRON_SERVER_PORT || port);
+      startUrl = `http://127.0.0.1:${port}`;
     } catch (error) {
       log("server", `Failed to start embedded server: ${error.message}`);
       dialog.showErrorBox("Server error", error.message);

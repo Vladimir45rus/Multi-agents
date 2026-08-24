@@ -1,6 +1,7 @@
 import { streamWorkspaceMessage, type ChatAttachment, type ChatChannel, type ChatStreamEvent, type UiLocale } from "@/lib/workspace";
 import type { ProjectContextInput } from "@/lib/project-context";
 import { mobileAccessError } from "@/lib/mobile-auth";
+import { recordSystemEvent } from "@/lib/system-events";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,6 +53,7 @@ export async function POST(request: Request) {
       } catch (error) {
         if (!request.signal.aborted) {
           const errorMessage = error instanceof Error ? error.message : "Chat stream failed";
+          await recordSystemEvent("error", "chat", errorMessage, error instanceof Error ? error.stack ?? "" : "").catch(() => undefined);
           controller.enqueue(encodeEvent(encoder, { type: "error", channel, message: errorMessage }));
         }
       } finally {

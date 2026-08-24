@@ -1,4 +1,5 @@
 import { connectWorkspaceDirectory, getWorkspaceRoot } from "@/lib/workspace-files";
+import { recordSystemEvent } from "@/lib/system-events";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -15,8 +16,12 @@ export async function PUT(request: Request) {
   try {
     const body = (await request.json()) as { directory?: string };
     if (!body.directory?.trim()) return Response.json({ error: "directory is required" }, { status: 400 });
-    return Response.json({ ok: true, ...(await connectWorkspaceDirectory(body.directory)) });
+    const result = await connectWorkspaceDirectory(body.directory);
+    await recordSystemEvent("success", "workspace", `Workspace connected: ${result.root}`);
+    return Response.json({ ok: true, ...result });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Failed to connect workspace" }, { status: 400 });
+    const message = error instanceof Error ? error.message : "Failed to connect workspace";
+    await recordSystemEvent("error", "workspace", message).catch(() => undefined);
+    return Response.json({ error: message }, { status: 400 });
   }
 }

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { fetchProviderModels } from "@/lib/provider-models";
 import { getStoredProviderApiKey } from "@/lib/workspace";
 import { validateApiKey } from "@/lib/provider-gateway";
+import { recordSystemEvent } from "@/lib/system-events";
 
 export const dynamic = "force-dynamic";
 
@@ -19,7 +20,9 @@ export async function POST(request: Request) {
     const result = await fetchProviderModels(provider, apiKey || undefined, body.baseUrl, Boolean(body.force));
     return NextResponse.json(result);
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Model request failed" }, { status: 400 });
+    const message = error instanceof Error ? error.message : "Model request failed";
+    await recordSystemEvent("error", "models", message).catch(() => undefined);
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }
 

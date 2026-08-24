@@ -153,6 +153,18 @@ type WorkspaceSnapshot = {
   }>;
 };
 
+const ROLE_PROMPT_TEMPLATES: Record<string, { description: string; skill: string; systemPrompt: string }> = {
+  main: { description: "Главный кодер: принимает решения и пишет рабочий код.", skill: "Fullstack-разработка, декомпозиция задач, тестирование и безопасные изменения.", systemPrompt: "Ты Главный агент IDE. Анализируй контекст проекта, вноси минимальные проверяемые изменения и запускай подходящие проверки." },
+  advisor: { description: "Советник: исследует задачу и предлагает конкретные решения.", skill: "Анализ требований, поиск рисков и ясные технические рекомендации.", systemPrompt: "Ты Советник. Не изменяй код самостоятельно; изучай контекст и формулируй конкретные рекомендации Главному агенту." },
+  architect: { description: "Архитектор: отвечает за структуру и границы системы.", skill: "Проектирование модулей, API, потоков данных и масштабируемости.", systemPrompt: "Ты Архитектор. Оценивай структуру проекта, зависимости и долгосрочные риски; предлагай простые устойчивые решения." },
+  reviewer: { description: "Ревьюер: находит дефекты и регрессии.", skill: "Code review, типизация, корректность, безопасность и поддерживаемость.", systemPrompt: "Ты Ревьюер. Ищи реальные ошибки и регрессии, указывай файл, строку и способ исправления." },
+  tester: { description: "QA: проверяет поведение и крайние случаи.", skill: "Тест-дизайн, регрессии, интеграционные и негативные сценарии.", systemPrompt: "Ты QA-инженер. Проверяй требования, крайние случаи и тестируемость; предлагай воспроизводимые проверки." },
+  uiux: { description: "UI/UX: отвечает за удобство и визуальную целостность.", skill: "Адаптивная верстка, доступность, UX-потоки и дизайн-системы.", systemPrompt: "Ты UI/UX дизайнер. Анализируй интерфейс, responsive-поведение, доступность и ясность пользовательских сценариев." },
+  security: { description: "Security: ищет уязвимости и утечки данных.", skill: "Моделирование угроз, валидация входных данных и безопасное хранение секретов.", systemPrompt: "Ты Security-аналитик. Ищи уязвимости, утечки секретов и опасные границы доверия; предлагай практичные исправления." },
+  observer: { description: "Наблюдатель: следит за состоянием процесса и результатами.", skill: "Мониторинг прогресса, диагностика сбоев и контроль критериев готовности.", systemPrompt: "Ты Наблюдатель. Сверяй прогресс с задачей, фиксируй блокеры и критерии готовности." },
+  auto: { description: "AUTO: автономно контролирует цикл выполнения.", skill: "Контроль прогресса, критериев готовности и безопасного завершения цикла.", systemPrompt: "Ты AUTO-агент. Контролируй автономный цикл, фиксируй блокеры и проверяй критерии RELEASE_READY." },
+};
+
 const defaultAgents = [
   {
     name: "Главный агент",
@@ -160,9 +172,9 @@ const defaultAgents = [
     baseUrl: "https://api.openai.com/v1",
     model: "gpt-4.1-mini",
     role: "main",
-    description: "Главный кодер: проектирует архитектуру и пишет основной код.",
-    skill: "Сильный fullstack-инженер с акцентом на чистую архитектуру и практичность.",
-    systemPrompt: "Ты главный разработчик внутри IDE Multi-Agent Code Studio. Дерево проекта и содержимое открытых файлов автоматически передаются тебе приложением. Используй инструменты read_file, write_file, create_file для работы с кодом. Никогда не говори «у меня нет доступа к файлам» — это неправда, доступ есть через инструменты.",
+    description: ROLE_PROMPT_TEMPLATES.main.description,
+    skill: ROLE_PROMPT_TEMPLATES.main.skill,
+    systemPrompt: ROLE_PROMPT_TEMPLATES.main.systemPrompt,
     color: "#8b5cf6",
   },
 ] as const;
@@ -427,14 +439,6 @@ export async function pushWorkspaceToGitHub(
   await recordSystemEvent("info", "github", t(activeLocale, `Отправка в ${repo}/${branch}...`, `Pushing to ${repo}/${branch}...`));
   await runGit(["push", "-u", "origin", `HEAD:${branch}`], root, await gitAuthEnv(token));
   await recordSystemEvent("success", "github", t(activeLocale, `GitHub push выполнен: ${repo}/${branch}.`, `GitHub push completed: ${repo}/${branch}.`));
-
-  await pushMessage({
-    chatChannel: "group",
-    senderType: "system",
-    agentName: "System",
-    content: t(activeLocale, `GitHub push выполнен: ${repo}/${branch}.`, `GitHub push completed: ${repo}/${branch}.`),
-  });
-
   return { branch, repo };
 }
 
@@ -495,8 +499,12 @@ export async function ensureWorkspaceBootstrap() {
       ? agent.role === "main" ? "Главный агент" : "Советник"
       : agent.name;
     const roleColor = ROLE_COLORS[agent.role];
-    if (model !== agent.model || systemPrompt !== agent.systemPrompt || name !== agent.name || (roleColor && roleColor !== agent.color)) {
-      await db.update(agents).set({ model, systemPrompt, name, ...(roleColor ? { color: roleColor } : {}) }).where(eq(agents.id, agent.id));
+    const roleTemplate = ROLE_PROMPT_TEMPLATES[agent.role] ?? ROLE_PROMPT_TEMPLATES.advisor;
+    const migratedDescription = compact(agent.description) || roleTemplate.description;
+    const migratedSkill = compact(agent.skill) || roleTemplate.skill;
+    const migratedPrompt = systemPrompt || roleTemplate.systemPrompt;
+    if (model !== agent.model || migratedPrompt !== agent.systemPrompt || migratedDescription !== agent.description || migratedSkill !== agent.skill || name !== agent.name || (roleColor && roleColor !== agent.color)) {
+      await db.update(agents).set({ model, systemPrompt: migratedPrompt, description: migratedDescription, skill: migratedSkill, name, ...(roleColor ? { color: roleColor } : {}) }).where(eq(agents.id, agent.id));
     }
   }
 
@@ -759,6 +767,7 @@ export async function createAgent(
   const model = normalizeProviderModel(provider, compact(payload.model) || preset.defaultModel);
   const baseUrl = compact(payload.baseUrl) || preset.baseUrl;
   const role = normalizeRole(payload.role);
+  const roleTemplate = ROLE_PROMPT_TEMPLATES[role] ?? ROLE_PROMPT_TEMPLATES.advisor;
 
   if (!name) throw new Error(t(activeLocale, "Имя агента обязательно", "Agent name is required"));
 
@@ -770,9 +779,9 @@ export async function createAgent(
       baseUrl,
       model,
       role: role === "main" ? "advisor" : role,
-      description: payload.description ?? "",
-      skill: payload.skill ?? "",
-      systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt ?? ""),
+      description: compact(payload.description) || roleTemplate.description,
+      skill: compact(payload.skill) || roleTemplate.skill,
+      systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt ?? "") || roleTemplate.systemPrompt,
       color: ROLE_COLORS[role === "main" ? "main" : role] ?? (compact(payload.color) || "#4fc1ff"),
       isActive: true,
     })
@@ -1210,8 +1219,10 @@ async function* streamAgentReply(
 
   const [workspaceSettingsRow] = await db.select({ projectTemplatePrompt: workspaceSettings.projectTemplatePrompt, fallbackModels: workspaceSettings.fallbackModels }).from(workspaceSettings).limit(1);
   const templatePrompt = compact(workspaceSettingsRow?.projectTemplatePrompt);
+  const baseSystemPrompt = agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix);
+  const refreshedSystemPrompt = `${baseSystemPrompt}\n\n=== CURRENT PROJECT CONTEXT (REFRESHED) ===\n${projectContext}`;
   const gatewayMessages: GatewayMessage[] = [
-    { role: "system", content: templatePrompt ? `${agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix)}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix) },
+    { role: "system", content: templatePrompt ? `${refreshedSystemPrompt}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : refreshedSystemPrompt },
     ...history,
   ];
 
@@ -1479,6 +1490,7 @@ async function* runAgentRound(
         isMultiAgent: ctxIsMulti,
         reviewOnly: Boolean(options.reviewOnly),
         fixMode: Boolean(options.fixMode),
+        projectContext: options.projectContext,
       })) {
         yield event;
       }
@@ -1486,7 +1498,12 @@ async function* runAgentRound(
       if (options.signal?.aborted) throw error;
       const message = agentFailureMessage(activeLocale, agent, error);
       try {
-        await pushMessage({ chatChannel: channel, senderType: "system", agentName: "System", content: message });
+        await recordSystemEvent(
+          error instanceof ProviderGatewayError && error.status === 429 ? "warning" : "error",
+          "provider",
+          message,
+          error instanceof Error ? error.stack ?? "" : "",
+        );
       } catch { /* best-effort */ }
       yield {
         type: "agent_error", channel,

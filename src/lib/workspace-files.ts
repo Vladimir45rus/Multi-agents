@@ -191,21 +191,27 @@ export async function connectWorkspaceDirectory(directory: string) {
 
   const tree = await scanTree(resolved);
   const virtualRows = await db.select().from(projectFiles);
+  const [currentSettings] = await db.select({ projectRoot: workspaceSettings.projectRoot }).from(workspaceSettings).limit(1);
+  const previousRoot = currentSettings?.projectRoot ?? "";
   await db.update(workspaceSettings).set({ projectRoot: resolved, updatedAt: new Date() });
 
-  // Preserve files created before a physical project folder was connected.
-  for (const row of virtualRows) {
-    if (row.path.startsWith(VIRTUAL_DIRECTORY_PREFIX) || row.language === "directory") continue;
-    const target = await safeAbsolutePath(resolved, row.path);
-    try {
-      await lstat(target.absolutePath);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await mkdir(path.dirname(target.absolutePath), { recursive: true });
-      await writeFile(target.absolutePath, row.content, { encoding: "utf8", flag: "wx" });
+  // A folder switch starts a new workspace index; never leak files from the old root.
+  // Only a root-less virtual workspace may be materialized into the first physical folder.
+  if (!previousRoot) {
+    for (const row of virtualRows) {
+      if (row.path.startsWith(VIRTUAL_DIRECTORY_PREFIX) || row.language === "directory") continue;
+      const target = await safeAbsolutePath(resolved, row.path);
+      try {
+        await lstat(target.absolutePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        await mkdir(path.dirname(target.absolutePath), { recursive: true });
+        await writeFile(target.absolutePath, row.content, { encoding: "utf8", flag: "wx" });
+      }
     }
   }
 
+  await db.delete(projectFiles);
   const connectedTree = await scanTree(resolved);
   await db.delete(projectFiles);
 
