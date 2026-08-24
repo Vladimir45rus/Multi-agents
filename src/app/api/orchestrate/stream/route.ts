@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { registerTaskController, releaseTaskController, runOrchestrator } from "@/lib/orchestrator";
 import type { OrchestratorStreamEvent } from "@/lib/orchestrator-types";
 import type { ProjectContextInput } from "@/lib/project-context";
+import { recordApiError } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,12 +20,16 @@ export async function POST(request: Request) {
 
   try {
     body = (await request.json()) as typeof body;
-  } catch {
+  } catch (error) {
+    await recordApiError("orchestrate.stream", 400, error);
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
   const task = typeof body.task === "string" ? body.task : "";
-  if (!task.trim()) return Response.json({ error: "task is required" }, { status: 400 });
+  if (!task.trim()) {
+    await recordApiError("orchestrate.stream", 400, "task is required");
+    return Response.json({ error: "task is required" }, { status: 400 });
+  }
 
   const taskId = (typeof body.taskId === "string" && body.taskId.trim() ? body.taskId.trim() : "") || randomUUID();
   const maxIterations = typeof body.maxIterations === "number" ? body.maxIterations : undefined;
@@ -41,7 +46,7 @@ export async function POST(request: Request) {
           streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         }
       } catch (error) {
-        const message = error instanceof Error ? error.message : "Orchestrator failed";
+        const message = await recordApiError("orchestrate.stream", 500, error);
         const event: OrchestratorStreamEvent = { type: "error", message };
         streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
       } finally {

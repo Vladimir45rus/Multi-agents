@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceSnapshot } from "@/lib/workspace";
 import { isLoopbackRequest, mobileAccessError } from "@/lib/mobile-auth";
+import { recordApiError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -16,10 +17,8 @@ export async function GET(request: Request) {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Workspace load failed" },
-      { status: 500 },
-    );
+    const message = await recordApiError("workspace.snapshot", 500, error);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 

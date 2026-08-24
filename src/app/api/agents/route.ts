@@ -1,4 +1,5 @@
 import { createAgent, getWorkspaceSnapshot } from "@/lib/workspace";
+import { recordApiError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +10,7 @@ export async function GET() {
       headers: { "Cache-Control": "no-store" },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Agents load failed";
+    const message = await recordApiError("agents.list", 500, error);
     return Response.json({ error: message }, { status: 500 });
   }
 }
@@ -29,6 +30,7 @@ export async function POST(request: Request) {
     };
 
     if (!body.name?.trim()) {
+      await recordApiError("agents.create", 400, "name is required");
       return Response.json({ error: "name is required" }, { status: 400 });
     }
 
@@ -49,7 +51,7 @@ export async function POST(request: Request) {
 
     return Response.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Agent creation failed";
+    const message = await recordApiError("agents.create", 400, error);
     return Response.json({ error: message }, { status: 400 });
   }
 }

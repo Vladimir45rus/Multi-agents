@@ -1,4 +1,5 @@
 import { listOrchestratorEvents } from "@/lib/orchestrator";
+import { recordApiError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -11,7 +12,7 @@ export async function GET(request: Request) {
 
     return Response.json({ events: await listOrchestratorEvents(limit) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to load orchestrator events";
+    const message = await recordApiError("orchestrate.events", 400, error);
     return Response.json({ error: message }, { status: 400 });
   }
 }

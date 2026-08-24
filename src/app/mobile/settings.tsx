@@ -12,6 +12,7 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export function MobileSettings({ onBack, agents, accessToken }: { onBack: () => void; agents: AgentInfo[]; accessToken: string }) {
+  const appPort = typeof window !== "undefined" ? window.location.port || "80" : "";
   const [keys, setKeys] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
@@ -65,7 +66,7 @@ export function MobileSettings({ onBack, agents, accessToken }: { onBack: () => 
               style={{ flex: 1, padding: "8px 10px", borderRadius: 8, border: `1px solid ${vars("border-input")}`, background: vars("bg-input"), color: vars("text-primary"), fontSize: 13 }} placeholder="Введите токен..." />
           </div>
           <p style={{ fontSize: 11, color: vars("text-muted"), marginTop: 6 }}>
-            Открой в браузере: <code>http://IP-ПК:3210/mobile?token=...</code>
+            Открой в браузере: <code>http://IP-ПК:{appPort}/mobile?token=...</code>
           </p>
         </div>
 

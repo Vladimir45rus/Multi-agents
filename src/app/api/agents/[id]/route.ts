@@ -1,4 +1,5 @@
 import { updateAgentProfile } from "@/lib/workspace";
+import { recordApiError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -8,6 +9,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     const agentId = Number(id);
 
     if (!Number.isFinite(agentId)) {
+      await recordApiError("agents.update", 400, "Invalid agent id");
       return Response.json({ error: "Invalid agent id" }, { status: 400 });
     }
 
@@ -40,7 +42,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
 
     return Response.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown error";
+    const message = await recordApiError("agents.update", 400, error);
     return Response.json({ error: message }, { status: 400 });
   }
 }

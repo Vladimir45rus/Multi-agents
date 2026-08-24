@@ -1,4 +1,5 @@
 import { searchWorkspaceFiles } from "@/lib/workspace-files";
+import { recordApiError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -8,6 +9,7 @@ export async function POST(request: Request) {
     const body = (await request.json()) as { query?: string };
     return Response.json({ matches: await searchWorkspaceFiles(body.query ?? "") });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Workspace search failed" }, { status: 400 });
+    const message = await recordApiError("workspace.search", 400, error);
+    return Response.json({ error: message }, { status: 400 });
   }
 }

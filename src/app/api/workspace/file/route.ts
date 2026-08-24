@@ -1,4 +1,5 @@
 import { readWorkspaceFile } from "@/lib/workspace-files";
+import { recordApiError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -8,6 +9,7 @@ export async function GET(request: Request) {
     const path = new URL(request.url).searchParams.get("path") ?? "";
     return Response.json(await readWorkspaceFile(path), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Failed to read workspace file" }, { status: 400 });
+    const message = await recordApiError("workspace.file.read", 400, error);
+    return Response.json({ error: message }, { status: 400 });
   }
 }

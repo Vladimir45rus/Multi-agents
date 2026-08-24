@@ -2,6 +2,7 @@ import { loadActiveTaskState, clearActiveTaskState, type ActiveTaskState } from 
 import { db } from "@/db";
 import { agentEvents, orchestratorReports } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
+import { recordApiError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 
@@ -53,7 +54,7 @@ export async function GET() {
       },
     });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to query state";
+    const message = await recordApiError("orchestrate.state", 500, error);
     return Response.json({ error: message, activeTask: null, recovery: null }, { status: 500 });
   }
 }
@@ -63,7 +64,7 @@ export async function DELETE() {
     await clearActiveTaskState();
     return Response.json({ ok: true });
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Failed to clear state";
+    const message = await recordApiError("orchestrate.state.clear", 500, error);
     return Response.json({ error: message }, { status: 500 });
   }
 }

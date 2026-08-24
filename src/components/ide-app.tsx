@@ -576,6 +576,7 @@ export function IdeApp() {
   }, []);
 
   const t = dict[locale];
+  const appPort = typeof window !== "undefined" ? window.location.port || "80" : "";
   const workspaceTree = useMemo(() => buildWorkspaceTree(workspaceTreeEntries), [workspaceTreeEntries]);
 
   useEffect(() => {
@@ -2670,7 +2671,7 @@ export function IdeApp() {
                 <p className="text-xs text-[var(--text-secondary)]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>
                 <div className="flex gap-2 mt-1">
                   <input value={mobileTokenDraft} onChange={(e) => setMobileTokenDraft(e.target.value)} placeholder={locale === "ru" ? "Оставьте пустым чтобы отключить" : "Leave empty to disable"} className="flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
-                {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:3210/mobile?token={mobileTokenDraft}</span> : null}
+                {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:{appPort}/mobile?token={mobileTokenDraft}</span> : null}
               </div>
               <div className="mt-3 border-t border-[#2d2d30] pt-3">
                 <label className="flex items-center justify-between gap-3 text-xs text-[#c6ced8]">

@@ -2,6 +2,7 @@ import "server-only";
 
 import { randomBytes } from "node:crypto";
 import { ensureWorkspaceBootstrap, getWorkspaceSettingsRow, updateWorkspaceSettings } from "@/lib/workspace";
+import { recordSystemEvent } from "@/lib/system-events";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
@@ -41,11 +42,15 @@ export async function mobileAccessError(request: Request) {
   await ensureWorkspaceBootstrap();
   const settings = await getWorkspaceSettingsRow();
   const configuredToken = (settings.mobileAuthToken ?? "").trim();
-  if (!configuredToken) return Response.json({ error: "Mobile access is not configured" }, { status: 503 });
+  if (!configuredToken) {
+    await recordSystemEvent("warning", "auth", "HTTP 503: Mobile access is not configured").catch(() => undefined);
+    return Response.json({ error: "Mobile access is not configured" }, { status: 503 });
+  }
 
   const suppliedToken = getMobileAccessToken(request);
   if (suppliedToken && suppliedToken === configuredToken) return null;
 
+  await recordSystemEvent("warning", "auth", "HTTP 401: Mobile access token is required").catch(() => undefined);
   return Response.json({ error: "Mobile access token is required" }, { status: 401 });
 }
 

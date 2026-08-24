@@ -1,5 +1,6 @@
 import { getWorkspaceSnapshot, rollbackFileContent } from "@/lib/workspace";
 import { getWorkspaceRoot, rollbackWorkspaceFile } from "@/lib/workspace-files";
+import { recordApiError } from "@/lib/api-errors";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -8,10 +9,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   try {
     const { id } = await params;
     const fileId = Number(id);
-    if (!Number.isFinite(fileId)) return Response.json({ error: "Invalid file id" }, { status: 400 });
+    if (!Number.isFinite(fileId)) {
+      await recordApiError("files.rollback", 400, "Invalid file id");
+      return Response.json({ error: "Invalid file id" }, { status: 400 });
+    }
 
     const body = (await request.json()) as { actorAgentId?: number; locale?: "ru" | "en" };
-    if (!body.actorAgentId || !Number.isFinite(body.actorAgentId)) return Response.json({ error: "actorAgentId is required" }, { status: 400 });
+    if (!body.actorAgentId || !Number.isFinite(body.actorAgentId)) {
+      await recordApiError("files.rollback", 400, "actorAgentId is required");
+      return Response.json({ error: "actorAgentId is required" }, { status: 400 });
+    }
 
     const workspace = await getWorkspaceSnapshot();
     const file = workspace.files.find((item) => item.id === fileId);
@@ -30,6 +37,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
 
     return Response.json({ ok: true });
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : "Rollback failed" }, { status: 400 });
+    const message = await recordApiError("files.rollback", 400, error);
+    return Response.json({ error: message }, { status: 400 });
   }
 }

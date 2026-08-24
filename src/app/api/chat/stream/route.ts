@@ -2,6 +2,7 @@ import { streamWorkspaceMessage, type ChatAttachment, type ChatChannel, type Cha
 import type { ProjectContextInput } from "@/lib/project-context";
 import { mobileAccessError } from "@/lib/mobile-auth";
 import { recordSystemEvent } from "@/lib/system-events";
+import { recordApiError } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,7 +26,8 @@ export async function POST(request: Request) {
 
   try {
     body = (await request.json()) as typeof body;
-  } catch {
+  } catch (error) {
+    await recordApiError("chat.stream", 400, error);
     return Response.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
@@ -34,6 +36,7 @@ export async function POST(request: Request) {
   const channel: ChatChannel = body.channel === "lead" ? "lead" : "group";
 
   if (!message.trim() && attachments.length === 0) {
+    await recordApiError("chat.stream", 400, "message or attachments are required");
     return Response.json({ error: "message or attachments are required" }, { status: 400 });
   }
 
@@ -53,7 +56,7 @@ export async function POST(request: Request) {
       } catch (error) {
         if (!request.signal.aborted) {
           const errorMessage = error instanceof Error ? error.message : "Chat stream failed";
-          await recordSystemEvent("error", "chat", errorMessage, error instanceof Error ? error.stack ?? "" : "").catch(() => undefined);
+          await recordApiError("chat.stream", 500, error).catch(() => undefined);
           controller.enqueue(encodeEvent(encoder, { type: "error", channel, message: errorMessage }));
         }
       } finally {

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getPreviewOutput, getPreviewStatus, startPreview, stopPreview } from "@/lib/preview-process";
 import { pushMessage } from "@/lib/workspace";
 import { mobileAccessError } from "@/lib/mobile-auth";
+import { recordApiError } from "@/lib/api-errors";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
     }
     return NextResponse.json(await startPreview());
   } catch (error) {
-    return NextResponse.json({ error: error instanceof Error ? error.message : "Preview failed" }, { status: 400 });
+    const message = await recordApiError("preview", 400, error);
+    return NextResponse.json({ error: message }, { status: 400 });
   }
 }

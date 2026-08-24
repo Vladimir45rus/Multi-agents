@@ -24,10 +24,7 @@ function looksFatal(text: string) {
 }
 
 async function reportPreviewFailure(message: string, details: string) {
-  const content = `${message}\n\n${details}`.slice(0, 20_000);
-  const { pushMessage } = await import("@/lib/workspace");
-  await pushMessage({ chatChannel: "group", senderType: "tester", agentName: "Тестировщик", content });
-  await pushMessage({ chatChannel: "lead", senderType: "system", agentName: "System", content: `Тестировщик обнаружил ошибку Live Preview:\n${content}` });
+  await recordSystemEvent("error", "preview", message, details.slice(0, 20_000));
 }
 
 function commandParts(command: string) {
@@ -54,33 +51,35 @@ export async function startPreview() {
     const command = settings?.previewCommand || "npm run dev";
     const port = settings?.previewPort || 4173;
     const parts = commandParts(command);
-    child = spawn(parts.executable, parts.args, { cwd: root, env: { ...process.env, BROWSER: "none", PORT: String(port) }, shell: false, windowsHide: true });
+    const allowedEnvironmentKeys = new Set([
+      "PATH", "Path", "PATHEXT", "SystemRoot", "SYSTEMROOT", "TEMP", "TMP", "USERPROFILE",
+      "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "ComSpec", "COMSPEC", "LANG", "LC_ALL",
+    ]);
+    const safeEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => allowedEnvironmentKeys.has(key)));
+    child = spawn(parts.executable, parts.args, { cwd: root, env: { ...safeEnv, NODE_ENV: "development", BROWSER: "none", PORT: String(port) }, shell: false, windowsHide: true });
     const onOutput = (chunk: Buffer | string) => {
       const text = chunk.toString();
       appendOutput(text);
       if (!failureReported && looksFatal(text)) {
         failureReported = true;
-        void recordSystemEvent("error", "preview", "Fatal preview error detected", output.slice(-10_000));
-        void reportPreviewFailure("Тестировщик обнаружил фатальную ошибку dev-сервера.", output.slice(-10_000));
+        void reportPreviewFailure("Fatal preview error detected", output.slice(-10_000));
       }
     };
     child.stdout?.on("data", onOutput);
     child.stderr?.on("data", onOutput);
     child.once("error", async (error) => {
       appendOutput(error.message);
-      await recordSystemEvent("error", "preview", `Preview process error: ${error.message}`, output.slice(-10_000));
       if (!failureReported) {
         failureReported = true;
-        await reportPreviewFailure("Dev-сервер не запустился.", output.slice(-10_000));
+        await reportPreviewFailure(`Preview process error: ${error.message}`, output.slice(-10_000));
       }
     });
     child.once("exit", async (code, signal) => {
       const failed = !stopping && code !== 0 && code !== null;
       if (failed) {
-        await recordSystemEvent("error", "preview", `Preview stopped (code=${code}, signal=${signal ?? "none"})`, output.slice(-10_000));
         if (!failureReported) {
           failureReported = true;
-          await reportPreviewFailure(`Dev-сервер завершился с кодом ${code}.`, output.slice(-10_000));
+          await reportPreviewFailure(`Preview stopped (code=${code}, signal=${signal ?? "none"})`, output.slice(-10_000));
         }
       }
       child = null;
