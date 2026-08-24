@@ -2831,7 +2831,24 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       ) : null}
 
       {/* Settings drawer */}
-      <aside className={`absolute inset-y-0 right-0 z-30 flex max-h-[85vh] min-h-0 w-[460px] max-w-[calc(100vw-16px)] flex-col overflow-y-auto border-l transition-transform ${settingsOpen ? "translate-x-0" : "translate-x-full"}`} style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
+      {settingsOpen ? (
+        <button
+          type="button"
+          aria-label={t.close}
+          onClick={() => setSettingsOpen(false)}
+          className="absolute inset-0 z-20 cursor-default bg-black/40"
+        />
+      ) : null}
+      <aside
+        aria-hidden={!settingsOpen}
+        className="absolute inset-y-0 right-0 z-30 flex max-h-[85vh] min-h-0 w-[460px] max-w-[calc(100vw-16px)] flex-col overflow-y-auto border-l transition-transform duration-200 ease-out"
+        style={{
+          borderColor: "var(--border-default)",
+          background: "var(--bg-panel)",
+          transform: settingsOpen ? "translateX(0)" : "translateX(105%)",
+          pointerEvents: settingsOpen ? "auto" : "none",
+        }}
+      >
         <div className="panel-header flex items-center justify-between">
           <span className="flex items-center gap-2">{t.settings}{Object.entries(agentDrafts).some(([agentId, draft]) => {
             const agent = data?.agents.find((candidate) => candidate.id === Number(agentId));
