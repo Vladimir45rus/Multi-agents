@@ -52,6 +52,7 @@
   },
   "build": {
     "appId": "com.multiagent.codestudio",
+    "forceCodeSigning": false,
     "productName": "Multi-Agent Code Studio",
     "asar": true,
     "directories": {

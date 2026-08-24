@@ -77,7 +77,7 @@ npm run dev
 npm run build
 
 # Run Electron desktop app
-npm run electron:dev
+npm run electron:open
 ```
 
 ---
@@ -176,7 +176,7 @@ npm run dev
 npm run build
 
 # Запуск Electron-приложения
-npm run electron:dev
+npm run electron:open
 ```
 
 ---

@@ -6,8 +6,9 @@ export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
   const url = new URL(request.url);
-  const limit = Number(url.searchParams.get("limit") ?? "100");
-  return NextResponse.json({ events: await listSystemEvents(Number.isFinite(limit) ? limit : 100) }, { headers: { "Cache-Control": "no-store" } });
+  const requestedLimit = Number(url.searchParams.get("limit") ?? "100");
+  const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(Math.round(requestedLimit), 200)) : 100;
+  return NextResponse.json({ events: await listSystemEvents(limit) }, { headers: { "Cache-Control": "no-store" } });
 }
 
 export async function DELETE() {
