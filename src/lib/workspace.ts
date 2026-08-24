@@ -1028,17 +1028,40 @@ export async function rollbackFileContent(fileId: number, actorAgentId: number, 
   });
 }
 
+const CHAT_CONTEXT_MESSAGE_LIMIT = 20;
+const CHAT_CONTEXT_RECENT_MESSAGES = 5;
+
+function estimateMessageTokens(message: GatewayMessage) {
+  return Math.max(1, Math.ceil(message.content.length / 4));
+}
+
+function summarizeChatMessages(messages: GatewayMessage[]) {
+  const lines = messages.map((message) => `${message.role}: ${compact(message.content).replace(/\\s+/g, " ").slice(0, 180)}`);
+  return { text: lines.join(" | ").slice(0, 2200), tokens: messages.reduce((total, message) => total + estimateMessageTokens(message), 0) };
+}
+
 async function gatewayHistory(channel: ChatChannel) {
-  const rows = await db.select().from(chatMessages).where(eq(chatMessages.chatChannel, channel)).orderBy(desc(chatMessages.id)).limit(24);
+  const rows = await db.select().from(chatMessages).where(eq(chatMessages.chatChannel, channel)).orderBy(desc(chatMessages.id)).limit(100);
   const messages: GatewayMessage[] = rows.reverse().map((row) => ({
     role: row.senderType === "user" ? "user" : "assistant",
     content: row.content,
   }));
 
-  return messages.slice(-16).map((message) => ({
-    role: message.role,
-    content: message.content,
-  }));
+  if (messages.length <= CHAT_CONTEXT_MESSAGE_LIMIT) return messages;
+
+  const splitAt = Math.max(0, messages.length - CHAT_CONTEXT_RECENT_MESSAGES);
+  const older = messages.slice(0, splitAt);
+  const recent = messages.slice(splitAt);
+  const summary = summarizeChatMessages(older);
+  return [
+    {
+      role: "assistant" as const,
+      content: `=== CONVERSATION SUMMARY (${older.length} older messages; ~${summary.tokens} tokens) ===
+${summary.text}
+=== END SUMMARY ===`,
+    },
+    ...recent,
+  ];
 }
 
 function attachmentContext(locale: UiLocale, attachments: ChatAttachment[]) {

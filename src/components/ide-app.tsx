@@ -561,6 +561,8 @@ export function IdeApp() {
   const [chatRunning, setChatRunning] = useState(false);
   const [retryRequest, setRetryRequest] = useState<ChatRetryRequest | null>(null);
   const [copiedMessageId, setCopiedMessageId] = useState<number | string | null>(null);
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportText, setReportText] = useState("");
   const chatAbortRef = useRef<AbortController | null>(null);
 
   // Listen for auto-updater events from Electron main process.
@@ -665,6 +667,12 @@ export function IdeApp() {
   }, [data?.messages, groupRoleFilter, optimisticMessages]);
   const liveMessages = useMemo(() => Object.values(streamingMessages), [streamingMessages]);
   const liveMessagesVersion = liveMessages.map((message) => `${message.identity.agentId}:${message.content.length}:${message.status}`).join("|");
+  const contextStats = useMemo(() => {
+    const messages = [...leadMessages, ...groupMessages];
+    const tokens = messages.reduce((total, message) => total + Math.max(1, Math.ceil(message.content.length / 4)), 0);
+    const compressed = Math.max(leadMessages.length, groupMessages.length) > 20;
+    return { percent: Math.min(100, Math.round((tokens / 8000) * 100)), compressed };
+  }, [leadMessages, groupMessages]);
 
   useEffect(() => {
     leadChatEndRef.current?.scrollIntoView?.({ behavior: "smooth", block: "end" });
@@ -1801,6 +1809,11 @@ export function IdeApp() {
           return;
         }
         if (event.type === "agent_done" && event.identity) {
+          const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+          void bridge?.notify?.({
+            title: locale === "ru" ? `✅ ${event.identity.displayName} завершил задачу` : `✅ ${event.identity.displayName} completed the task`,
+            body: event.content.slice(0, 120),
+          });
           const identity = event.identity;
           setStreamingMessages((previous) => {
             const current = previous[identity.agentId];
@@ -2089,6 +2102,36 @@ export function IdeApp() {
     }
   }
 
+  async function generateSystemReport() {
+    let events = data?.systemEvents ?? [];
+    try {
+      const response = await fetch("/api/system-events?limit=100", { cache: "no-store" });
+      if (response.ok) {
+        const payload = (await response.json()) as { events?: WorkspaceData["systemEvents"] };
+        events = payload.events ?? events;
+      }
+    } catch {
+      // Use the already loaded snapshot if the report refresh is unavailable.
+    }
+    const lines = events.slice(0, 100).reverse().map((event) => `- **${event.level.toUpperCase()}** ${event.source} — ${event.message} _( ${new Date(event.createdAt).toLocaleString(locale)} )_`);
+    const markdown = `# Multi-Agent Code Studio — системный отчёт
+
+Сформирован: ${new Date().toISOString()}
+
+${lines.length > 0 ? lines.join("\n") : "_Системных событий нет._"}`;
+    setReportText(markdown);
+    setReportOpen(true);
+  }
+
+  async function copyReport() {
+    try {
+      await navigator.clipboard.writeText(reportText);
+      setStatus(locale === "ru" ? "Отчёт скопирован" : "Report copied");
+    } catch {
+      setStatus(locale === "ru" ? "Не удалось скопировать отчёт" : "Failed to copy report");
+    }
+  }
+
   async function clearSystemEvents() {
     setBusy(true);
     try {
@@ -2307,6 +2350,9 @@ export function IdeApp() {
             🤖 {locale === "ru" ? "Оркестратор" : "Orchestrator"}
           </button>
           <ThemeToggle />
+          <button type="button" onClick={() => void generateSystemReport()} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
+            📄 {locale === "ru" ? "Сформировать отчёт" : "Generate report"}
+          </button>
           <button type="button" onClick={() => setSettingsOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
             ⚙️ {t.settings}
           </button>
@@ -2434,7 +2480,7 @@ export function IdeApp() {
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
-                  <span className="truncate">{t.leadChat}</span>
+                  <span className="flex min-w-0 items-center gap-2"><span className="truncate">{t.leadChat}</span><span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span></span>
                   <div className="flex items-center gap-0.5">
                     <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
                     <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
@@ -2488,7 +2534,7 @@ export function IdeApp() {
             {!collapsedPanels.group && (
               <section className="panel h-full">
                 <div className="panel-header flex items-center justify-between">
-                  <span className="truncate">{t.allChat}</span>
+                  <span className="flex min-w-0 items-center gap-2"><span className="truncate">{t.allChat}</span><span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span></span>
                   <div className="flex items-center gap-1">
                     <span className="hidden text-[10px] text-[var(--text-secondary)] 2xl:inline">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
                     {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
@@ -3184,6 +3230,16 @@ export function IdeApp() {
               <p className="text-center text-[11px] text-[var(--text-secondary)]">{t.supportThanks}</p>
             </div>
           </article>
+        </div>
+      ) : null}
+
+      {reportOpen ? (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-3">
+          <section className="flex max-h-[85vh] w-[92vw] max-w-[720px] flex-col rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-4 shadow-xl">
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold">{locale === "ru" ? "Системный Markdown-отчёт" : "System Markdown report"}</h2><button type="button" onClick={() => setReportOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button></div>
+            <textarea readOnly value={reportText} className="min-h-[320px] flex-1 resize-none rounded border border-[var(--border-default)] bg-[var(--bg-app)] p-3 font-mono text-xs text-[var(--text-primary)] outline-none" />
+            <button type="button" onClick={() => void copyReport()} className="mt-3 rounded bg-[#0e639c] px-3 py-2 text-xs text-white">{locale === "ru" ? "Скопировать" : "Copy"}</button>
+          </section>
         </div>
       ) : null}
 
