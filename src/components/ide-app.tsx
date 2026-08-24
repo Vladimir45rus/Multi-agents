@@ -884,7 +884,7 @@ export function IdeApp() {
         githubAutoPush: githubAutoPushDraft,
         autoApprove: autoApproveDraft,
         localtunnelEnabled: localtunnelEnabledDraft,
-        fallbackModels: fallbackModelsDraft.split(/\\r?\\n|,/).map((value) => value.trim()).filter(Boolean),
+        fallbackModels: fallbackModelsDraft.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean),
         previewCommand: previewCommandDraft,
         previewPort: previewPortDraft,
         projectTemplate: settings.projectTemplate,
