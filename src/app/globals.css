@@ -94,18 +94,161 @@ body > div {
    PANEL HEADERS
    ============================================================ */
 .panel-header {
-  height: 32px;
+  min-height: 32px;
   border-bottom: 1px solid var(--border-default);
   background: var(--bg-panel);
-  padding: 0 12px;
+  padding: 4px 8px;
   display: flex;
   align-items: center;
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   color: var(--text-secondary);
   gap: 6px;
   flex-shrink: 0;
+}
+
+.chat-panel-header {
+  min-height: 58px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+
+.chat-panel-title {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 180px;
+  align-items: center;
+  gap: 6px;
+  line-height: 1.25;
+}
+
+.chat-panel-actions {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 100%;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  font-size: 10px;
+  font-weight: 400;
+  letter-spacing: 0;
+}
+
+.chat-panel-actions > button,
+.chat-panel-actions > label {
+  flex: 0 0 auto;
+}
+
+.panel-header:not(.chat-panel-header) > span {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.panel-header:not(.chat-panel-header) > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.panel-header button {
+  min-height: 24px;
+  line-height: 1.1;
+}
+
+.chat-panel-header button {
+  white-space: nowrap;
+}
+
+.workspace-column-collapsed {
+  flex-basis: 32px !important;
+  width: 32px !important;
+}
+
+@media (max-width: 1200px) {
+  .workspace-top-row {
+    scrollbar-gutter: stable;
+    flex-direction: column;
+    overflow-x: hidden;
+    overflow-y: auto;
+  }
+
+  .workspace-top-row > .workspace-column:not(.workspace-column-collapsed),
+  .workspace-top-row > .workspace-column-collapsed {
+    width: 100% !important;
+    min-width: 0 !important;
+  }
+
+  .workspace-top-row > .workspace-column:not(.workspace-column-collapsed) {
+    flex: 0 0 420px !important;
+    height: 420px !important;
+  }
+
+  .workspace-top-row > .workspace-column-collapsed {
+    flex: 0 0 36px !important;
+    height: 36px !important;
+  }
+
+  .workspace-top-row > .z-10.w-1 {
+    display: none;
+  }
+
+  .logs-panel {
+    height: 400px;
+    flex-direction: column;
+    overflow-y: auto;
+    scrollbar-gutter: stable;
+  }
+
+  .logs-panel > .workspace-column {
+    flex: 0 0 200px !important;
+    width: 100% !important;
+    height: 200px !important;
+  }
+
+  .app-header {
+    overflow: hidden;
+  }
+
+  .app-header > * {
+    flex-shrink: 0;
+  }
+
+  .app-header > div:last-child {
+    max-width: calc(100vw - 180px);
+    overflow-x: auto;
+    overflow-y: hidden;
+    justify-content: flex-start;
+  }
+
+  .app-header > div:last-child > button:last-child {
+    order: -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .chat-panel-header {
+    min-height: 74px;
+  }
+
+  .workspace-top-row > .workspace-column:not(.workspace-column-collapsed) {
+    flex-basis: 360px !important;
+    height: 360px !important;
+  }
+
+  .settings-drawer {
+    width: 100%;
+    max-width: 100vw;
+  }
+
+  .app-header > div:last-child {
+    max-width: calc(100vw - 92px);
+    gap: 4px;
+  }
 }
 
 .panel {
@@ -137,6 +280,10 @@ body > div {
   flex-shrink: 0;
 }
 
+.app-header > div:last-child {
+  min-width: 0;
+}
+
 .workspace-top-row {
   display: flex;
   flex: 1 1 0%;
@@ -154,6 +301,12 @@ body > div {
   min-height: 0;
   min-width: 0;
   overflow: hidden;
+}
+
+.workspace-column > .panel,
+.workspace-column > section.panel {
+  width: 100%;
+  min-width: 0;
 }
 
 .logs-panel {
@@ -196,11 +349,10 @@ body > div {
    STATUS BAR
    ============================================================ */
 .status-bar {
-  position: fixed;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  position: static;
+  width: 100%;
   height: 24px;
+  flex: 0 0 24px;
   background: #0d1422;
   border-top: 1px solid var(--border-default);
   color: var(--text-secondary);
