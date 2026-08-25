@@ -10,3 +10,6 @@ release/
 dist/
 *.log
 *.tsbuildinfo
+coverage/
+gemini_cc.bat
+Komanda.txt

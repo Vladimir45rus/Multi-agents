@@ -28,6 +28,7 @@ import {
 } from "@/lib/provider-gateway";
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { encryptSecret } from "@/lib/secret-cipher";
+import { isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
@@ -417,11 +418,28 @@ export async function pushMessage(payload: {
     await db.insert(systemEvents).values({ level: "info", source: "workspace", message: payload.content, details: "" });
     return;
   }
+
+  // UX fix (log routing): raw provider/connection errors and tool-call JSON
+  // payloads never land in the chat windows. They are routed to the system
+  // events log; the chat only receives clean text or a friendly status line.
+  if (payload.senderType !== "user") {
+    if (isTechnicalErrorText(payload.content)) {
+      await db.insert(systemEvents).values({ level: "error", source: payload.agentName ?? "provider", message: payload.content.slice(0, 2_000), details: "" });
+      return;
+    }
+    const toolCall = parseToolCallDisplay(payload.content);
+    if (toolCall) {
+      await db.insert(systemEvents).values({ level: "info", source: payload.agentName ?? "agent-tools", message: `Tool call: ${toolCall.name}`, details: payload.content.slice(0, 4_000) });
+      return;
+    }
+  }
+
+  const displayContent = payload.senderType === "user" ? payload.content : sanitizeChatContent(payload.content);
   await db.insert(chatMessages).values({
     chatChannel: payload.chatChannel,
     senderType: payload.senderType,
     agentName: payload.agentName,
-    content: payload.content,
+    content: displayContent,
     metadata: payload.metadata ?? {},
   });
 }

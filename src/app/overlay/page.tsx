@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
+import { sanitizeChatContent } from "@/lib/chat-display";
 
 export const dynamic = "force-dynamic";
 
@@ -10,6 +11,7 @@ type AgentInfo = {
   role: string;
   isActive: boolean;
   color: string;
+  model?: string;
 };
 
 type OrchAgentEntry = { name: string; role: string; status: string; message?: string };
@@ -115,7 +117,7 @@ export default function OverlayPage() {
   const [chatInput, setChatInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [onTop, setOnTop] = useState(true);
-  const sseRef = useRef<EventSource | null>(null);
+  const [changingModel, setChangingModel] = useState(false);
   const lastMsgEndRef = useRef<HTMLDivElement>(null);
 
   const bridge = typeof window !== "undefined"
@@ -173,71 +175,37 @@ export default function OverlayPage() {
     return () => { active = false; clearTimeout(pollTimer); };
   }, []);
 
-  // SSE stream for live agent_status
+  // Widget fix: the previous implementation opened `new EventSource("/api/orchestrate/stream")`,
+  // but that route only accepts POST — every GET returned 405 and the widget
+  // reconnect-looped without ever showing live status. Poll the orchestrator
+  // state endpoint instead; it drives task/step/agent status reliably.
   useEffect(() => {
     let active = true;
-    let reconnectTimer: ReturnType<typeof setTimeout>;
-
-    function connect() {
-      if (!active) return;
-      const es = new EventSource("/api/orchestrate/stream");
-      sseRef.current = es;
-
-      es.onopen = () => { if (active) setConnected(true); };
-
-      es.onmessage = (event) => {
+    async function pollState() {
+      try {
+        const res = await fetch("/api/orchestrate/state", { cache: "no-store" });
         if (!active) return;
-        try {
-          const data = JSON.parse(event.data) as {
-            type: string;
-            task?: string; taskId?: string;
-            maxIterations?: number; mode?: string;
-            step?: string; iteration?: number;
-            agent?: string; role?: string;
-            status?: string; message?: string;
-          };
-
-          if (data.type === "task_started") {
-            setOrchestrator({
-              taskId: data.taskId, task: data.task,
-              maxIterations: data.maxIterations,
-              step: undefined, agents: [],
-            });
-          } else if (data.type === "agent_status") {
-            setOrchestrator((prev) => {
-              const existing = prev?.agents ?? [];
-              const entry: OrchAgentEntry = {
-                name: data.agent ?? "", role: data.role ?? "",
-                status: data.status ?? "", message: data.message,
-              };
-              const idx = existing.findIndex((a) => a.name === data.agent);
-              const agents = idx >= 0
-                ? existing.map((a, i) => (i === idx ? entry : a))
-                : [...existing, entry];
-              return { ...prev, agents };
-            });
-          } else if (data.type === "step") {
-            setOrchestrator((prev) => prev ? { ...prev, step: data.step, iteration: data.iteration } : prev);
-          } else if (data.type === "task_completed") {
-            setOrchestrator(null);
-            setLastEvent("");
-          }
-        } catch { /* ignore */ }
-      };
-
-      es.onerror = () => {
-        setConnected(false);
-        es.close();
-        if (active) reconnectTimer = setTimeout(connect, 3000);
-      };
+        if (res.ok) {
+          setConnected(true);
+          const payload = (await res.json()) as { activeTask?: { task?: string; step?: string; iteration?: number; maxIterations?: number } | null };
+          const activeTask = payload?.activeTask ?? null;
+          setOrchestrator(activeTask ? {
+            task: activeTask.task,
+            step: activeTask.step,
+            iteration: activeTask.iteration,
+            maxIterations: activeTask.maxIterations,
+            agents: [],
+          } : null);
+        } else {
+          setConnected(false);
+        }
+      } catch {
+        if (active) setConnected(false);
+      }
+      if (active) stateTimer = setTimeout(pollState, 2000);
     }
-
-    connect();
-    return () => {
-      active = false;
-      clearTimeout(reconnectTimer);
-      sseRef.current?.close();
-    };
+    let stateTimer = setTimeout(pollState, 300);
+    return () => { active = false; clearTimeout(stateTimer); };
   }, []);
 
   // Scroll chat area when new messages arrive
@@ -267,6 +235,25 @@ export default function OverlayPage() {
     const order: Record<string, number> = { main: 0, architect: 1, uiux: 2, advisor: 3, reviewer: 4, tester: 5, security: 6, observer: 7 };
     return (order[a.role] ?? 99) - (order[b.role] ?? 99);
   });
+
+  // Widget fix: quick model switching for the Lead agent straight from the widget.
+  const mainAgent = workspace?.agents.find((agent) => agent.role === "main") ?? null;
+  const modelOptions = [...new Set((workspace?.agents ?? []).map((agent) => agent.model).filter(Boolean))];
+
+  async function changeModel(model: string) {
+    if (!mainAgent || !model || changingModel) return;
+    setChangingModel(true);
+    try {
+      await fetch(`/api/agents/${mainAgent.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      const res = await fetch("/api/workspace", { cache: "no-store" });
+      if (res.ok) setWorkspace((await res.json()) as WorkspaceData);
+    } catch { /* ignore */ }
+    finally { setChangingModel(false); }
+  }
 
   // Last agent message (newest non-user, non-system message)
   const lastAgentMsg = workspace?.messages?.slice().reverse().find(
@@ -315,6 +302,28 @@ export default function OverlayPage() {
         <span style={{ fontWeight: 700, color: "#58a6ff", fontSize: 12 }}>
           {workspace?.settings?.workspaceName || "Studio"}
         </span>
+
+        {/* Widget fix: current model selector (Lead agent) */}
+        {mainAgent && modelOptions.length > 0 ? (
+          <select
+            value={mainAgent.model}
+            disabled={changingModel}
+            onChange={(e) => void changeModel(e.target.value)}
+            title="Модель Главного агента"
+            style={{
+              maxWidth: 130, marginLeft: 4, background: "#161b22",
+              border: "1px solid #30363d", borderRadius: 4,
+              color: "#c9d1d9", fontSize: 10, padding: "1px 4px",
+              outline: "none",
+              ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
+            }}
+          >
+            {!modelOptions.includes(mainAgent.model) ? <option value={mainAgent.model}>{mainAgent.model}</option> : null}
+            {modelOptions.map((model) => (
+              <option key={model} value={model}>{model}</option>
+            ))}
+          </select>
+        ) : null}
 
         {activeTask && (
           <span style={{ color: "#d2a8ff", fontSize: 10, marginLeft: 4 }}>
@@ -429,7 +438,7 @@ export default function OverlayPage() {
           gap: 4,
         }}
       >
-        {workspace?.messages?.slice(-12).map((msg) => {
+        {workspace?.messages?.slice(-12).filter((msg) => msg.senderType !== "system").map((msg) => {
           const isUser = msg.senderType === "user";
           const identity = msg.metadata?.identity;
           const role = identity?.role ?? "";
@@ -455,7 +464,7 @@ export default function OverlayPage() {
                 </span>
               </div>
               <div style={{ color: "#8b949e", wordBreak: "break-word" }}>
-                <MarkdownInline content={msg.content} maxLen={200} />
+                <MarkdownInline content={sanitizeChatContent(msg.content)} maxLen={200} />
               </div>
             </div>
           );

@@ -407,6 +407,19 @@ function createOverlayWindow(startUrl) {
     ? startUrl.replace(/\/[^/]*$/, "") + "/overlay"
     : `http://127.0.0.1:${DEFAULT_SERVER_PORT}/overlay`;
   guardNavigation(overlayWindow.webContents, [overlayUrl]);
+  // Widget fix: if the embedded server is not ready yet, retry loading so the
+  // overlay never stays as an empty black window.
+  let overlayLoadRetries = 0;
+  overlayWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    log("app", `Overlay failed to load: ${errorDescription} (code=${errorCode}) url=${validatedURL}`);
+    if (overlayLoadRetries < 5) {
+      overlayLoadRetries += 1;
+      setTimeout(() => {
+        if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.loadURL(overlayUrl);
+      }, 800 * overlayLoadRetries);
+    }
+  });
   log("app", `Opening overlay at ${overlayUrl}`);
   overlayWindow.loadURL(overlayUrl);
 }

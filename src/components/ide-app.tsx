@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { appendStreamDelta, finishStream, type ChatStreamState } from "@/lib/chat-state";
+import { sanitizeChatContent } from "@/lib/chat-display";
 import { PreviewModal } from "@/components/preview-modal";
 
 const CodeEditor = lazy(() => import("@/components/code-editor"));
@@ -42,23 +43,23 @@ type MentionState = {
 const TASK_TEMPLATES = [
   {
     id: "refactor",
-    label: "Рефакторинг кода",
-    prompt: "Выполни рефакторинг кода: сначала изучи связанные файлы, найди дублирование и слабые места, внеси минимальные безопасные изменения и проверь typecheck и тесты.",
+    label: "Р РµС„Р°РєС‚РѕСЂРёРЅРі РєРѕРґР°",
+    prompt: "Р’С‹РїРѕР»РЅРё СЂРµС„Р°РєС‚РѕСЂРёРЅРі РєРѕРґР°: СЃРЅР°С‡Р°Р»Р° РёР·СѓС‡Рё СЃРІСЏР·Р°РЅРЅС‹Рµ С„Р°Р№Р»С‹, РЅР°Р№РґРё РґСѓР±Р»РёСЂРѕРІР°РЅРёРµ Рё СЃР»Р°Р±С‹Рµ РјРµСЃС‚Р°, РІРЅРµСЃРё РјРёРЅРёРјР°Р»СЊРЅС‹Рµ Р±РµР·РѕРїР°СЃРЅС‹Рµ РёР·РјРµРЅРµРЅРёСЏ Рё РїСЂРѕРІРµСЂСЊ typecheck Рё С‚РµСЃС‚С‹.",
   },
   {
     id: "tests",
-    label: "Покрытие тестами",
-    prompt: "Увеличь покрытие тестами: изучи текущие тесты, добавь проверки основных и пограничных сценариев, не меняй рабочую логику без необходимости и запусти тесты.",
+    label: "РџРѕРєСЂС‹С‚РёРµ С‚РµСЃС‚Р°РјРё",
+    prompt: "РЈРІРµР»РёС‡СЊ РїРѕРєСЂС‹С‚РёРµ С‚РµСЃС‚Р°РјРё: РёР·СѓС‡Рё С‚РµРєСѓС‰РёРµ С‚РµСЃС‚С‹, РґРѕР±Р°РІСЊ РїСЂРѕРІРµСЂРєРё РѕСЃРЅРѕРІРЅС‹С… Рё РїРѕРіСЂР°РЅРёС‡РЅС‹С… СЃС†РµРЅР°СЂРёРµРІ, РЅРµ РјРµРЅСЏР№ СЂР°Р±РѕС‡СѓСЋ Р»РѕРіРёРєСѓ Р±РµР· РЅРµРѕР±С…РѕРґРёРјРѕСЃС‚Рё Рё Р·Р°РїСѓСЃС‚Рё С‚РµСЃС‚С‹.",
   },
   {
     id: "security",
-    label: "Поиск багов/уязвимостей",
-    prompt: "Проведи поиск багов и уязвимостей: проверь входные данные, обработку ошибок, секреты и права доступа, укажи точные файлы и внеси только подтверждённые исправления.",
+    label: "РџРѕРёСЃРє Р±Р°РіРѕРІ/СѓСЏР·РІРёРјРѕСЃС‚РµР№",
+    prompt: "РџСЂРѕРІРµРґРё РїРѕРёСЃРє Р±Р°РіРѕРІ Рё СѓСЏР·РІРёРјРѕСЃС‚РµР№: РїСЂРѕРІРµСЂСЊ РІС…РѕРґРЅС‹Рµ РґР°РЅРЅС‹Рµ, РѕР±СЂР°Р±РѕС‚РєСѓ РѕС€РёР±РѕРє, СЃРµРєСЂРµС‚С‹ Рё РїСЂР°РІР° РґРѕСЃС‚СѓРїР°, СѓРєР°Р¶Рё С‚РѕС‡РЅС‹Рµ С„Р°Р№Р»С‹ Рё РІРЅРµСЃРё С‚РѕР»СЊРєРѕ РїРѕРґС‚РІРµСЂР¶РґС‘РЅРЅС‹Рµ РёСЃРїСЂР°РІР»РµРЅРёСЏ.",
   },
   {
     id: "docs",
-    label: "Документирование",
-    prompt: "Подготовь документацию по текущей реализации: изучи код, опиши запуск, основные сценарии, настройки и ограничения, не изменяя рабочую логику.",
+    label: "Р”РѕРєСѓРјРµРЅС‚РёСЂРѕРІР°РЅРёРµ",
+    prompt: "РџРѕРґРіРѕС‚РѕРІСЊ РґРѕРєСѓРјРµРЅС‚Р°С†РёСЋ РїРѕ С‚РµРєСѓС‰РµР№ СЂРµР°Р»РёР·Р°С†РёРё: РёР·СѓС‡Рё РєРѕРґ, РѕРїРёС€Рё Р·Р°РїСѓСЃРє, РѕСЃРЅРѕРІРЅС‹Рµ СЃС†РµРЅР°СЂРёРё, РЅР°СЃС‚СЂРѕР№РєРё Рё РѕРіСЂР°РЅРёС‡РµРЅРёСЏ, РЅРµ РёР·РјРµРЅСЏСЏ СЂР°Р±РѕС‡СѓСЋ Р»РѕРіРёРєСѓ.",
   },
 ] as const;
 
@@ -186,15 +187,15 @@ type DesktopBridge = {
 const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "uiux", "security", "observer", "auto"];
 
 const ROLE_TEMPLATES: Record<string, { description: string; skill: string; systemPrompt: string }> = {
-  main: { description: "Главный кодер: принимает решения и пишет рабочий код.", skill: "Fullstack-разработка, декомпозиция задач, тестирование и безопасные изменения.", systemPrompt: "Ты Главный агент IDE. Анализируй контекст проекта, вноси минимальные проверяемые изменения и запускай подходящие проверки." },
-  advisor: { description: "Советник: исследует задачу и предлагает конкретные решения.", skill: "Анализ требований, поиск рисков и ясные технические рекомендации.", systemPrompt: "Ты Советник. Не изменяй код самостоятельно; изучай контекст и формулируй конкретные рекомендации Главному агенту." },
-  reviewer: { description: "Ревьюер: находит дефекты и регрессии.", skill: "Code review, типизация, корректность, безопасность и поддерживаемость.", systemPrompt: "Ты Ревьюер. Ищи реальные ошибки и регрессии, указывай файл, строку и способ исправления." },
-  tester: { description: "QA: проверяет поведение и крайние случаи.", skill: "Тест-дизайн, регрессии, интеграционные и негативные сценарии.", systemPrompt: "Ты QA-инженер. Проверяй требования, крайние случаи и тестируемость; предлагай воспроизводимые проверки." },
-  architect: { description: "Архитектор: отвечает за структуру и границы системы.", skill: "Проектирование модулей, API, потоков данных и масштабируемости.", systemPrompt: "Ты Архитектор. Оценивай структуру проекта, зависимости и долгосрочные риски; предлагай простые устойчивые решения." },
-  uiux: { description: "UI/UX: отвечает за удобство и визуальную целостность.", skill: "Адаптивная верстка, доступность, UX-потоки и дизайн-системы.", systemPrompt: "Ты UI/UX дизайнер. Анализируй интерфейс, responsive-поведение, доступность и ясность пользовательских сценариев." },
-  security: { description: "Security: ищет уязвимости и утечки данных.", skill: "Моделирование угроз, валидация входных данных и безопасное хранение секретов.", systemPrompt: "Ты Security-аналитик. Ищи уязвимости, утечки секретов и опасные границы доверия; предлагай практичные исправления." },
-  observer: { description: "Наблюдатель: следит за состоянием процесса и результатами.", skill: "Мониторинг прогресса, диагностика сбоев и контроль критериев готовности.", systemPrompt: "Ты Наблюдатель. Сверяй прогресс с задачей, фиксируй блокеры и критерии готовности." },
-  auto: { description: "AUTO: автономно контролирует цикл выполнения.", skill: "Контроль прогресса, критериев готовности и безопасного завершения цикла.", systemPrompt: "Ты AUTO-агент. Контролируй автономный цикл, фиксируй блокеры и проверяй критерии RELEASE_READY." },
+  main: { description: "Р“Р»Р°РІРЅС‹Р№ РєРѕРґРµСЂ: РїСЂРёРЅРёРјР°РµС‚ СЂРµС€РµРЅРёСЏ Рё РїРёС€РµС‚ СЂР°Р±РѕС‡РёР№ РєРѕРґ.", skill: "Fullstack-СЂР°Р·СЂР°Р±РѕС‚РєР°, РґРµРєРѕРјРїРѕР·РёС†РёСЏ Р·Р°РґР°С‡, С‚РµСЃС‚РёСЂРѕРІР°РЅРёРµ Рё Р±РµР·РѕРїР°СЃРЅС‹Рµ РёР·РјРµРЅРµРЅРёСЏ.", systemPrompt: "РўС‹ Р“Р»Р°РІРЅС‹Р№ Р°РіРµРЅС‚ IDE. РђРЅР°Р»РёР·РёСЂСѓР№ РєРѕРЅС‚РµРєСЃС‚ РїСЂРѕРµРєС‚Р°, РІРЅРѕСЃРё РјРёРЅРёРјР°Р»СЊРЅС‹Рµ РїСЂРѕРІРµСЂСЏРµРјС‹Рµ РёР·РјРµРЅРµРЅРёСЏ Рё Р·Р°РїСѓСЃРєР°Р№ РїРѕРґС…РѕРґСЏС‰РёРµ РїСЂРѕРІРµСЂРєРё." },
+  advisor: { description: "РЎРѕРІРµС‚РЅРёРє: РёСЃСЃР»РµРґСѓРµС‚ Р·Р°РґР°С‡Сѓ Рё РїСЂРµРґР»Р°РіР°РµС‚ РєРѕРЅРєСЂРµС‚РЅС‹Рµ СЂРµС€РµРЅРёСЏ.", skill: "РђРЅР°Р»РёР· С‚СЂРµР±РѕРІР°РЅРёР№, РїРѕРёСЃРє СЂРёСЃРєРѕРІ Рё СЏСЃРЅС‹Рµ С‚РµС…РЅРёС‡РµСЃРєРёРµ СЂРµРєРѕРјРµРЅРґР°С†РёРё.", systemPrompt: "РўС‹ РЎРѕРІРµС‚РЅРёРє. РќРµ РёР·РјРµРЅСЏР№ РєРѕРґ СЃР°РјРѕСЃС‚РѕСЏС‚РµР»СЊРЅРѕ; РёР·СѓС‡Р°Р№ РєРѕРЅС‚РµРєСЃС‚ Рё С„РѕСЂРјСѓР»РёСЂСѓР№ РєРѕРЅРєСЂРµС‚РЅС‹Рµ СЂРµРєРѕРјРµРЅРґР°С†РёРё Р“Р»Р°РІРЅРѕРјСѓ Р°РіРµРЅС‚Сѓ." },
+  reviewer: { description: "Р РµРІСЊСЋРµСЂ: РЅР°С…РѕРґРёС‚ РґРµС„РµРєС‚С‹ Рё СЂРµРіСЂРµСЃСЃРёРё.", skill: "Code review, С‚РёРїРёР·Р°С†РёСЏ, РєРѕСЂСЂРµРєС‚РЅРѕСЃС‚СЊ, Р±РµР·РѕРїР°СЃРЅРѕСЃС‚СЊ Рё РїРѕРґРґРµСЂР¶РёРІР°РµРјРѕСЃС‚СЊ.", systemPrompt: "РўС‹ Р РµРІСЊСЋРµСЂ. РС‰Рё СЂРµР°Р»СЊРЅС‹Рµ РѕС€РёР±РєРё Рё СЂРµРіСЂРµСЃСЃРёРё, СѓРєР°Р·С‹РІР°Р№ С„Р°Р№Р», СЃС‚СЂРѕРєСѓ Рё СЃРїРѕСЃРѕР± РёСЃРїСЂР°РІР»РµРЅРёСЏ." },
+  tester: { description: "QA: РїСЂРѕРІРµСЂСЏРµС‚ РїРѕРІРµРґРµРЅРёРµ Рё РєСЂР°Р№РЅРёРµ СЃР»СѓС‡Р°Рё.", skill: "РўРµСЃС‚-РґРёР·Р°Р№РЅ, СЂРµРіСЂРµСЃСЃРёРё, РёРЅС‚РµРіСЂР°С†РёРѕРЅРЅС‹Рµ Рё РЅРµРіР°С‚РёРІРЅС‹Рµ СЃС†РµРЅР°СЂРёРё.", systemPrompt: "РўС‹ QA-РёРЅР¶РµРЅРµСЂ. РџСЂРѕРІРµСЂСЏР№ С‚СЂРµР±РѕРІР°РЅРёСЏ, РєСЂР°Р№РЅРёРµ СЃР»СѓС‡Р°Рё Рё С‚РµСЃС‚РёСЂСѓРµРјРѕСЃС‚СЊ; РїСЂРµРґР»Р°РіР°Р№ РІРѕСЃРїСЂРѕРёР·РІРѕРґРёРјС‹Рµ РїСЂРѕРІРµСЂРєРё." },
+  architect: { description: "РђСЂС…РёС‚РµРєС‚РѕСЂ: РѕС‚РІРµС‡Р°РµС‚ Р·Р° СЃС‚СЂСѓРєС‚СѓСЂСѓ Рё РіСЂР°РЅРёС†С‹ СЃРёСЃС‚РµРјС‹.", skill: "РџСЂРѕРµРєС‚РёСЂРѕРІР°РЅРёРµ РјРѕРґСѓР»РµР№, API, РїРѕС‚РѕРєРѕРІ РґР°РЅРЅС‹С… Рё РјР°СЃС€С‚Р°Р±РёСЂСѓРµРјРѕСЃС‚Рё.", systemPrompt: "РўС‹ РђСЂС…РёС‚РµРєС‚РѕСЂ. РћС†РµРЅРёРІР°Р№ СЃС‚СЂСѓРєС‚СѓСЂСѓ РїСЂРѕРµРєС‚Р°, Р·Р°РІРёСЃРёРјРѕСЃС‚Рё Рё РґРѕР»РіРѕСЃСЂРѕС‡РЅС‹Рµ СЂРёСЃРєРё; РїСЂРµРґР»Р°РіР°Р№ РїСЂРѕСЃС‚С‹Рµ СѓСЃС‚РѕР№С‡РёРІС‹Рµ СЂРµС€РµРЅРёСЏ." },
+  uiux: { description: "UI/UX: РѕС‚РІРµС‡Р°РµС‚ Р·Р° СѓРґРѕР±СЃС‚РІРѕ Рё РІРёР·СѓР°Р»СЊРЅСѓСЋ С†РµР»РѕСЃС‚РЅРѕСЃС‚СЊ.", skill: "РђРґР°РїС‚РёРІРЅР°СЏ РІРµСЂСЃС‚РєР°, РґРѕСЃС‚СѓРїРЅРѕСЃС‚СЊ, UX-РїРѕС‚РѕРєРё Рё РґРёР·Р°Р№РЅ-СЃРёСЃС‚РµРјС‹.", systemPrompt: "РўС‹ UI/UX РґРёР·Р°Р№РЅРµСЂ. РђРЅР°Р»РёР·РёСЂСѓР№ РёРЅС‚РµСЂС„РµР№СЃ, responsive-РїРѕРІРµРґРµРЅРёРµ, РґРѕСЃС‚СѓРїРЅРѕСЃС‚СЊ Рё СЏСЃРЅРѕСЃС‚СЊ РїРѕР»СЊР·РѕРІР°С‚РµР»СЊСЃРєРёС… СЃС†РµРЅР°СЂРёРµРІ." },
+  security: { description: "Security: РёС‰РµС‚ СѓСЏР·РІРёРјРѕСЃС‚Рё Рё СѓС‚РµС‡РєРё РґР°РЅРЅС‹С….", skill: "РњРѕРґРµР»РёСЂРѕРІР°РЅРёРµ СѓРіСЂРѕР·, РІР°Р»РёРґР°С†РёСЏ РІС…РѕРґРЅС‹С… РґР°РЅРЅС‹С… Рё Р±РµР·РѕРїР°СЃРЅРѕРµ С…СЂР°РЅРµРЅРёРµ СЃРµРєСЂРµС‚РѕРІ.", systemPrompt: "РўС‹ Security-Р°РЅР°Р»РёС‚РёРє. РС‰Рё СѓСЏР·РІРёРјРѕСЃС‚Рё, СѓС‚РµС‡РєРё СЃРµРєСЂРµС‚РѕРІ Рё РѕРїР°СЃРЅС‹Рµ РіСЂР°РЅРёС†С‹ РґРѕРІРµСЂРёСЏ; РїСЂРµРґР»Р°РіР°Р№ РїСЂР°РєС‚РёС‡РЅС‹Рµ РёСЃРїСЂР°РІР»РµРЅРёСЏ." },
+  observer: { description: "РќР°Р±Р»СЋРґР°С‚РµР»СЊ: СЃР»РµРґРёС‚ Р·Р° СЃРѕСЃС‚РѕСЏРЅРёРµРј РїСЂРѕС†РµСЃСЃР° Рё СЂРµР·СѓР»СЊС‚Р°С‚Р°РјРё.", skill: "РњРѕРЅРёС‚РѕСЂРёРЅРі РїСЂРѕРіСЂРµСЃСЃР°, РґРёР°РіРЅРѕСЃС‚РёРєР° СЃР±РѕРµРІ Рё РєРѕРЅС‚СЂРѕР»СЊ РєСЂРёС‚РµСЂРёРµРІ РіРѕС‚РѕРІРЅРѕСЃС‚Рё.", systemPrompt: "РўС‹ РќР°Р±Р»СЋРґР°С‚РµР»СЊ. РЎРІРµСЂСЏР№ РїСЂРѕРіСЂРµСЃСЃ СЃ Р·Р°РґР°С‡РµР№, С„РёРєСЃРёСЂСѓР№ Р±Р»РѕРєРµСЂС‹ Рё РєСЂРёС‚РµСЂРёРё РіРѕС‚РѕРІРЅРѕСЃС‚Рё." },
+  auto: { description: "AUTO: Р°РІС‚РѕРЅРѕРјРЅРѕ РєРѕРЅС‚СЂРѕР»РёСЂСѓРµС‚ С†РёРєР» РІС‹РїРѕР»РЅРµРЅРёСЏ.", skill: "РљРѕРЅС‚СЂРѕР»СЊ РїСЂРѕРіСЂРµСЃСЃР°, РєСЂРёС‚РµСЂРёРµРІ РіРѕС‚РѕРІРЅРѕСЃС‚Рё Рё Р±РµР·РѕРїР°СЃРЅРѕРіРѕ Р·Р°РІРµСЂС€РµРЅРёСЏ С†РёРєР»Р°.", systemPrompt: "РўС‹ AUTO-Р°РіРµРЅС‚. РљРѕРЅС‚СЂРѕР»РёСЂСѓР№ Р°РІС‚РѕРЅРѕРјРЅС‹Р№ С†РёРєР», С„РёРєСЃРёСЂСѓР№ Р±Р»РѕРєРµСЂС‹ Рё РїСЂРѕРІРµСЂСЏР№ РєСЂРёС‚РµСЂРёРё RELEASE_READY." },
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -246,6 +247,26 @@ function sortAgents(agents: Agent[]): Agent[] {
 }
 
 const COLLAPSED_SIDE = 32;
+
+// UX fix (color indication): every workspace panel carries its own accent
+// color used for the header highlight and the collapsed-state badge.
+const PANEL_ACCENTS: Record<string, string> = {
+  explorer: "#22d3ee",
+  editor: "#3b82f6",
+  lead: "#8b5cf6",
+  group: "#a855f7",
+  terminal: "#22c55e",
+  logs: "#f97316",
+};
+
+const PANEL_ICONS: Record<string, string> = {
+  explorer: "рџ“Ѓ",
+  editor: "рџ“ќ",
+  lead: "рџ‘‘",
+  group: "рџ‘Ґ",
+  terminal: "рџ’»",
+  logs: "рџ“њ",
+};
 const COLLAPSED_BOTTOM = 32;
 
 type PanelName = "explorer" | "editor" | "lead" | "group" | "terminal" | "logs";
@@ -294,99 +315,99 @@ function buildWorkspaceTree(entries: WorkspaceTreeEntry[]) {
 
 const dict = {
   ru: {
-    loading: "Загрузка рабочей среды...",
-    synced: "Синхронизировано",
-    errLoad: "Не удалось загрузить рабочую среду",
-    recovered: "Восстановлено после сбоя",
-    settings: "Настройки",
-    openSettings: "Открыть настройки",
-    close: "Закрыть",
-    lang: "Язык",
-    explorer: "ДЕРЕВО ПРОЕКТА",
-    editor: "РЕДАКТОР",
-    noFile: "Файл не выбран",
-    saveMain: "Сохранить от Главного",
-    rollback: "Откатить изменения",
-    pushGithub: "Пуш в GitHub",
-    donateBtn: "💛 Поддержать / Донат",
-    supportTitle: "Поддержка и связь",
-    supportDonateTitle: "Донаты",
-    supportDonateDesc: "Если проект полезен — поддержите разработку. Донаты помогают делать инструмент лучше.",
-    supportProjectBtn: "Поддержать проект ❤️",
-    emailTitle: "Почта для связи",
+    loading: "Р—Р°РіСЂСѓР·РєР° СЂР°Р±РѕС‡РµР№ СЃСЂРµРґС‹...",
+    synced: "РЎРёРЅС…СЂРѕРЅРёР·РёСЂРѕРІР°РЅРѕ",
+    errLoad: "РќРµ СѓРґР°Р»РѕСЃСЊ Р·Р°РіСЂСѓР·РёС‚СЊ СЂР°Р±РѕС‡СѓСЋ СЃСЂРµРґСѓ",
+    recovered: "Р’РѕСЃСЃС‚Р°РЅРѕРІР»РµРЅРѕ РїРѕСЃР»Рµ СЃР±РѕСЏ",
+    settings: "РќР°СЃС‚СЂРѕР№РєРё",
+    openSettings: "РћС‚РєСЂС‹С‚СЊ РЅР°СЃС‚СЂРѕР№РєРё",
+    close: "Р—Р°РєСЂС‹С‚СЊ",
+    lang: "РЇР·С‹Рє",
+    explorer: "Р”Р•Р Р•Р’Рћ РџР РћР•РљРўРђ",
+    editor: "Р Р•Р”РђРљРўРћР ",
+    noFile: "Р¤Р°Р№Р» РЅРµ РІС‹Р±СЂР°РЅ",
+    saveMain: "РЎРѕС…СЂР°РЅРёС‚СЊ РѕС‚ Р“Р»Р°РІРЅРѕРіРѕ",
+    rollback: "РћС‚РєР°С‚РёС‚СЊ РёР·РјРµРЅРµРЅРёСЏ",
+    pushGithub: "РџСѓС€ РІ GitHub",
+    donateBtn: "рџ’› РџРѕРґРґРµСЂР¶Р°С‚СЊ / Р”РѕРЅР°С‚",
+    supportTitle: "РџРѕРґРґРµСЂР¶РєР° Рё СЃРІСЏР·СЊ",
+    supportDonateTitle: "Р”РѕРЅР°С‚С‹",
+    supportDonateDesc: "Р•СЃР»Рё РїСЂРѕРµРєС‚ РїРѕР»РµР·РµРЅ вЂ” РїРѕРґРґРµСЂР¶РёС‚Рµ СЂР°Р·СЂР°Р±РѕС‚РєСѓ. Р”РѕРЅР°С‚С‹ РїРѕРјРѕРіР°СЋС‚ РґРµР»Р°С‚СЊ РёРЅСЃС‚СЂСѓРјРµРЅС‚ Р»СѓС‡С€Рµ.",
+    supportProjectBtn: "РџРѕРґРґРµСЂР¶Р°С‚СЊ РїСЂРѕРµРєС‚ вќ¤пёЏ",
+    emailTitle: "РџРѕС‡С‚Р° РґР»СЏ СЃРІСЏР·Рё",
     emailLabel: "Email",
-    emailDesc: "Для багрепортов, предложений и техподдержки",
-    supportThanks: "Спасибо за поддержку!",
+    emailDesc: "Р”Р»СЏ Р±Р°РіСЂРµРїРѕСЂС‚РѕРІ, РїСЂРµРґР»РѕР¶РµРЅРёР№ Рё С‚РµС…РїРѕРґРґРµСЂР¶РєРё",
+    supportThanks: "РЎРїР°СЃРёР±Рѕ Р·Р° РїРѕРґРґРµСЂР¶РєСѓ!",
     github: "GitHub",
     githubToken: "GitHub Token",
-    githubRepo: "Репозиторий (username/repo)",
-    githubAutoPush: "Автосохранение в GitHub после правок ИИ",
-    leadChat: "ЧАТ С ГЛАВНЫМ",
-    allChat: "ОБЩИЙ ЧАТ АГЕНТОВ",
-    send: "Отправить",
-    duplicate: "Дублировать в чат с главным",
-    terminal: "ТЕРМИНАЛ",
-    checks: "ПРОВЕРКИ",
-    importCode: "Импорт кода",
-    projectFolder: "Папка проекта",
-    folderPath: "Путь к локальной папке",
-    connectFolder: "Подключить папку",
-    browseFolder: "Выбрать папку",
-    folderConnected: "Папка подключена",
-    importHint: "Загрузите .ts/.tsx/.js/.py/.md и другие текстовые файлы",
-    importBtn: "Импортировать файлы",
-    attachLink: "Ссылка",
-    attachImage: "Картинка",
-    addLink: "Добавить ссылку",
-    clearAttach: "Очистить вложения",
-    apiKeys: "API-ключи",
-    saveKeys: "Сохранить ключи",
-    freeOpenRouter: "Получить бесплатный ключ OpenRouter",
-    provider: "Провайдер",
+    githubRepo: "Р РµРїРѕР·РёС‚РѕСЂРёР№ (username/repo)",
+    githubAutoPush: "РђРІС‚РѕСЃРѕС…СЂР°РЅРµРЅРёРµ РІ GitHub РїРѕСЃР»Рµ РїСЂР°РІРѕРє РР",
+    leadChat: "Р§РђРў РЎ Р“Р›РђР’РќР«Рњ",
+    allChat: "РћР‘Р©РР™ Р§РђРў РђР“Р•РќРўРћР’",
+    send: "РћС‚РїСЂР°РІРёС‚СЊ",
+    duplicate: "Р”СѓР±Р»РёСЂРѕРІР°С‚СЊ РІ С‡Р°С‚ СЃ РіР»Р°РІРЅС‹Рј",
+    terminal: "РўР•Р РњРРќРђР›",
+    checks: "РџР РћР’Р•Р РљР",
+    importCode: "РРјРїРѕСЂС‚ РєРѕРґР°",
+    projectFolder: "РџР°РїРєР° РїСЂРѕРµРєС‚Р°",
+    folderPath: "РџСѓС‚СЊ Рє Р»РѕРєР°Р»СЊРЅРѕР№ РїР°РїРєРµ",
+    connectFolder: "РџРѕРґРєР»СЋС‡РёС‚СЊ РїР°РїРєСѓ",
+    browseFolder: "Р’С‹Р±СЂР°С‚СЊ РїР°РїРєСѓ",
+    folderConnected: "РџР°РїРєР° РїРѕРґРєР»СЋС‡РµРЅР°",
+    importHint: "Р—Р°РіСЂСѓР·РёС‚Рµ .ts/.tsx/.js/.py/.md Рё РґСЂСѓРіРёРµ С‚РµРєСЃС‚РѕРІС‹Рµ С„Р°Р№Р»С‹",
+    importBtn: "РРјРїРѕСЂС‚РёСЂРѕРІР°С‚СЊ С„Р°Р№Р»С‹",
+    attachLink: "РЎСЃС‹Р»РєР°",
+    attachImage: "РљР°СЂС‚РёРЅРєР°",
+    addLink: "Р”РѕР±Р°РІРёС‚СЊ СЃСЃС‹Р»РєСѓ",
+    clearAttach: "РћС‡РёСЃС‚РёС‚СЊ РІР»РѕР¶РµРЅРёСЏ",
+    apiKeys: "API-РєР»СЋС‡Рё",
+    saveKeys: "РЎРѕС…СЂР°РЅРёС‚СЊ РєР»СЋС‡Рё",
+    freeOpenRouter: "РџРѕР»СѓС‡РёС‚СЊ Р±РµСЃРїР»Р°С‚РЅС‹Р№ РєР»СЋС‡ OpenRouter",
+    provider: "РџСЂРѕРІР°Р№РґРµСЂ",
     baseUrl: "Base URL",
-    defaultModel: "Модель по умолчанию",
-    agents: "Агенты",
-    createAgent: "Создать агента",
-    role: "Роль",
-    name: "Имя",
-    model: "Модель",
-    loadModels: "Обновить модели",
-    manualModel: "Ввести вручную...",
-    profile: "Профиль",
-    skill: "Скилл",
-    prompt: "Системный промпт",
-    saveProfile: "Сохранить профиль",
-    setMain: "Назначить главным",
-    mockHint: "Для реального ответа агенту нужен API-ключ выбранного провайдера.",
-    ready: "✅ Готово",
-    busy: "⏳ Выполняется...",
-    stop: "Остановить",
-    retry: "Повторить",
-    copy: "Копировать",
-    copied: "Скопировано",
-    sending: "Отправляется",
-    streaming: "Генерация",
-    sent: "Готово",
-    cancelled: "Остановлено",
-    errorStatus: "Ошибка",
-    unsaved: "● Не сохранено",
-    collapse: "Свернуть",
-    expand: "Развернуть",
-    newFile: "Создать файл",
-    newFolder: "Создать папку",
-    rename: "Переименовать",
-    delete: "Удалить",
-    create: "Создать",
-    error429: "⚠️ Ошибка 429 (Превышен лимит запросов). Смените модель или провайдера.",
-    errorDefault: "⚠️ Произошла ошибка. Попробуйте ещё раз или смените модель.",
-    logsTitle: "ЛОГИ / СИСТЕМНЫЕ СОБЫТИЯ",
-    search: "Поиск по файлам",
-    searchPlaceholder: "Поиск по проекту (Ctrl+P)...",
-    noResults: "Ничего не найдено",
-    exportAgents: "Экспорт настроек и профайлов",
-    importAgents: "Импорт настроек",
-    importAgentsDesc: "JSON без API-ключей и токенов: настройки и профили агентов",
-    diff: "Изменения",
+    defaultModel: "РњРѕРґРµР»СЊ РїРѕ СѓРјРѕР»С‡Р°РЅРёСЋ",
+    agents: "РђРіРµРЅС‚С‹",
+    createAgent: "РЎРѕР·РґР°С‚СЊ Р°РіРµРЅС‚Р°",
+    role: "Р РѕР»СЊ",
+    name: "РРјСЏ",
+    model: "РњРѕРґРµР»СЊ",
+    loadModels: "РћР±РЅРѕРІРёС‚СЊ РјРѕРґРµР»Рё",
+    manualModel: "Р’РІРµСЃС‚Рё РІСЂСѓС‡РЅСѓСЋ...",
+    profile: "РџСЂРѕС„РёР»СЊ",
+    skill: "РЎРєРёР»Р»",
+    prompt: "РЎРёСЃС‚РµРјРЅС‹Р№ РїСЂРѕРјРїС‚",
+    saveProfile: "РЎРѕС…СЂР°РЅРёС‚СЊ РїСЂРѕС„РёР»СЊ",
+    setMain: "РќР°Р·РЅР°С‡РёС‚СЊ РіР»Р°РІРЅС‹Рј",
+    mockHint: "Р”Р»СЏ СЂРµР°Р»СЊРЅРѕРіРѕ РѕС‚РІРµС‚Р° Р°РіРµРЅС‚Сѓ РЅСѓР¶РµРЅ API-РєР»СЋС‡ РІС‹Р±СЂР°РЅРЅРѕРіРѕ РїСЂРѕРІР°Р№РґРµСЂР°.",
+    ready: "вњ… Р“РѕС‚РѕРІРѕ",
+    busy: "вЏі Р’С‹РїРѕР»РЅСЏРµС‚СЃСЏ...",
+    stop: "РћСЃС‚Р°РЅРѕРІРёС‚СЊ",
+    retry: "РџРѕРІС‚РѕСЂРёС‚СЊ",
+    copy: "РљРѕРїРёСЂРѕРІР°С‚СЊ",
+    copied: "РЎРєРѕРїРёСЂРѕРІР°РЅРѕ",
+    sending: "РћС‚РїСЂР°РІР»СЏРµС‚СЃСЏ",
+    streaming: "Р“РµРЅРµСЂР°С†РёСЏ",
+    sent: "Р“РѕС‚РѕРІРѕ",
+    cancelled: "РћСЃС‚Р°РЅРѕРІР»РµРЅРѕ",
+    errorStatus: "РћС€РёР±РєР°",
+    unsaved: "в—Џ РќРµ СЃРѕС…СЂР°РЅРµРЅРѕ",
+    collapse: "РЎРІРµСЂРЅСѓС‚СЊ",
+    expand: "Р Р°Р·РІРµСЂРЅСѓС‚СЊ",
+    newFile: "РЎРѕР·РґР°С‚СЊ С„Р°Р№Р»",
+    newFolder: "РЎРѕР·РґР°С‚СЊ РїР°РїРєСѓ",
+    rename: "РџРµСЂРµРёРјРµРЅРѕРІР°С‚СЊ",
+    delete: "РЈРґР°Р»РёС‚СЊ",
+    create: "РЎРѕР·РґР°С‚СЊ",
+    error429: "вљ пёЏ РћС€РёР±РєР° 429 (РџСЂРµРІС‹С€РµРЅ Р»РёРјРёС‚ Р·Р°РїСЂРѕСЃРѕРІ). РЎРјРµРЅРёС‚Рµ РјРѕРґРµР»СЊ РёР»Рё РїСЂРѕРІР°Р№РґРµСЂР°.",
+    errorDefault: "вљ пёЏ РџСЂРѕРёР·РѕС€Р»Р° РѕС€РёР±РєР°. РџРѕРїСЂРѕР±СѓР№С‚Рµ РµС‰С‘ СЂР°Р· РёР»Рё СЃРјРµРЅРёС‚Рµ РјРѕРґРµР»СЊ.",
+    logsTitle: "Р›РћР“Р / РЎРРЎРўР•РњРќР«Р• РЎРћР‘Р«РўРРЇ",
+    search: "РџРѕРёСЃРє РїРѕ С„Р°Р№Р»Р°Рј",
+    searchPlaceholder: "РџРѕРёСЃРє РїРѕ РїСЂРѕРµРєС‚Сѓ (Ctrl+P)...",
+    noResults: "РќРёС‡РµРіРѕ РЅРµ РЅР°Р№РґРµРЅРѕ",
+    exportAgents: "Р­РєСЃРїРѕСЂС‚ РЅР°СЃС‚СЂРѕРµРє Рё РїСЂРѕС„Р°Р№Р»РѕРІ",
+    importAgents: "РРјРїРѕСЂС‚ РЅР°СЃС‚СЂРѕРµРє",
+    importAgentsDesc: "JSON Р±РµР· API-РєР»СЋС‡РµР№ Рё С‚РѕРєРµРЅРѕРІ: РЅР°СЃС‚СЂРѕР№РєРё Рё РїСЂРѕС„РёР»Рё Р°РіРµРЅС‚РѕРІ",
+    diff: "РР·РјРµРЅРµРЅРёСЏ",
   },
   en: {
     loading: "Loading workspace...",
@@ -403,11 +424,11 @@ const dict = {
     saveMain: "Save as Lead",
     rollback: "Rollback changes",
     pushGithub: "Push to GitHub",
-    donateBtn: "💛 Support / Donate",
+    donateBtn: "рџ’› Support / Donate",
     supportTitle: "Support & Contact",
     supportDonateTitle: "Donations",
-    supportDonateDesc: "If the project is useful — support its development. Donations help make the tool better.",
-    supportProjectBtn: "Support the project ❤️",
+    supportDonateDesc: "If the project is useful вЂ” support its development. Donations help make the tool better.",
+    supportProjectBtn: "Support the project вќ¤пёЏ",
     emailTitle: "Contact email",
     emailLabel: "Email",
     emailDesc: "For bug reports, ideas and tech support",
@@ -453,8 +474,8 @@ const dict = {
     saveProfile: "Save profile",
     setMain: "Set lead",
     mockHint: "A real provider API key is required for an agent to answer.",
-    ready: "✅ Ready",
-    busy: "⏳ Processing...",
+    ready: "вњ… Ready",
+    busy: "вЏі Processing...",
     stop: "Stop",
     retry: "Retry",
     copy: "Copy",
@@ -464,7 +485,7 @@ const dict = {
     sent: "Done",
     cancelled: "Stopped",
     errorStatus: "Error",
-    unsaved: "● Unsaved",
+    unsaved: "в—Џ Unsaved",
     collapse: "Collapse",
     expand: "Maximize",
     newFile: "New file",
@@ -472,8 +493,8 @@ const dict = {
     rename: "Rename",
     delete: "Delete",
     create: "Create",
-    error429: "⚠️ Error 429 (Rate limit exceeded). Switch model or provider.",
-    errorDefault: "⚠️ An error occurred. Try again or switch models.",
+    error429: "вљ пёЏ Error 429 (Rate limit exceeded). Switch model or provider.",
+    errorDefault: "вљ пёЏ An error occurred. Try again or switch models.",
     logsTitle: "LOGS / SYSTEM EVENTS",
     search: "Search files",
     searchPlaceholder: "Search project (Ctrl+P)...",
@@ -634,7 +655,7 @@ export function IdeApp() {
         className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10"
         style={{ color: "var(--text-secondary)" }}
       >
-        {collapsed ? "▸" : "◂"}
+        {collapsed ? "в–ё" : "в—‚"}
       </button>
     );
   };
@@ -648,7 +669,7 @@ export function IdeApp() {
       className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10"
       style={{ color: "var(--text-secondary)" }}
     >
-      □
+      в–Ў
     </button>
   );
 
@@ -687,6 +708,18 @@ export function IdeApp() {
 
   const selectedFile = useMemo(() => data?.files.find((f) => f.id === selectedFileId) ?? null, [data, selectedFileId]);
   const mainAgent = useMemo(() => data?.agents.find((a) => a.role === "main") ?? null, [data?.agents]);
+  // UX fix (dedupe): while an agent reply is streaming, the saved copy of the
+  // same message must not render twice once the workspace refreshes.
+  const liveMessageKeys = useMemo(
+    () => new Set(Object.values(streamingMessages).map((m) => `${m.identity.agentId}:${sanitizeChatContent(m.content).trim().slice(0, 80)}`)),
+    [streamingMessages],
+  );
+  const duplicatedByLiveStream = useCallback((msg: WorkspaceMessage) => {
+    if (msg.senderType !== "agent") return false;
+    const agentId = msg.metadata?.identity?.agentId;
+    if (!agentId) return false;
+    return liveMessageKeys.has(`${agentId}:${sanitizeChatContent(msg.content).trim().slice(0, 80)}`);
+  }, [liveMessageKeys]);
   const leadMessages = useMemo(() => {
     const mainAgentId = data?.agents?.find((a) => a.role === "main")?.id ?? -1;
     const existing = data?.messages.filter((m) =>
@@ -694,15 +727,16 @@ export function IdeApp() {
       && m.senderType !== "system"
       // Lead chat: only user messages + main agent messages. Advisors filtered out.
       && (m.senderType !== "agent" || !m.metadata?.identity?.agentId || m.metadata.identity.agentId === mainAgentId)
+      && !duplicatedByLiveStream(m)
     ) ?? [];
     const optimistic = optimisticMessages.filter((m) => m.chatChannel === "lead" && m.senderType === "user");
     return [...existing, ...optimistic];
-  }, [data?.messages, data?.agents, optimisticMessages]);
+  }, [data?.messages, data?.agents, optimisticMessages, duplicatedByLiveStream]);
   const groupMessages = useMemo(() => {
-    const messages = [...(data?.messages.filter((m) => m.chatChannel === "group" && m.senderType !== "system") ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")];
+    const messages = [...(data?.messages.filter((m) => m.chatChannel === "group" && m.senderType !== "system" && !duplicatedByLiveStream(m)) ?? []), ...optimisticMessages.filter((m) => m.chatChannel === "group")];
     if (groupRoleFilter === "all") return messages;
     return messages.filter((message) => message.metadata?.identity?.role === groupRoleFilter);
-  }, [data?.messages, groupRoleFilter, optimisticMessages]);
+  }, [data?.messages, groupRoleFilter, optimisticMessages, duplicatedByLiveStream]);
   const liveMessages = useMemo(() => Object.values(streamingMessages), [streamingMessages]);
   const liveMessagesVersion = liveMessages.map((message) => `${message.identity.agentId}:${message.content.length}:${message.status}`).join("|");
   const contextStats = useMemo(() => {
@@ -744,14 +778,14 @@ export function IdeApp() {
 
   function roleLabel(role: string) {
     if (locale === "ru") {
-      if (role === "main") return "Главный";
-      if (role === "advisor") return "Советник";
-      if (role === "reviewer") return "Ревьюер";
-      if (role === "tester") return "Тестировщик";
-      if (role === "architect") return "Архитектор";
-      if (role === "uiux") return "UI/UX Дизайнер";
-      if (role === "security") return "Секурити";
-      if (role === "observer") return "Наблюдатель";
+      if (role === "main") return "Р“Р»Р°РІРЅС‹Р№";
+      if (role === "advisor") return "РЎРѕРІРµС‚РЅРёРє";
+      if (role === "reviewer") return "Р РµРІСЊСЋРµСЂ";
+      if (role === "tester") return "РўРµСЃС‚РёСЂРѕРІС‰РёРє";
+      if (role === "architect") return "РђСЂС…РёС‚РµРєС‚РѕСЂ";
+      if (role === "uiux") return "UI/UX Р”РёР·Р°Р№РЅРµСЂ";
+      if (role === "security") return "РЎРµРєСѓСЂРёС‚Рё";
+      if (role === "observer") return "РќР°Р±Р»СЋРґР°С‚РµР»СЊ";
       if (role === "auto") return "AUTO";
     }
     return role === "auto" ? "AUTO" : role;
@@ -783,9 +817,9 @@ export function IdeApp() {
   }
 
   function messageHeader(message: WorkspaceMessage) {
-    if (message.agentName === "System" || message.senderType === "system") return locale === "ru" ? "Система" : "System";
-    if (message.senderType === "user" || message.agentName === "User" || message.agentName === "Пользователь") {
-      return locale === "ru" ? "Пользователь" : "User";
+    if (message.agentName === "System" || message.senderType === "system") return locale === "ru" ? "РЎРёСЃС‚РµРјР°" : "System";
+    if (message.senderType === "user" || message.agentName === "User" || message.agentName === "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ") {
+      return locale === "ru" ? "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ" : "User";
     }
 
     const storedIdentity = message.metadata?.identity;
@@ -960,7 +994,7 @@ export function IdeApp() {
       <div className="absolute bottom-full left-0 z-50 mb-1 max-h-48 w-full overflow-y-auto rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-1 shadow-xl">
         {suggestions.map((file) => (
           <button key={file.path} type="button" onMouseDown={(event) => event.preventDefault()} onClick={() => selectMentionFile(file)} className="block w-full truncate rounded px-2 py-1.5 text-left text-xs text-[var(--text-primary)] hover:bg-[var(--bg-hover)]">
-            📄 {file.path}
+            рџ“„ {file.path}
           </button>
         ))}
       </div>
@@ -1088,9 +1122,9 @@ export function IdeApp() {
       }
 
       await loadWorkspace(selectedFileId, locale);
-      setStatus(locale === "ru" ? `Импортировано профилей: ${importedCount}` : `Imported profiles: ${importedCount}`);
+      setStatus(locale === "ru" ? `РРјРїРѕСЂС‚РёСЂРѕРІР°РЅРѕ РїСЂРѕС„РёР»РµР№: ${importedCount}` : `Imported profiles: ${importedCount}`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : (locale === "ru" ? "Не удалось импортировать настройки" : "Failed to import settings"));
+      setStatus(error instanceof Error ? error.message : (locale === "ru" ? "РќРµ СѓРґР°Р»РѕСЃСЊ РёРјРїРѕСЂС‚РёСЂРѕРІР°С‚СЊ РЅР°СЃС‚СЂРѕР№РєРё" : "Failed to import settings"));
     }
   }
 
@@ -1103,7 +1137,7 @@ export function IdeApp() {
       setStreamingMessages({});
       setOptimisticMessages([]);
       setRetryRequest(null);
-      setStatus(locale === "ru" ? "Временный кэш памяти агентов очищен. Ключи сохранены." : "Temporary agent memory cache cleared. Keys were preserved.");
+      setStatus(locale === "ru" ? "Р’СЂРµРјРµРЅРЅС‹Р№ РєСЌС€ РїР°РјСЏС‚Рё Р°РіРµРЅС‚РѕРІ РѕС‡РёС‰РµРЅ. РљР»СЋС‡Рё СЃРѕС…СЂР°РЅРµРЅС‹." : "Temporary agent memory cache cleared. Keys were preserved.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Cache clear failed");
     }
@@ -1316,9 +1350,9 @@ export function IdeApp() {
               type="button"
               onClick={() => setExpandedDirectories((previous) => isExpanded ? previous.filter((path) => path !== node.path) : [...previous, node.path])}
               className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"
-              title={isExpanded ? "Свернуть папку" : "Развернуть папку"}
+              title={isExpanded ? "РЎРІРµСЂРЅСѓС‚СЊ РїР°РїРєСѓ" : "Р Р°Р·РІРµСЂРЅСѓС‚СЊ РїР°РїРєСѓ"}
             >
-              {isExpanded ? "▾" : "▸"}
+              {isExpanded ? "в–ѕ" : "в–ё"}
             </button>
           ) : <span className="h-6 w-6 shrink-0" />}
           <button
@@ -1326,7 +1360,7 @@ export function IdeApp() {
             onClick={() => {
               if (node.kind === "directory") {
                 setSelectedDirectory(node.path);
-                setStatus(locale === "ru" ? `Папка выбрана для создания: ${node.path}` : `Folder selected for creation: ${node.path}`);
+                setStatus(locale === "ru" ? `РџР°РїРєР° РІС‹Р±СЂР°РЅР° РґР»СЏ СЃРѕР·РґР°РЅРёСЏ: ${node.path}` : `Folder selected for creation: ${node.path}`);
               } else {
                 void selectWorkspaceFile(node);
               }
@@ -1336,11 +1370,11 @@ export function IdeApp() {
             className={`block min-w-0 flex-1 truncate rounded px-2 py-1 text-left text-sm ${node.kind === "directory" ? isSelectedDirectory ? "bg-[var(--bg-selection)] text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]" : isSelected ? "bg-[#37373d] text-white" : "hover:bg-[var(--bg-hover)]"}`}
             title={node.path}
           >
-            <span className="mr-1 text-[var(--text-accent)]">{node.kind === "directory" ? "📁" : "◆"}</span>
+            <span className="mr-1 text-[var(--text-accent)]">{node.kind === "directory" ? "рџ“Ѓ" : "в—†"}</span>
             <span className="truncate">{node.path.split("/").pop() || node.path}</span>
             {node.kind === "file" && fileStatus && fileStatus !== "saved" ? (
               <span className={`ml-1 text-[10px] ${fileStatus === "modified" ? "text-amber-300" : "text-[var(--text-accent)]"}`}>
-                {fileStatus === "modified" ? "●" : "＋"}
+                {fileStatus === "modified" ? "в—Џ" : "пј‹"}
               </span>
             ) : null}
           </button>
@@ -1349,17 +1383,17 @@ export function IdeApp() {
           <div>
             {isCreatingHere ? (
               <div className="mb-1 flex items-center gap-1 rounded border border-blue-400/60 bg-blue-500/10 px-2 py-1" style={{ marginLeft: `${(depth + 1) * 10 + 26}px` }}>
-                <span className="text-[var(--text-accent)]">{createEntryDraft.kind === "directory" ? "📁" : "📄"}</span>
+                <span className="text-[var(--text-accent)]">{createEntryDraft.kind === "directory" ? "рџ“Ѓ" : "рџ“„"}</span>
                 <input
                   autoFocus
                   value={createEntryName}
                   onChange={(event) => setCreateEntryName(event.target.value)}
                   onKeyDown={handleCreateInputKeyDown}
-                  placeholder={createEntryDraft.kind === "directory" ? "Имя новой папки" : "Имя нового файла"}
+                  placeholder={createEntryDraft.kind === "directory" ? "РРјСЏ РЅРѕРІРѕР№ РїР°РїРєРё" : "РРјСЏ РЅРѕРІРѕРіРѕ С„Р°Р№Р»Р°"}
                   className="min-w-0 flex-1 bg-transparent text-xs outline-none"
                 />
-                <button type="button" onClick={() => void submitCreateEntry()} className="text-emerald-300" title={t.create}>✓</button>
-                <button type="button" onClick={cancelCreateEntry} className="text-red-300" title={t.close}>✕</button>
+                <button type="button" onClick={() => void submitCreateEntry()} className="text-emerald-300" title={t.create}>вњ“</button>
+                <button type="button" onClick={cancelCreateEntry} className="text-red-300" title={t.close}>вњ•</button>
               </div>
             ) : null}
             {node.children.map((child) => renderWorkspaceTreeNode(child, depth + 1))}
@@ -1376,7 +1410,7 @@ export function IdeApp() {
 
   function beginCreateEntry(kind: "file" | "directory", parentPath = selectedDirectory) {
     if (!mainAgent) {
-      setStatus(locale === "ru" ? "Сначала должен быть назначен Главный агент" : "Assign a Lead Agent first");
+      setStatus(locale === "ru" ? "РЎРЅР°С‡Р°Р»Р° РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РЅР°Р·РЅР°С‡РµРЅ Р“Р»Р°РІРЅС‹Р№ Р°РіРµРЅС‚" : "Assign a Lead Agent first");
       return;
     }
     if (busy) return;
@@ -1387,7 +1421,7 @@ export function IdeApp() {
     setCreateEntryDraft({ kind, parentPath });
     setCreateEntryName(kind === "file" ? "" : "");
     setContextMenu(null);
-    setStatus(locale === "ru" ? `Введите имя ${kind === "file" ? "файла" : "папки"}` : `Enter ${kind === "file" ? "file" : "folder"} name`);
+    setStatus(locale === "ru" ? `Р’РІРµРґРёС‚Рµ РёРјСЏ ${kind === "file" ? "С„Р°Р№Р»Р°" : "РїР°РїРєРё"}` : `Enter ${kind === "file" ? "file" : "folder"} name`);
   }
 
   function cancelCreateEntry() {
@@ -1399,18 +1433,18 @@ export function IdeApp() {
     if (!createEntryDraft || !mainAgent) return;
     const rawName = createEntryName.trim();
     if (!rawName) {
-      setStatus(locale === "ru" ? "Введите имя" : "Enter a name");
+      setStatus(locale === "ru" ? "Р’РІРµРґРёС‚Рµ РёРјСЏ" : "Enter a name");
       return;
     }
     if (/[\\\\/:*?"<>|]/.test(rawName) || rawName === "." || rawName === "..") {
-      setStatus(locale === "ru" ? "Недопустимое имя файла или папки" : "Invalid file or folder name");
+      setStatus(locale === "ru" ? "РќРµРґРѕРїСѓСЃС‚РёРјРѕРµ РёРјСЏ С„Р°Р№Р»Р° РёР»Рё РїР°РїРєРё" : "Invalid file or folder name");
       return;
     }
 
     const name = rawName;
     const path = createEntryDraft.parentPath ? `${createEntryDraft.parentPath}/${name}` : name;
     if (workspaceTreeEntries.some((entry) => entry.path === path)) {
-      setStatus(locale === "ru" ? "Файл или папка с таким именем уже существуют" : "An entry with this name already exists");
+      setStatus(locale === "ru" ? "Р¤Р°Р№Р» РёР»Рё РїР°РїРєР° СЃ С‚Р°РєРёРј РёРјРµРЅРµРј СѓР¶Рµ СЃСѓС‰РµСЃС‚РІСѓСЋС‚" : "An entry with this name already exists");
       return;
     }
 
@@ -1429,7 +1463,7 @@ export function IdeApp() {
       cancelCreateEntry();
       await loadWorkspace(selectedFileId, locale);
       if (createdKind === "file") setFileStatuses((previous) => ({ ...previous, [path]: "new" }));
-      setStatus(locale === "ru" ? `${createdKind === "file" ? "Файл" : "Папка"} создан: ${path}` : `${createdKind === "file" ? "File" : "Folder"} created: ${path}`);
+      setStatus(locale === "ru" ? `${createdKind === "file" ? "Р¤Р°Р№Р»" : "РџР°РїРєР°"} СЃРѕР·РґР°РЅ: ${path}` : `${createdKind === "file" ? "File" : "Folder"} created: ${path}`);
       if (createdParent) setExpandedDirectories((previous) => previous.includes(createdParent) ? previous : [...previous, createdParent]);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "File operation failed");
@@ -1450,10 +1484,10 @@ export function IdeApp() {
 
   async function renameTreeEntry(filePath: string) {
     if (!mainAgent) {
-      setStatus(locale === "ru" ? "Сначала должен быть назначен Главный агент" : "Assign a Lead Agent first");
+      setStatus(locale === "ru" ? "РЎРЅР°С‡Р°Р»Р° РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РЅР°Р·РЅР°С‡РµРЅ Р“Р»Р°РІРЅС‹Р№ Р°РіРµРЅС‚" : "Assign a Lead Agent first");
       return;
     }
-    const nextPath = window.prompt(locale === "ru" ? "Новое имя или путь" : "New name or path", filePath);
+    const nextPath = window.prompt(locale === "ru" ? "РќРѕРІРѕРµ РёРјСЏ РёР»Рё РїСѓС‚СЊ" : "New name or path", filePath);
     if (!nextPath?.trim() || nextPath.trim() === filePath) return;
     setBusy(true);
     try {
@@ -1467,7 +1501,7 @@ export function IdeApp() {
         return;
       }
       await loadWorkspace(null, locale, { clearSelection: true });
-      setStatus(locale === "ru" ? `Переименовано: ${nextPath.trim()}` : `Renamed: ${nextPath.trim()}`);
+      setStatus(locale === "ru" ? `РџРµСЂРµРёРјРµРЅРѕРІР°РЅРѕ: ${nextPath.trim()}` : `Renamed: ${nextPath.trim()}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Rename failed");
     } finally {
@@ -1477,10 +1511,10 @@ export function IdeApp() {
 
   async function deleteTreeEntry(filePath: string) {
     if (!mainAgent) {
-      setStatus(locale === "ru" ? "Сначала должен быть назначен Главный агент" : "Assign a Lead Agent first");
+      setStatus(locale === "ru" ? "РЎРЅР°С‡Р°Р»Р° РґРѕР»Р¶РµРЅ Р±С‹С‚СЊ РЅР°Р·РЅР°С‡РµРЅ Р“Р»Р°РІРЅС‹Р№ Р°РіРµРЅС‚" : "Assign a Lead Agent first");
       return;
     }
-    if (!window.confirm(`${locale === "ru" ? "Удалить" : "Delete"} ${filePath}?`)) return;
+    if (!window.confirm(`${locale === "ru" ? "РЈРґР°Р»РёС‚СЊ" : "Delete"} ${filePath}?`)) return;
     setBusy(true);
     try {
       const response = await fetch("/api/workspace/entry", {
@@ -1493,7 +1527,7 @@ export function IdeApp() {
         return;
       }
       await loadWorkspace(null, locale, { clearSelection: true });
-      setStatus(locale === "ru" ? `Удалено: ${filePath}` : `Deleted: ${filePath}`);
+      setStatus(locale === "ru" ? `РЈРґР°Р»РµРЅРѕ: ${filePath}` : `Deleted: ${filePath}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Delete failed");
     } finally {
@@ -1551,7 +1585,7 @@ export function IdeApp() {
 
   async function saveApiKeys() {
     if (!settingsDirty) {
-      setStatus(locale === "ru" ? "Нет изменений для сохранения" : "No settings changes to save");
+      setStatus(locale === "ru" ? "РќРµС‚ РёР·РјРµРЅРµРЅРёР№ РґР»СЏ СЃРѕС…СЂР°РЅРµРЅРёСЏ" : "No settings changes to save");
       return;
     }
     setBusy(true);
@@ -1617,7 +1651,7 @@ export function IdeApp() {
       setRemoveGithubToken(false);
       setTelegramTokenDraft("");
       setRemoveTelegramToken(false);
-      setStatus(locale === "ru" ? "Настройки сохранены" : "Settings saved");
+      setStatus(locale === "ru" ? "РќР°СЃС‚СЂРѕР№РєРё СЃРѕС…СЂР°РЅРµРЅС‹" : "Settings saved");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Settings update failed");
     } finally {
@@ -1650,7 +1684,7 @@ export function IdeApp() {
 
   async function createAgent() {
     if (!newAgent.name.trim()) {
-      setStatus(locale === "ru" ? "Введите имя агента" : "Enter an agent name");
+      setStatus(locale === "ru" ? "Р’РІРµРґРёС‚Рµ РёРјСЏ Р°РіРµРЅС‚Р°" : "Enter an agent name");
       return;
     }
 
@@ -1668,7 +1702,7 @@ export function IdeApp() {
       setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? "")));
       await loadWorkspace(selectedFileId, locale);
       setShowAddAgent(false);
-      setStatus(locale === "ru" ? "Агент создан" : "Agent created");
+      setStatus(locale === "ru" ? "РђРіРµРЅС‚ СЃРѕР·РґР°РЅ" : "Agent created");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Agent creation failed");
     } finally {
@@ -1689,7 +1723,7 @@ export function IdeApp() {
         throw new Error(payload?.error ?? "Failed to set Lead agent");
       }
       await loadWorkspace(selectedFileId, locale);
-      setStatus(locale === "ru" ? "Главный агент назначен" : "Lead agent assigned");
+      setStatus(locale === "ru" ? "Р“Р»Р°РІРЅС‹Р№ Р°РіРµРЅС‚ РЅР°Р·РЅР°С‡РµРЅ" : "Lead agent assigned");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Failed to set Lead agent");
     } finally {
@@ -1780,12 +1814,12 @@ export function IdeApp() {
   }
 
   async function clearHistory(channel: ChatChannel) {
-    if (!window.confirm(locale === "ru" ? "Очистить историю этого чата?" : "Clear this chat history?")) return;
+    if (!window.confirm(locale === "ru" ? "РћС‡РёСЃС‚РёС‚СЊ РёСЃС‚РѕСЂРёСЋ СЌС‚РѕРіРѕ С‡Р°С‚Р°?" : "Clear this chat history?")) return;
     try {
       const response = await fetch(`/api/chat/history?channel=${channel}`, { method: "DELETE" });
       if (!response.ok) throw new Error("History clear failed");
       await loadWorkspace(selectedFileId, locale);
-      setStatus(locale === "ru" ? "История очищена" : "History cleared");
+      setStatus(locale === "ru" ? "РСЃС‚РѕСЂРёСЏ РѕС‡РёС‰РµРЅР°" : "History cleared");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "History clear failed");
     }
@@ -1819,7 +1853,7 @@ export function IdeApp() {
 
     const controller = new AbortController();
     chatAbortRef.current = controller;
-    const optimisticContent = message.trim() || (locale === "ru" ? "[прикреплены материалы]" : "[materials attached]");
+    const optimisticContent = message.trim() || (locale === "ru" ? "[РїСЂРёРєСЂРµРїР»РµРЅС‹ РјР°С‚РµСЂРёР°Р»С‹]" : "[materials attached]");
     const optimisticMetadata = outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {};
     const optimisticIds: number[] = [];
     const addOptimisticMessage = (chatChannel: ChatChannel) => {
@@ -1830,7 +1864,7 @@ export function IdeApp() {
         id,
         chatChannel,
         senderType: "user",
-        agentName: locale === "ru" ? "Пользователь" : "User",
+        agentName: locale === "ru" ? "РџРѕР»СЊР·РѕРІР°С‚РµР»СЊ" : "User",
         content: optimisticContent,
         metadata: optimisticMetadata,
         createdAt: new Date().toISOString(),
@@ -1886,7 +1920,7 @@ export function IdeApp() {
 
         const event = parseSseJson<ChatStreamEvent>(block);
         if (!event) {
-          streamError ??= new Error(locale === "ru" ? "Получено некорректное событие от LLM" : "Received an invalid LLM stream event");
+          streamError ??= new Error(locale === "ru" ? "РџРѕР»СѓС‡РµРЅРѕ РЅРµРєРѕСЂСЂРµРєС‚РЅРѕРµ СЃРѕР±С‹С‚РёРµ РѕС‚ LLM" : "Received an invalid LLM stream event");
           return;
         }
 
@@ -1924,7 +1958,7 @@ export function IdeApp() {
         if (event.type === "agent_done" && event.identity) {
           const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
           void bridge?.notify?.({
-            title: locale === "ru" ? `✅ ${event.identity.displayName} завершил задачу` : `✅ ${event.identity.displayName} completed the task`,
+            title: locale === "ru" ? `вњ… ${event.identity.displayName} Р·Р°РІРµСЂС€РёР» Р·Р°РґР°С‡Сѓ` : `вњ… ${event.identity.displayName} completed the task`,
             body: event.content.slice(0, 120),
           });
           const identity = event.identity;
@@ -1941,7 +1975,7 @@ export function IdeApp() {
           const identity = event.identity;
           const httpStatus = event.status === 403 || event.status === 429 ? event.status : undefined;
           const accessError = httpStatus !== undefined
-            ? `Ошибка доступа к модели (HTTP ${httpStatus}). Смените модель в Настройках на qwen/qwen-2.5-coder-32b-instruct:free или google/gemini-2.0-flash-lite-001:free`
+            ? `РћС€РёР±РєР° РґРѕСЃС‚СѓРїР° Рє РјРѕРґРµР»Рё (HTTP ${httpStatus}). РЎРјРµРЅРёС‚Рµ РјРѕРґРµР»СЊ РІ РќР°СЃС‚СЂРѕР№РєР°С… РЅР° qwen/qwen-2.5-coder-32b-instruct:free РёР»Рё google/gemini-2.0-flash-lite-001:free`
             : undefined;
           setStreamingMessages((previous) => {
             const current = previous[identity.agentId];
@@ -2021,7 +2055,7 @@ export function IdeApp() {
         body: JSON.stringify({ feedback: value }),
       });
       if (!response.ok) throw new Error("Preview feedback failed");
-      setStatus(locale === "ru" ? "Комментарий отправлен Дизайнеру" : "Feedback sent to the Designer");
+      setStatus(locale === "ru" ? "РљРѕРјРјРµРЅС‚Р°СЂРёР№ РѕС‚РїСЂР°РІР»РµРЅ Р”РёР·Р°Р№РЅРµСЂСѓ" : "Feedback sent to the Designer");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Preview feedback failed");
     }
@@ -2035,7 +2069,7 @@ export function IdeApp() {
       const payload = (await response.json().catch(() => null)) as { error?: string; username?: string } | null;
       if (!response.ok) throw new Error(payload?.error ?? "Telegram connection failed");
       await fetch("/api/telegram/poll", { method: "POST" });
-      setStatus(locale === "ru" ? `Telegram подключён${payload?.username ? `: @${payload.username}` : ""}` : `Telegram connected${payload?.username ? `: @${payload.username}` : ""}`);
+      setStatus(locale === "ru" ? `Telegram РїРѕРґРєР»СЋС‡С‘РЅ${payload?.username ? `: @${payload.username}` : ""}` : `Telegram connected${payload?.username ? `: @${payload.username}` : ""}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Telegram connection failed");
     } finally {
@@ -2046,7 +2080,7 @@ export function IdeApp() {
   async function generateTemplate() {
     const directory = workspaceRootDraft.trim();
     if (!directory) {
-      setStatus(locale === "ru" ? "Сначала выберите папку проекта" : "Choose a project folder first");
+      setStatus(locale === "ru" ? "РЎРЅР°С‡Р°Р»Р° РІС‹Р±РµСЂРёС‚Рµ РїР°РїРєСѓ РїСЂРѕРµРєС‚Р°" : "Choose a project folder first");
       return;
     }
     setBusy(true);
@@ -2060,7 +2094,7 @@ export function IdeApp() {
       if (!response.ok) throw new Error(payload?.error ?? "Template generation failed");
       setTemplateOpen(false);
       await loadWorkspace(null, locale);
-      setStatus(locale === "ru" ? `Пресет создан: ${payload?.files?.length ?? 0} файлов` : `Preset created: ${payload?.files?.length ?? 0} files`);
+      setStatus(locale === "ru" ? `РџСЂРµСЃРµС‚ СЃРѕР·РґР°РЅ: ${payload?.files?.length ?? 0} С„Р°Р№Р»РѕРІ` : `Preset created: ${payload?.files?.length ?? 0} files`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Template generation failed");
     } finally {
@@ -2084,7 +2118,7 @@ export function IdeApp() {
       }
       setTerminalCommand("");
       await loadWorkspace(selectedFileId, locale);
-      setStatus(locale === "ru" ? "Команда выполнена" : "Command completed");
+      setStatus(locale === "ru" ? "РљРѕРјР°РЅРґР° РІС‹РїРѕР»РЅРµРЅР°" : "Command completed");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Terminal command failed");
     } finally {
@@ -2094,7 +2128,7 @@ export function IdeApp() {
 
   async function importOwnFiles() {
     if (importFiles.length === 0) {
-      setStatus(locale === "ru" ? "Выберите файлы для импорта" : "Choose files to import");
+      setStatus(locale === "ru" ? "Р’С‹Р±РµСЂРёС‚Рµ С„Р°Р№Р»С‹ РґР»СЏ РёРјРїРѕСЂС‚Р°" : "Choose files to import");
       return;
     }
     setBusy(true);
@@ -2117,7 +2151,7 @@ export function IdeApp() {
       }
       setImportFiles([]);
       await loadWorkspace(selectedFileId, locale);
-      setStatus(locale === "ru" ? `Импортировано файлов: ${filesPayload.length}` : `Imported files: ${filesPayload.length}`);
+      setStatus(locale === "ru" ? `РРјРїРѕСЂС‚РёСЂРѕРІР°РЅРѕ С„Р°Р№Р»РѕРІ: ${filesPayload.length}` : `Imported files: ${filesPayload.length}`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Import failed");
     } finally {
@@ -2209,7 +2243,7 @@ export function IdeApp() {
       });
       if (!response.ok) throw new Error(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Auto mode update failed");
       await loadWorkspace(selectedFileId, locale);
-      setStatus(locale === "ru" ? `AUTO ${enabled ? "включён" : "выключен"}` : `AUTO ${enabled ? "enabled" : "disabled"}`);
+      setStatus(locale === "ru" ? `AUTO ${enabled ? "РІРєР»СЋС‡С‘РЅ" : "РІС‹РєР»СЋС‡РµРЅ"}` : `AUTO ${enabled ? "enabled" : "disabled"}`);
     } catch (error) {
       setAutoApproveDraft(!enabled);
       setStatus(error instanceof Error ? error.message : "Auto mode update failed");
@@ -2229,12 +2263,12 @@ export function IdeApp() {
     } catch {
       // Use the already loaded snapshot if the report refresh is unavailable.
     }
-    const lines = events.slice(0, 100).reverse().map((event) => `- **${event.level.toUpperCase()}** ${event.source} — ${event.message} _( ${new Date(event.createdAt).toLocaleString(locale)} )_`);
-    const markdown = `# Multi-Agent Code Studio — системный отчёт
+    const lines = events.slice(0, 100).reverse().map((event) => `- **${event.level.toUpperCase()}** ${event.source} вЂ” ${event.message} _( ${new Date(event.createdAt).toLocaleString(locale)} )_`);
+    const markdown = `# Multi-Agent Code Studio вЂ” СЃРёСЃС‚РµРјРЅС‹Р№ РѕС‚С‡С‘С‚
 
-Сформирован: ${new Date().toISOString()}
+РЎС„РѕСЂРјРёСЂРѕРІР°РЅ: ${new Date().toISOString()}
 
-${lines.length > 0 ? lines.join("\n") : "_Системных событий нет._"}`;
+${lines.length > 0 ? lines.join("\n") : "_РЎРёСЃС‚РµРјРЅС‹С… СЃРѕР±С‹С‚РёР№ РЅРµС‚._"}`;
     setReportText(markdown);
     setReportOpen(true);
   }
@@ -2242,9 +2276,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
   async function copyReport() {
     try {
       await navigator.clipboard.writeText(reportText);
-      setStatus(locale === "ru" ? "Отчёт скопирован" : "Report copied");
+      setStatus(locale === "ru" ? "РћС‚С‡С‘С‚ СЃРєРѕРїРёСЂРѕРІР°РЅ" : "Report copied");
     } catch {
-      setStatus(locale === "ru" ? "Не удалось скопировать отчёт" : "Failed to copy report");
+      setStatus(locale === "ru" ? "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ РѕС‚С‡С‘С‚" : "Failed to copy report");
     }
   }
 
@@ -2254,7 +2288,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       const response = await fetch("/api/system-events", { method: "DELETE" });
       if (!response.ok) throw new Error("System events clear failed");
       setData((previous) => previous ? { ...previous, systemEvents: [], findings: previous.findings } : previous);
-      setStatus(locale === "ru" ? "Логи очищены" : "Logs cleared");
+      setStatus(locale === "ru" ? "Р›РѕРіРё РѕС‡РёС‰РµРЅС‹" : "Logs cleared");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "System events clear failed");
     } finally {
@@ -2268,7 +2302,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       const response = await fetch("/api/terminal", { method: "DELETE" });
       if (!response.ok) throw new Error(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Terminal clear failed");
       await loadWorkspace(selectedFileId, locale);
-      setStatus(locale === "ru" ? "Терминал очищен" : "Terminal cleared");
+      setStatus(locale === "ru" ? "РўРµСЂРјРёРЅР°Р» РѕС‡РёС‰РµРЅ" : "Terminal cleared");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Terminal clear failed");
     } finally {
@@ -2295,7 +2329,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       setCopiedMessageId(messageId);
       window.setTimeout(() => setCopiedMessageId((current) => current === messageId ? null : current), 1500);
     } catch {
-      setStatus(locale === "ru" ? "Не удалось скопировать сообщение" : "Failed to copy message");
+      setStatus(locale === "ru" ? "РќРµ СѓРґР°Р»РѕСЃСЊ СЃРєРѕРїРёСЂРѕРІР°С‚СЊ СЃРѕРѕР±С‰РµРЅРёРµ" : "Failed to copy message");
     }
   }
 
@@ -2334,10 +2368,15 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             <p className="flex items-center gap-1 text-[11px] text-[var(--text-accent)]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: agentColorForIdentity(message.identity) }} />{agentHeader(message.identity, message.identity.displayName)}</p>
             <span className={`text-[10px] ${statusClass(message.status)}`}>{statusLabel(message.status)}</span>
           </div>
-          <p className="mt-1 whitespace-pre-wrap">{message.content || "…"}</p>
+          <p className="mt-1 whitespace-pre-wrap">{sanitizeChatContent(message.content, locale) || "вЂ¦"}</p>
           {message.status === "error" ? (
-            <p className={`mt-1 whitespace-pre-wrap text-xs ${message.rateLimited || message.error?.startsWith("Ошибка доступа к модели (HTTP ") ? "text-red-300" : "text-[var(--text-muted)]"}`}>
-              {message.error?.startsWith("Ошибка доступа к модели (HTTP ") ? message.error : message.rateLimited ? "Ошибка доступа к модели (HTTP 429). Смените модель в Настройках на qwen/qwen-2.5-coder-32b-instruct:free или google/gemini-2.0-flash-lite-001:free" : message.error ?? t.errorStatus}
+            // UX fix (log routing): raw provider errors stay out of chat вЂ” a
+            // compact status chip is shown instead; full details are recorded
+            // in the Logs / System events panel by the backend.
+            <p className="mt-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs text-amber-300">
+              вљ пёЏ {locale === "ru"
+                ? "РњРѕРґРµР»СЊ РІСЂРµРјРµРЅРЅРѕ РЅРµРґРѕСЃС‚СѓРїРЅР° (Р»РёРјРёС‚ Р·Р°РїСЂРѕСЃРѕРІ РёР»Рё РѕС€РёР±РєР° РґРѕСЃС‚СѓРїР°). РџРѕРґСЂРѕР±РЅРѕСЃС‚Рё вЂ” РІ РїР°РЅРµР»Рё В«Р›РѕРіРё / РЎРёСЃС‚РµРјРЅС‹Рµ СЃРѕР±С‹С‚РёСЏВ»."
+                : "Model is temporarily unavailable (rate limit or access error). Details are in the Logs / System events panel."}
             </p>
           ) : null}
           {renderMessageActions(`stream-${message.identity.agentId}`, message.content, false)}
@@ -2350,22 +2389,36 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
   function collapsedStrip(name: PanelName, label: string, vertical = true) {
     const collapsed = collapsedPanels[name];
     if (!collapsed) return null;
+    const accent = PANEL_ACCENTS[name] ?? "#4fc1ff";
+    const icon = PANEL_ICONS[name] ?? "в–¦";
+    // UX fix (color indication): a bright accent badge with the panel name
+    // stays visible while collapsed, so any panel can be restored in 1 click.
+    const badgeStyle: React.CSSProperties = {
+      background: `color-mix(in srgb, ${accent} 22%, var(--bg-panel))`,
+      border: `1px solid color-mix(in srgb, ${accent} 55%, transparent)`,
+      boxShadow: `inset ${vertical ? "3px" : "0"} 0 0 0 ${accent}`,
+    };
     if (vertical) {
       return (
-        <div className="flex flex-col items-center justify-center gap-1" style={{ background: "var(--bg-panel)", width: COLLAPSED_SIDE, minHeight: 32 }}>
-          <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10" style={{ color: "var(--text-secondary)" }}>
-            ▸
+        <div className="flex flex-col items-center justify-center gap-1 py-1" style={{ ...badgeStyle, width: COLLAPSED_SIDE, minHeight: 32 }}>
+          <button type="button" onClick={() => toggleCollapse(name)} title={`${t.expand}: ${label}`} className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10" style={{ color: accent }}>
+            {icon}
           </button>
-          <span className="text-[9px] select-none" style={{ color: "var(--text-secondary)", writingMode: "vertical-rl" }}>{label}</span>
+          <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="max-w-full flex-1 select-none px-0.5 text-[9px] font-semibold uppercase tracking-wide hover:bg-white/5" style={{ color: accent, writingMode: "vertical-rl" }}>
+            {label}
+          </button>
         </div>
       );
     }
     return (
-      <div className="flex items-center justify-center gap-1" style={{ background: "var(--bg-panel)", height: COLLAPSED_BOTTOM, minHeight: 32 }}>
-        <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10" style={{ color: "var(--text-secondary)" }}>
-          ▴
+      <div className="flex items-center justify-center gap-2 px-2" style={{ ...badgeStyle, height: COLLAPSED_BOTTOM, minHeight: 32 }}>
+        <button type="button" onClick={() => toggleCollapse(name)} title={`${t.expand}: ${label}`} className="flex h-7 w-7 items-center justify-center rounded text-sm hover:bg-white/10" style={{ color: accent }}>
+          {icon}
         </button>
-        <span className="text-[9px] select-none" style={{ color: "var(--text-secondary)" }}>{label}</span>
+        <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="select-none whitespace-nowrap text-[11px] font-semibold hover:bg-white/5" style={{ color: accent }}>
+          {label}
+        </button>
+        <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-xs" style={{ color: accent }}>в–ё</button>
       </div>
     );
   }
@@ -2390,11 +2443,11 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             fontSize: 12,
           }}
         >
-          <span style={{ fontSize: 16 }}>{updateDownloaded ? "✅" : "🔄"}</span>
+          <span style={{ fontSize: 16 }}>{updateDownloaded ? "вњ…" : "рџ”„"}</span>
           <span style={{ flex: 1 }}>
             {updateDownloaded
-              ? locale === "ru" ? `Обновление v${updateVersion} загружено и готово к установке.` : `Update v${updateVersion} downloaded and ready to install.`
-              : locale === "ru" ? `Доступна новая версия v${updateVersion}` : `New version v${updateVersion} available`}
+              ? locale === "ru" ? `РћР±РЅРѕРІР»РµРЅРёРµ v${updateVersion} Р·Р°РіСЂСѓР¶РµРЅРѕ Рё РіРѕС‚РѕРІРѕ Рє СѓСЃС‚Р°РЅРѕРІРєРµ.` : `Update v${updateVersion} downloaded and ready to install.`
+              : locale === "ru" ? `Р”РѕСЃС‚СѓРїРЅР° РЅРѕРІР°СЏ РІРµСЂСЃРёСЏ v${updateVersion}` : `New version v${updateVersion} available`}
           </span>
           <button
             type="button"
@@ -2413,13 +2466,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               cursor: "pointer",
             }}
           >
-            {locale === "ru" ? "Перезапустить для обновления" : "Restart to update"}
+            {locale === "ru" ? "РџРµСЂРµР·Р°РїСѓСЃС‚РёС‚СЊ РґР»СЏ РѕР±РЅРѕРІР»РµРЅРёСЏ" : "Restart to update"}
           </button>
         </div>
       )}
       <header className="app-header flex items-center justify-between gap-4 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="flex min-w-0 items-center gap-2">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-lg">👑</span>
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-lg">рџ‘‘</span>
           <div className="min-w-0">
             <div className="truncate text-sm font-bold text-amber-300">Multi-Agent Code Studio</div>
             <div className="truncate text-[9px] tracking-[0.08em] text-slate-500">AUTONOMOUS AI DEVELOPMENT COMPLEX</div>
@@ -2427,13 +2480,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         </div>
         <div className="hidden min-w-0 items-center gap-2 xl:flex">
           <span className={`rounded-full border px-3 py-1 text-[10px] ${busy ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
-            {busy ? "🟡 Выполняется" : "🟢 Статус: Ожидание"}
+            {busy ? "рџџЎ Р’С‹РїРѕР»РЅСЏРµС‚СЃСЏ" : "рџџў РЎС‚Р°С‚СѓСЃ: РћР¶РёРґР°РЅРёРµ"}
           </span>
           {[
-            ["Ключей", Object.values(data?.settings.apiKeysConfigured ?? {}).filter(Boolean).length],
-            ["Агентов", data?.agents.length ?? 0],
-            ["Сообщений", data?.messages.length ?? 0],
-            ["Файлов", data?.files.length ?? 0],
+            ["РљР»СЋС‡РµР№", Object.values(data?.settings.apiKeysConfigured ?? {}).filter(Boolean).length],
+            ["РђРіРµРЅС‚РѕРІ", data?.agents.length ?? 0],
+            ["РЎРѕРѕР±С‰РµРЅРёР№", data?.messages.length ?? 0],
+            ["Р¤Р°Р№Р»РѕРІ", data?.files.length ?? 0],
           ].map(([label, value]) => (
             <span key={label} className="min-w-[58px] rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-center">
               <strong className="block text-xs text-slate-100">{value}</strong>
@@ -2442,8 +2495,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           ))}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button type="button" onClick={() => setPreviewOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400" title={locale === "ru" ? "Предпросмотр проекта" : "Project preview"}>
-            👁️ {locale === "ru" ? "Предпросмотр" : "Preview"}
+          <button type="button" onClick={() => setPreviewOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400" title={locale === "ru" ? "РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ РїСЂРѕРµРєС‚Р°" : "Project preview"}>
+            рџ‘ЃпёЏ {locale === "ru" ? "РџСЂРµРґРїСЂРѕСЃРјРѕС‚СЂ" : "Preview"}
           </button>
           <button type="button" onClick={() => void pushToGithub()} className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500 disabled:opacity-50" disabled={busy}>
             {t.pushGithub}
@@ -2462,19 +2515,19 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               bridge?.toggleOverlay?.();
             }}
             className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400"
-            title={locale === "ru" ? "Поверх всех окон (Ctrl+Shift+O)" : "Always on top (Ctrl+Shift+O)"}
+            title={locale === "ru" ? "РџРѕРІРµСЂС… РІСЃРµС… РѕРєРѕРЅ (Ctrl+Shift+O)" : "Always on top (Ctrl+Shift+O)"}
           >
-            📌 {locale === "ru" ? "Виджет" : "Widget"}
+            рџ“Њ {locale === "ru" ? "Р’РёРґР¶РµС‚" : "Widget"}
           </button>
           <button type="button" onClick={() => setOrchestratorOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
-            🤖 {locale === "ru" ? "Оркестратор" : "Orchestrator"}
+            рџ¤– {locale === "ru" ? "РћСЂРєРµСЃС‚СЂР°С‚РѕСЂ" : "Orchestrator"}
           </button>
           <ThemeToggle />
           <button type="button" onClick={() => void generateSystemReport()} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
-            📄 {locale === "ru" ? "Сформировать отчёт" : "Generate report"}
+            рџ“„ {locale === "ru" ? "РЎС„РѕСЂРјРёСЂРѕРІР°С‚СЊ РѕС‚С‡С‘С‚" : "Generate report"}
           </button>
           <button type="button" onClick={() => setSettingsOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
-            ⚙️ {t.settings}
+            вљ™пёЏ {t.settings}
           </button>
         </div>
       </header>
@@ -2484,15 +2537,15 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         {/* Full-height side panels with a central editor/terminal work area. */}
         <div className="workspace-top-row flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
           {/* Explorer / File Tree */}
-          <div className={`workspace-column ${collapsedPanels.explorer ? "workspace-column-collapsed" : ""} relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.explorer ? "workspace-column-collapsed" : ""} relative panel-accent-explorer ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%` }}>
             {collapsedStrip("explorer", t.explorer)}
             {!collapsedPanels.explorer && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.explorer}</span>
                   <div className="flex items-center gap-0.5">
-                    <button type="button" onClick={() => beginCreateEntry("file")} title={selectedDirectory ? `${t.newFile}: ${selectedDirectory}` : t.newFile} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📄</button>
-                    <button type="button" onClick={() => beginCreateEntry("directory")} title={selectedDirectory ? `${t.newFolder}: ${selectedDirectory}` : t.newFolder} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📁</button>
+                    <button type="button" onClick={() => beginCreateEntry("file")} title={selectedDirectory ? `${t.newFile}: ${selectedDirectory}` : t.newFile} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">рџ“„</button>
+                    <button type="button" onClick={() => beginCreateEntry("directory")} title={selectedDirectory ? `${t.newFolder}: ${selectedDirectory}` : t.newFolder} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">рџ“Ѓ</button>
                     {renderCollapseButton("explorer")}
                     {renderExpandButton("explorer")}
                   </div>
@@ -2519,10 +2572,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 <div className="min-h-0 flex-1 overflow-y-auto p-1">
                   {createEntryDraft?.parentPath === "" ? (
                     <div className="mb-1 flex items-center gap-1 rounded border border-blue-400/60 bg-blue-500/10 px-2 py-1">
-                      <span className="text-[var(--text-accent)]">{createEntryDraft.kind === "directory" ? "📁" : "📄"}</span>
+                      <span className="text-[var(--text-accent)]">{createEntryDraft.kind === "directory" ? "рџ“Ѓ" : "рџ“„"}</span>
                       <input autoFocus value={createEntryName} onChange={(event) => setCreateEntryName(event.target.value)} onKeyDown={handleCreateInputKeyDown} placeholder={createEntryDraft.kind === "directory" ? t.newFolder : t.newFile} className="min-w-0 flex-1 bg-transparent text-xs outline-none" />
-                      <button type="button" onClick={() => void submitCreateEntry()} className="text-emerald-300" title={t.create}>✓</button>
-                      <button type="button" onClick={cancelCreateEntry} className="text-red-300" title={t.close}>✕</button>
+                      <button type="button" onClick={() => void submitCreateEntry()} className="text-emerald-300" title={t.create}>вњ“</button>
+                      <button type="button" onClick={cancelCreateEntry} className="text-red-300" title={t.close}>вњ•</button>
                     </div>
                   ) : null}
                   {workspaceTree.map((node) => renderWorkspaceTreeNode(node, 0))}
@@ -2537,12 +2590,12 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Editor */}
-          <div className={`workspace-column ${collapsedPanels.editor ? "workspace-column-collapsed" : ""} relative ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.editor ? "workspace-column-collapsed" : ""} relative panel-accent-editor ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%` }}>
             {collapsedStrip("editor", t.editor)}
             {!collapsedPanels.editor && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
-                  <span className="truncate">{t.editor} — {selectedFile?.path ?? t.noFile}</span>
+                  <span className="truncate">{t.editor} вЂ” {selectedFile?.path ?? t.noFile}</span>
                   <div className="flex items-center gap-0.5">
                     <button type="button" onClick={rollbackFile} disabled={!selectedFile || !mainAgent || busy} className="rounded bg-[#5a3c2b] px-2 py-1 text-xs text-white disabled:opacity-60">
                       {t.rollback}
@@ -2564,10 +2617,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       style={{ borderColor: "var(--border-default)", color: tab.id === selectedFileId ? undefined : "var(--text-secondary)" }}
                     >
                       <span className="max-w-[120px] truncate">{tab.path.split("/").pop() || tab.path}</span>
-                      <button type="button" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} className="ml-1 rounded-full px-1 text-[10px] hover:bg-slate-700">✕</button>
+                      <button type="button" onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }} className="ml-1 rounded-full px-1 text-[10px] hover:bg-slate-700">вњ•</button>
                     </div>
                   ))}
-                  <button type="button" onClick={() => beginCreateEntry("file")} disabled={busy || !mainAgent} title={selectedDirectory ? `${t.newFile}: ${selectedDirectory}` : t.newFile} className="shrink-0 px-3 py-1 text-[11px] text-[var(--text-secondary)] hover:text-white disabled:opacity-50">＋ Новый файл</button>
+                  <button type="button" onClick={() => beginCreateEntry("file")} disabled={busy || !mainAgent} title={selectedDirectory ? `${t.newFile}: ${selectedDirectory}` : t.newFile} className="shrink-0 px-3 py-1 text-[11px] text-[var(--text-secondary)] hover:text-white disabled:opacity-50">пј‹ РќРѕРІС‹Р№ С„Р°Р№Р»</button>
                 </div>
                 {selectedFile ? (
                   <Suspense fallback={<div className="flex min-h-0 flex-1 items-center justify-center bg-[var(--bg-app)] text-xs text-[var(--text-secondary)]">Loading editor...</div>}>
@@ -2595,20 +2648,20 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Lead Chat */}
-          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} relative ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} relative panel-accent-lead ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header chat-panel-header">
                   <div className="chat-panel-title">
                     <span className="truncate">{t.leadChat}</span>
-                    <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span>
+                    <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>РџР°РјСЏС‚СЊ: {contextStats.percent}%{contextStats.compressed ? " | РЎР¶Р°С‚Рѕ" : ""}</span>
                   </div>
                   <div className="chat-panel-actions relative">
-                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
-                    <button type="button" onClick={() => setTemplateMenu((current) => current === "lead" ? null : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
+                    <span className="text-[10px] text-[var(--text-secondary)]">РђРіРµРЅС‚РѕРІ: {data?.agents.length ?? 0} В· РђРєС‚РёРІРЅС‹: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <button type="button" onClick={() => setTemplateMenu((current) => current === "lead" ? null : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">рџ“љ РЁР°Р±Р»РѕРЅС‹ Р·Р°РґР°С‡</button>
                     {renderTaskTemplates("lead")}
-                    <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
+                    <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "РћС‡РёСЃС‚РёС‚СЊ РёСЃС‚РѕСЂРёСЋ" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">рџ—‘пёЏ</button>
                     {renderCollapseButton("lead")}
                     {renderExpandButton("lead")}
                   </div>
@@ -2617,10 +2670,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   {leadMessages?.map((msg) => (
                     <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[var(--border-default)] bg-[var(--bg-panel)]"}`}>
                       <div className="flex items-center justify-between gap-2">
-                        <p className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                        <p className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} В· {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                         {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
                       </div>
-                      <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
+                      <p className="mt-1 whitespace-pre-wrap">{sanitizeChatContent(msg.content, locale)}</p>
                       {renderAttachments(msg.metadata?.attachments)}
                       {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
                       {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
@@ -2655,29 +2708,29 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Group Chat */}
-          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} relative ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} relative panel-accent-group ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
             {collapsedStrip("group", t.allChat)}
             {!collapsedPanels.group && (
               <section className="panel h-full">
                 <div className="panel-header chat-panel-header">
                   <div className="chat-panel-title">
                     <span className="truncate">{t.allChat}</span>
-                    <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span>
+                    <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>РџР°РјСЏС‚СЊ: {contextStats.percent}%{contextStats.compressed ? " | РЎР¶Р°С‚Рѕ" : ""}</span>
                   </div>
                   <div className="chat-panel-actions relative">
-                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
-                    <button type="button" onClick={() => setTemplateMenu((current) => current === "group" ? null : "group")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
+                    <span className="text-[10px] text-[var(--text-secondary)]">РђРіРµРЅС‚РѕРІ: {data?.agents.length ?? 0} В· РђРєС‚РёРІРЅС‹: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <button type="button" onClick={() => setTemplateMenu((current) => current === "group" ? null : "group")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">рџ“љ РЁР°Р±Р»РѕРЅС‹ Р·Р°РґР°С‡</button>
                     {renderTaskTemplates("group")}
                     {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
                       <button key={filter} type="button" onClick={() => setGroupRoleFilter(filter)} className={`rounded-full border px-1.5 py-0.5 text-[9px] ${groupRoleFilter === filter ? "border-blue-400 bg-blue-500/20 text-blue-200" : "border-[var(--border-default)] text-[var(--text-muted)] hover:text-white"}`}>
-                        {filter === "all" ? "Все" : filter === "tester" ? "QA" : filter === "uiux" ? "UI/UX" : "Архитектор"}
+                        {filter === "all" ? "Р’СЃРµ" : filter === "tester" ? "QA" : filter === "uiux" ? "UI/UX" : "РђСЂС…РёС‚РµРєС‚РѕСЂ"}
                       </button>
                     ))}
-                    <label className="flex items-center gap-1 rounded border border-[var(--border-default)] px-1.5 py-1 text-[9px] text-[var(--text-muted)]" title="Автоматически утверждать цикл">
+                    <label className="flex items-center gap-1 rounded border border-[var(--border-default)] px-1.5 py-1 text-[9px] text-[var(--text-muted)]" title="РђРІС‚РѕРјР°С‚РёС‡РµСЃРєРё СѓС‚РІРµСЂР¶РґР°С‚СЊ С†РёРєР»">
                       <span>AUTO</span>
                       <input type="checkbox" checked={autoApproveDraft} onChange={(event) => void toggleAutoApprove(event.target.checked)} disabled={busy} />
                     </label>
-                    <button type="button" onClick={() => void clearHistory("group")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[var(--bg-panel-alt)]">🗑️</button>
+                    <button type="button" onClick={() => void clearHistory("group")} title={locale === "ru" ? "РћС‡РёСЃС‚РёС‚СЊ РёСЃС‚РѕСЂРёСЋ" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[var(--bg-panel-alt)]">рџ—‘пёЏ</button>
                     {renderCollapseButton("group")}
                     {renderExpandButton("group")}
                   </div>
@@ -2686,10 +2739,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   {groupMessages?.map((msg) => (
                     <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[var(--border-default)] bg-[var(--bg-panel)]"}`}>
                       <div className="flex items-center justify-between gap-2">
-                        <p className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} · {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
+                        <p className="flex items-center gap-1 text-[11px] text-[var(--text-secondary)]"><span className="inline-block h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: messageColor(msg) }} />{messageHeader(msg)} В· {new Date(msg.createdAt).toLocaleTimeString(locale)}</p>
                         {msg.status ? <span className={`text-[10px] ${statusClass(msg.status)}`}>{statusLabel(msg.status)}</span> : null}
                       </div>
-                      <p className="mt-1 whitespace-pre-wrap">{msg.content}</p>
+                      <p className="mt-1 whitespace-pre-wrap">{sanitizeChatContent(msg.content, locale)}</p>
                       {renderAttachments(msg.metadata?.attachments)}
                       {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
                       {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
@@ -2702,7 +2755,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                               <div className="mb-2 flex items-center gap-2 text-xs">
                     <input id="dup" type="checkbox" checked={duplicateToLead} onChange={(e) => setDuplicateToLead(e.target.checked)} />
                     <label htmlFor="dup">{t.duplicate}</label>
-                    {duplicateToLead ? <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>⚠️ {locale === "ru" ? "Только Главный агент виден в чате с Главным" : "Only Lead Agent visible in Lead Chat"}</span> : null}
+                    {duplicateToLead ? <span className="text-[10px]" style={{ color: "var(--text-muted)" }}>вљ пёЏ {locale === "ru" ? "РўРѕР»СЊРєРѕ Р“Р»Р°РІРЅС‹Р№ Р°РіРµРЅС‚ РІРёРґРµРЅ РІ С‡Р°С‚Рµ СЃ Р“Р»Р°РІРЅС‹Рј" : "Only Lead Agent visible in Lead Chat"}</span> : null}
                   </div>
                   <div className="mb-2 flex gap-2">
                     <input value={attachmentLink} onChange={(e) => setAttachmentLink(e.target.value)} placeholder={t.attachLink} className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-2 py-1 text-xs" />
@@ -2745,7 +2798,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         {/* Bottom panel stays in the flex flow, so collapsing it cannot overlap the workspace. */}
         <div className="logs-panel h-[200px] w-full shrink-0 overflow-y-auto relative z-10 flex border-t border-[var(--border-default)] bg-slate-950 shadow-[0_-12px_30px_rgba(0,0,0,0.24)]">
           {/* Terminal */}
-          <div className={`workspace-column ${collapsedPanels.terminal ? "workspace-column-collapsed" : ""} relative ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.terminal ? "workspace-column-collapsed" : ""} relative panel-accent-terminal ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%` }}>
             {collapsedStrip("terminal", t.terminal, false)}
             {!collapsedPanels.terminal && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2770,14 +2823,14 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 </div>
                 <form onSubmit={runTerminal} className="flex items-center gap-2 border-t border-[var(--border-default)] bg-[var(--bg-terminal)] p-2">
                   <span className="font-mono text-emerald-400">$</span>
-                  <input value={terminalCommand} onChange={(e) => setTerminalCommand(e.target.value)} placeholder={locale === "ru" ? "Введите команду..." : "Enter command..."} className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-slate-600" />
+                  <input value={terminalCommand} onChange={(e) => setTerminalCommand(e.target.value)} placeholder={locale === "ru" ? "Р’РІРµРґРёС‚Рµ РєРѕРјР°РЅРґСѓ..." : "Enter command..."} className="min-w-0 flex-1 bg-transparent font-mono text-xs outline-none placeholder:text-slate-600" />
                 </form>
               </section>
             )}
           </div>
 
           {/* Logs / System Events */}
-          <div className={`workspace-column ${collapsedPanels.logs ? "workspace-column-collapsed" : ""} relative ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.logs ? "workspace-column-collapsed" : ""} relative panel-accent-logs ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%` }}>
             {collapsedStrip("logs", t.logsTitle, false)}
             {!collapsedPanels.logs && (
               <section className="panel h-full">
@@ -2786,13 +2839,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   <div className="flex items-center gap-0.5">
                     <button type="button" onClick={() => toggleFullscreen("logs")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">{t.expand}</button>
                     <button type="button" onClick={() => toggleCollapse("logs")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">{t.collapse}</button>
-                    <button type="button" onClick={() => void clearSystemEvents()} disabled={busy} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-red-400 disabled:opacity-50">{locale === "ru" ? "Очистить логи" : "Clear logs"}</button>
+                    <button type="button" onClick={() => void clearSystemEvents()} disabled={busy} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-red-400 disabled:opacity-50">{locale === "ru" ? "РћС‡РёСЃС‚РёС‚СЊ Р»РѕРіРё" : "Clear logs"}</button>
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 text-xs">
                   {data?.systemEvents?.map((event) => (
                     <article key={`event-${event.id}`} className={`rounded border p-2 ${eventTone(event.level).border} ${eventTone(event.level).background}`}>
-                      <p className="flex items-center gap-1 text-[10px] text-slate-500"><span className={`inline-block h-1.5 w-1.5 rounded-full ${eventTone(event.level).dot}`} />{event.source} · {new Date(event.createdAt).toLocaleTimeString(locale)}</p>
+                      <p className="flex items-center gap-1 text-[10px] text-slate-500"><span className={`inline-block h-1.5 w-1.5 rounded-full ${eventTone(event.level).dot}`} />{event.source} В· {new Date(event.createdAt).toLocaleTimeString(locale)}</p>
                       <p className={`mt-0.5 ${eventTone(event.level).text}`}>{event.message}</p>
                       {event.details ? <pre className="mt-1 whitespace-pre-wrap text-[10px] text-slate-400">{event.details}</pre> : null}
                     </article>
@@ -2822,14 +2875,14 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
             onClick={() => beginCreateEntry("file", contextMenu.entry.kind === "directory" ? contextMenu.entry.path : contextMenu.entry.path.split("/").slice(0, -1).join("/"))}
           >
-            📄 {t.newFile}
+            рџ“„ {t.newFile}
           </button>
           <button
             type="button"
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
             onClick={() => beginCreateEntry("directory", contextMenu.entry.kind === "directory" ? contextMenu.entry.path : contextMenu.entry.path.split("/").slice(0, -1).join("/"))}
           >
-            📁 {t.newFolder}
+            рџ“Ѓ {t.newFolder}
           </button>
           <div className="my-1 border-t border-[var(--border-default)]" />
           <button
@@ -2837,14 +2890,14 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
             onClick={() => { renameTreeEntry(contextMenu.entry.path); setContextMenu(null); }}
           >
-            ✏️ {t.rename}
+            вњЏпёЏ {t.rename}
           </button>
           <button
             type="button"
             className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-[#f48771] hover:bg-[#37373d]"
             onClick={() => { deleteTreeEntry(contextMenu.entry.path); setContextMenu(null); }}
           >
-            🗑️ {t.delete}
+            рџ—‘пёЏ {t.delete}
           </button>
         </div>
       ) : null}
@@ -2898,8 +2951,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <section className="mb-5">
             <h3 className="mb-2 text-xs uppercase text-[var(--text-secondary)]">{t.lang}</h3>
             <div className="flex gap-2">
-              <button type="button" onClick={() => switchLocale("ru")} className={`rounded px-2 py-1 text-sm ${locale === "ru" ? "bg-[#007acc]" : "bg-[var(--bg-panel-alt)]"}`}>🇷🇺</button>
-              <button type="button" onClick={() => switchLocale("en")} className={`rounded px-2 py-1 text-sm ${locale === "en" ? "bg-[#007acc]" : "bg-[var(--bg-panel-alt)]"}`}>🇺🇸</button>
+              <button type="button" onClick={() => switchLocale("ru")} className={`rounded px-2 py-1 text-sm ${locale === "ru" ? "bg-[#007acc]" : "bg-[var(--bg-panel-alt)]"}`}>рџ‡·рџ‡є</button>
+              <button type="button" onClick={() => switchLocale("en")} className={`rounded px-2 py-1 text-sm ${locale === "en" ? "bg-[#007acc]" : "bg-[var(--bg-panel-alt)]"}`}>рџ‡єрџ‡ё</button>
             </div>
           </section>
 
@@ -2911,7 +2964,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </section>
 
           <section className="mb-5">
-            <button type="button" onClick={() => setProvidersOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[var(--text-secondary)]"><span>{t?.apiKeys}</span><span className="text-sm">{providersOpen ? "▼" : "▶"}</span></button>
+            <button type="button" onClick={() => setProvidersOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[var(--text-secondary)]"><span>{t?.apiKeys}</span><span className="text-sm">{providersOpen ? "в–ј" : "в–¶"}</span></button>
             {providersOpen ? <>
             <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="mb-2 inline-block text-xs text-[var(--text-accent)] underline">
               {t.freeOpenRouter}
@@ -2932,7 +2985,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     type="password"
                     autoComplete="off"
                     className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
-                    placeholder={data?.settings.apiKeysConfigured?.[provider.id] ? `${provider.label} API key сохранён локально` : `${provider.label} API key`}
+                    placeholder={data?.settings.apiKeysConfigured?.[provider.id] ? `${provider.label} API key СЃРѕС…СЂР°РЅС‘РЅ Р»РѕРєР°Р»СЊРЅРѕ` : `${provider.label} API key`}
                   />
                   {data?.settings.apiKeysConfigured?.[provider.id] ? (
                     <button
@@ -2943,7 +2996,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       }}
                       className="mt-1 rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400"
                     >
-                      {locale === "ru" ? "Удалить сохранённый ключ" : "Remove saved key"}
+                      {locale === "ru" ? "РЈРґР°Р»РёС‚СЊ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Р№ РєР»СЋС‡" : "Remove saved key"}
                     </button>
                   ) : null}
                 </div>
@@ -2962,13 +3015,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   }}
                   type="password"
                   autoComplete="off"
-                  placeholder={data?.settings.githubTokenConfigured ? "GitHub token сохранён локально" : ""}
+                  placeholder={data?.settings.githubTokenConfigured ? "GitHub token СЃРѕС…СЂР°РЅС‘РЅ Р»РѕРєР°Р»СЊРЅРѕ" : ""}
                   className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                 />
               </label>
               {data?.settings.githubTokenConfigured ? (
                 <button type="button" onClick={() => { setGithubTokenDraft(""); setRemoveGithubToken(true); }} className="mb-1 rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400">
-                  {locale === "ru" ? "Удалить сохранённый GitHub-токен" : "Remove saved GitHub token"}
+                  {locale === "ru" ? "РЈРґР°Р»РёС‚СЊ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Р№ GitHub-С‚РѕРєРµРЅ" : "Remove saved GitHub token"}
                 </button>
               ) : null}
               <label className="mb-1 block text-[11px] text-[var(--text-secondary)]">
@@ -2994,17 +3047,17 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   checked={autoApproveDraft}
                   onChange={(e) => setAutoApproveDraft(e.target.checked)}
                 />
-                {locale === "ru" ? "Авто-утверждение (автономный цикл)" : "Auto-Approve (autonomous cycle)"}
+                {locale === "ru" ? "РђРІС‚Рѕ-СѓС‚РІРµСЂР¶РґРµРЅРёРµ (Р°РІС‚РѕРЅРѕРјРЅС‹Р№ С†РёРєР»)" : "Auto-Approve (autonomous cycle)"}
               </label>
               <div className="mt-2">
-                <p className="text-xs text-[var(--text-secondary)]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>
+                <p className="text-xs text-[var(--text-secondary)]">{locale === "ru" ? "РњРѕР±РёР»СЊРЅС‹Р№ РґРѕСЃС‚СѓРї (С‚РѕРєРµРЅ)" : "Mobile access token"}</p>
                 <div className="flex gap-2 mt-1">
-                  <input value={mobileTokenDraft} onChange={(e) => setMobileTokenDraft(e.target.value)} placeholder={locale === "ru" ? "Оставьте пустым чтобы отключить" : "Leave empty to disable"} className="flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
-                {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:{appPort}/mobile?token={mobileTokenDraft}</span> : null}
+                  <input value={mobileTokenDraft} onChange={(e) => setMobileTokenDraft(e.target.value)} placeholder={locale === "ru" ? "РћСЃС‚Р°РІСЊС‚Рµ РїСѓСЃС‚С‹Рј С‡С‚РѕР±С‹ РѕС‚РєР»СЋС‡РёС‚СЊ" : "Leave empty to disable"} className="flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>рџЊђ http://IP-РџРљ:{appPort}/mobile?token={mobileTokenDraft}</span> : null}
               </div>
               <div className="mt-3 border-t border-[#2d2d30] pt-3">
                 <label className="flex items-center justify-between gap-3 text-xs text-[#c6ced8]">
-                  <span>{locale === "ru" ? "Глобальный доступ (Localtunnel)" : "Global access (Localtunnel)"}</span>
+                  <span>{locale === "ru" ? "Р“Р»РѕР±Р°Р»СЊРЅС‹Р№ РґРѕСЃС‚СѓРї (Localtunnel)" : "Global access (Localtunnel)"}</span>
                   <input
                     type="checkbox"
                     checked={localtunnelEnabledDraft}
@@ -3017,15 +3070,15 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   return (
                     <div className="mt-2">
                       <div className="flex items-center gap-2 rounded bg-[#1e3323] p-2 text-xs">
-                        <span className="text-[#6a9955]">🟢 {locale === "ru" ? "Активен" : "Active"}</span>
+                        <span className="text-[#6a9955]">рџџў {locale === "ru" ? "РђРєС‚РёРІРµРЅ" : "Active"}</span>
                         <a href={mobileUrl} target="_blank" rel="noopener noreferrer" className="truncate text-[var(--text-accent)] underline">{mobileUrl}</a>
-                        <button type="button" onClick={() => { navigator.clipboard?.writeText(mobileUrl); setStatus(locale === "ru" ? "Ссылка скопирована" : "Link copied"); }} className="whitespace-nowrap text-[10px] text-[var(--text-secondary)] hover:text-white">{locale === "ru" ? "Копировать" : "Copy"}</button>
+                        <button type="button" onClick={() => { navigator.clipboard?.writeText(mobileUrl); setStatus(locale === "ru" ? "РЎСЃС‹Р»РєР° СЃРєРѕРїРёСЂРѕРІР°РЅР°" : "Link copied"); }} className="whitespace-nowrap text-[10px] text-[var(--text-secondary)] hover:text-white">{locale === "ru" ? "РљРѕРїРёСЂРѕРІР°С‚СЊ" : "Copy"}</button>
                       </div>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={`/api/qrcode?url=${encodeURIComponent(mobileUrl)}`} alt="QR code" className="mt-2 h-[140px] w-[140px] rounded border border-[#2d2d30]" />
                     </div>
                   );
-                })() : <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Без регистрации, токенов и VPN." : "No registration, tokens, or VPN required."}</p>}
+                })() : <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Р‘РµР· СЂРµРіРёСЃС‚СЂР°С†РёРё, С‚РѕРєРµРЅРѕРІ Рё VPN." : "No registration, tokens, or VPN required."}</p>}
               </div>
               </div>
             </div>
@@ -3037,10 +3090,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-semibold">{locale === "ru" ? "Live Preview проекта" : "Project Live Preview"}</p>
-                <p className="text-[10px] text-[var(--text-secondary)]">{previewUrl || `${previewCommandDraft} · :${previewPortDraft}`}</p>
+                <p className="text-xs font-semibold">{locale === "ru" ? "Live Preview РїСЂРѕРµРєС‚Р°" : "Project Live Preview"}</p>
+                <p className="text-[10px] text-[var(--text-secondary)]">{previewUrl || `${previewCommandDraft} В· :${previewPortDraft}`}</p>
               </div>
-              <button type="button" onClick={() => setPreviewOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">👁️ {locale === "ru" ? "Открыть" : "Open"}</button>
+              <button type="button" onClick={() => setPreviewOpen(true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">рџ‘ЃпёЏ {locale === "ru" ? "РћС‚РєСЂС‹С‚СЊ" : "Open"}</button>
             </div>
             <div className="mt-2 flex gap-2">
               <input value={previewCommandDraft} onChange={(e) => setPreviewCommandDraft(e.target.value)} className="min-w-0 flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" placeholder="npm run dev" />
@@ -3051,39 +3104,39 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <div className="flex items-center justify-between gap-2">
               <div>
-                <p className="text-xs font-semibold">{locale === "ru" ? "Пресет проекта" : "Project preset"}</p>
-                <p className="text-[10px] text-[var(--text-secondary)]">{data?.settings.projectTemplate || (locale === "ru" ? "Не выбран" : "Not selected")}</p>
+                <p className="text-xs font-semibold">{locale === "ru" ? "РџСЂРµСЃРµС‚ РїСЂРѕРµРєС‚Р°" : "Project preset"}</p>
+                <p className="text-[10px] text-[var(--text-secondary)]">{data?.settings.projectTemplate || (locale === "ru" ? "РќРµ РІС‹Р±СЂР°РЅ" : "Not selected")}</p>
               </div>
-              <button type="button" onClick={() => setTemplateOpen(true)} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white">⚡ {locale === "ru" ? "Выбрать" : "Choose"}</button>
+              <button type="button" onClick={() => setTemplateOpen(true)} className="rounded bg-[#0e639c] px-2 py-1 text-xs text-white">вљЎ {locale === "ru" ? "Р’С‹Р±СЂР°С‚СЊ" : "Choose"}</button>
             </div>
           </section>
 
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">Telegram</p>
             <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Bot Token
-              <input value={telegramTokenDraft} onChange={(e) => { setTelegramTokenDraft(e.target.value); if (e.target.value.trim()) setRemoveTelegramToken(false); }} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "Telegram token сохранён локально" : "123456:ABC..."} className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+              <input value={telegramTokenDraft} onChange={(e) => { setTelegramTokenDraft(e.target.value); if (e.target.value.trim()) setRemoveTelegramToken(false); }} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "Telegram token СЃРѕС…СЂР°РЅС‘РЅ Р»РѕРєР°Р»СЊРЅРѕ" : "123456:ABC..."} className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             </label>
             {data?.settings.telegramTokenConfigured ? (
               <button type="button" onClick={() => { setTelegramTokenDraft(""); setRemoveTelegramToken(true); }} className="mb-2 rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400">
-                {locale === "ru" ? "Удалить сохранённый Telegram-токен" : "Remove saved Telegram token"}
+                {locale === "ru" ? "РЈРґР°Р»РёС‚СЊ СЃРѕС…СЂР°РЅС‘РЅРЅС‹Р№ Telegram-С‚РѕРєРµРЅ" : "Remove saved Telegram token"}
               </button>
             ) : null}
             <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Chat ID
               <input value={telegramChatIdDraft} onChange={(e) => setTelegramChatIdDraft(e.target.value)} placeholder="-100..." className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             </label>
-            <button type="button" onClick={() => void testTelegram()} disabled={telegramTesting || !telegramChatIdDraft.trim()} className="rounded bg-[#229ed9] px-3 py-1 text-xs text-white disabled:opacity-50">{telegramTesting ? "..." : (locale === "ru" ? "Проверить связь" : "Test connection")}</button>
-            <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Режим: long polling. Сохраните настройки перед проверкой." : "Mode: long polling. Save settings before testing."}</p>
+            <button type="button" onClick={() => void testTelegram()} disabled={telegramTesting || !telegramChatIdDraft.trim()} className="rounded bg-[#229ed9] px-3 py-1 text-xs text-white disabled:opacity-50">{telegramTesting ? "..." : (locale === "ru" ? "РџСЂРѕРІРµСЂРёС‚СЊ СЃРІСЏР·СЊ" : "Test connection")}</button>
+            <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Р РµР¶РёРј: long polling. РЎРѕС…СЂР°РЅРёС‚Рµ РЅР°СЃС‚СЂРѕР№РєРё РїРµСЂРµРґ РїСЂРѕРІРµСЂРєРѕР№." : "Mode: long polling. Save settings before testing."}</p>
           </section>
 
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
-            <p className="mb-2 text-xs font-semibold">{locale === "ru" ? "Fallback Chain моделей" : "Fallback model chain"}</p>
-            <textarea value={fallbackModelsDraft} onChange={(e) => setFallbackModelsDraft(e.target.value)} placeholder={locale === "ru" ? "По одной модели на строку\nнапример: gpt-4o-mini\nclaude-3-5-haiku" : "One model per line\ne.g. gpt-4o-mini\nclaude-3-5-haiku"} className="min-h-16 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
-            <p className="mt-1 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Используется при 403, 429, 5xx и timeout." : "Used for 403, 429, 5xx and timeouts."}</p>
+            <p className="mb-2 text-xs font-semibold">{locale === "ru" ? "Fallback Chain РјРѕРґРµР»РµР№" : "Fallback model chain"}</p>
+            <textarea value={fallbackModelsDraft} onChange={(e) => setFallbackModelsDraft(e.target.value)} placeholder={locale === "ru" ? "РџРѕ РѕРґРЅРѕР№ РјРѕРґРµР»Рё РЅР° СЃС‚СЂРѕРєСѓ\nРЅР°РїСЂРёРјРµСЂ: gpt-4o-mini\nclaude-3-5-haiku" : "One model per line\ne.g. gpt-4o-mini\nclaude-3-5-haiku"} className="min-h-16 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+            <p className="mt-1 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "РСЃРїРѕР»СЊР·СѓРµС‚СЃСЏ РїСЂРё 403, 429, 5xx Рё timeout." : "Used for 403, 429, 5xx and timeouts."}</p>
           </section>
 
           <section className="mb-5">
             <div className="flex items-center justify-between mb-2">
-              <span className="text-xs uppercase text-[var(--text-secondary)]">{locale === "ru" ? "ЭКСПОРТ / ИМПОРТ" : "EXPORT / IMPORT"}</span>
+              <span className="text-xs uppercase text-[var(--text-secondary)]">{locale === "ru" ? "Р­РљРЎРџРћР Рў / РРњРџРћР Рў" : "EXPORT / IMPORT"}</span>
               <div className="flex gap-2">
                 <button type="button" onClick={exportAgents} className="rounded bg-[#3a3d41] px-2 py-1 text-xs text-white">{t.exportAgents}</button>
                 <label className="cursor-pointer rounded bg-[#3a3d41] px-2 py-1 text-xs text-white">
@@ -3094,12 +3147,12 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
             <p className="text-[10px] text-[var(--text-secondary)]">{t.importAgentsDesc}</p>
             <button type="button" onClick={() => void clearAgentMemoryCache()} disabled={busy} className="mt-2 rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs text-amber-200 hover:border-amber-400 disabled:opacity-50">
-              {locale === "ru" ? "Очистить кэш памяти агентов" : "Clear agent memory cache"}
+              {locale === "ru" ? "РћС‡РёСЃС‚РёС‚СЊ РєСЌС€ РїР°РјСЏС‚Рё Р°РіРµРЅС‚РѕРІ" : "Clear agent memory cache"}
             </button>
           </section>
 
           <section>
-            <button type="button" onClick={() => setAgentsOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[var(--text-secondary)]"><span>{t.agents}</span><span className="text-sm">{agentsOpen ? "▼" : "▶"}</span></button>
+            <button type="button" onClick={() => setAgentsOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[var(--text-secondary)]"><span>{t.agents}</span><span className="text-sm">{agentsOpen ? "в–ј" : "в–¶"}</span></button>
             {agentsOpen ? <div className="space-y-2">
               {sortAgents(data?.agents ?? [])?.map((agent) => {
                 const draft =
@@ -3186,7 +3239,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     </select>
 
                     <div className="mb-1 flex items-center gap-2">
-                      <span className="text-[10px] text-[var(--text-secondary)]">Цвет:</span>
+                      <span className="text-[10px] text-[var(--text-secondary)]">Р¦РІРµС‚:</span>
                       <input type="color" value={draft.color} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, color: e.target.value } }))} className="h-6 w-8 cursor-pointer rounded border border-[var(--border-default)] bg-[var(--bg-app)]" />
                     </div>
 
@@ -3204,18 +3257,18 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               {/* Add agent button / form */}
               {!showAddAgent ? (
                 <button type="button" onClick={() => { setShowAddAgent(true); setAddAgentMode(null); setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? ""))); }} className="flex w-full items-center justify-center gap-1 rounded border border-dashed border-[var(--border-default)] bg-[var(--bg-app)] px-3 py-2 text-xs text-[var(--text-secondary)] hover:border-[#4fc1ff] hover:text-white">
-                  + {locale === "ru" ? "Добавить агента" : "Add agent"}
+                  + {locale === "ru" ? "Р”РѕР±Р°РІРёС‚СЊ Р°РіРµРЅС‚Р°" : "Add agent"}
                 </button>
               ) : (
                 <article className="rounded border border-[#007acc] bg-[#1b1b1c] p-2">
                   <div className="mb-2 flex items-center justify-between">
-                    <span className="text-xs text-[var(--text-secondary)]">{addAgentMode === "template" ? (locale === "ru" ? "Новый агент (шаблон)" : "New agent (template)") : addAgentMode === "custom" ? (locale === "ru" ? "Новый агент (свой)" : "New agent (custom)") : locale === "ru" ? "Выберите вариант" : "Choose option"}</span>
-                    <button type="button" onClick={() => setShowAddAgent(false)} className="rounded px-1 py-0.5 text-[10px] text-[var(--text-secondary)] hover:bg-[#3a3d41]">✕</button>
+                    <span className="text-xs text-[var(--text-secondary)]">{addAgentMode === "template" ? (locale === "ru" ? "РќРѕРІС‹Р№ Р°РіРµРЅС‚ (С€Р°Р±Р»РѕРЅ)" : "New agent (template)") : addAgentMode === "custom" ? (locale === "ru" ? "РќРѕРІС‹Р№ Р°РіРµРЅС‚ (СЃРІРѕР№)" : "New agent (custom)") : locale === "ru" ? "Р’С‹Р±РµСЂРёС‚Рµ РІР°СЂРёР°РЅС‚" : "Choose option"}</span>
+                    <button type="button" onClick={() => setShowAddAgent(false)} className="rounded px-1 py-0.5 text-[10px] text-[var(--text-secondary)] hover:bg-[#3a3d41]">вњ•</button>
                   </div>
 
                   {addAgentMode === null ? (
                     <div className="space-y-1">
-                      <p className="mb-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Быстрый старт — готовые роли агентов:" : "Quick start — preset agent roles:"}</p>
+                      <p className="mb-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Р‘С‹СЃС‚СЂС‹Р№ СЃС‚Р°СЂС‚ вЂ” РіРѕС‚РѕРІС‹Рµ СЂРѕР»Рё Р°РіРµРЅС‚РѕРІ:" : "Quick start вЂ” preset agent roles:"}</p>
                       {roleOptions.map((role) => (
                         <button
                           key={role}
@@ -3237,7 +3290,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                           onClick={() => { setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? ""))); setAddAgentMode("custom"); }}
                           className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs text-[#c6ced8] hover:bg-[#37373d]"
                         >
-                          ✨ {locale === "ru" ? "Создать с нуля" : "Create from scratch"}
+                          вњЁ {locale === "ru" ? "РЎРѕР·РґР°С‚СЊ СЃ РЅСѓР»СЏ" : "Create from scratch"}
                         </button>
                       </div>
                     </div>
@@ -3292,7 +3345,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         {roleOptions?.map((role) => <option key={role} value={role}>{roleLabel(role)} ({role})</option>)}
                       </select>
                       <div className="mb-1 flex items-center gap-2">
-                        <span className="text-[10px] text-[var(--text-secondary)]">Цвет:</span>
+                        <span className="text-[10px] text-[var(--text-secondary)]">Р¦РІРµС‚:</span>
                         <input type="color" value={newAgent.color} onChange={(e) => setNewAgent((p) => ({ ...p, color: e.target.value }))} className="h-6 w-8 cursor-pointer rounded border border-[var(--border-default)] bg-[var(--bg-app)]" />
                       </div>
                       <input value={newAgent.description} onChange={(e) => setNewAgent((p) => ({ ...p, description: e.target.value }))} placeholder={t.profile} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
@@ -3314,7 +3367,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <button type="button" onClick={() => setGithubModalOpen(false)} className="absolute inset-0 bg-black/60" aria-label={t.close} />
           <form onSubmit={(event) => { event.preventDefault(); void pushToGithub({ token: githubPushToken, repo: githubPushRepo }); }} className="relative z-10 w-[92%] max-w-[460px] rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-4 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">{locale === "ru" ? "Пуш в GitHub" : "Push to GitHub"}</h2>
+              <h2 className="text-sm font-semibold">{locale === "ru" ? "РџСѓС€ РІ GitHub" : "Push to GitHub"}</h2>
               <button type="button" onClick={() => setGithubModalOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
             </div>
             <label className="mb-3 block text-xs text-[var(--text-secondary)]">
@@ -3322,11 +3375,11 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <input value={githubPushToken} onChange={(event) => setGithubPushToken(event.target.value)} type="password" required className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-2 text-xs" autoComplete="off" />
             </label>
             <label className="mb-4 block text-xs text-[var(--text-secondary)]">
-              {locale === "ru" ? "Репозиторий (owner/repo)" : "Repository (owner/repo)"}
+              {locale === "ru" ? "Р РµРїРѕР·РёС‚РѕСЂРёР№ (owner/repo)" : "Repository (owner/repo)"}
               <input value={githubPushRepo} onChange={(event) => setGithubPushRepo(event.target.value)} placeholder="owner/repo" required className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-2 text-xs" />
             </label>
             <button type="submit" disabled={githubPushLoading || !githubPushToken.trim() || !githubPushRepo.trim()} className="w-full rounded bg-[#0e639c] px-3 py-2 text-xs text-white disabled:opacity-50">
-              {githubPushLoading ? (locale === "ru" ? "Пуш выполняется..." : "Pushing...") : (locale === "ru" ? "Инициализировать и пушнуть" : "Initialize and push")}
+              {githubPushLoading ? (locale === "ru" ? "РџСѓС€ РІС‹РїРѕР»РЅСЏРµС‚СЃСЏ..." : "Pushing...") : (locale === "ru" ? "РРЅРёС†РёР°Р»РёР·РёСЂРѕРІР°С‚СЊ Рё РїСѓС€РЅСѓС‚СЊ" : "Initialize and push")}
             </button>
           </form>
         </div>
@@ -3336,16 +3389,16 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/60 p-3">
           <section className="w-[92vw] max-w-[620px] rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-4 shadow-xl">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold">{locale === "ru" ? "Выбор пресета проекта" : "Choose project preset"}</h2>
+              <h2 className="text-sm font-semibold">{locale === "ru" ? "Р’С‹Р±РѕСЂ РїСЂРµСЃРµС‚Р° РїСЂРѕРµРєС‚Р°" : "Choose project preset"}</h2>
               <button type="button" onClick={() => setTemplateOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
             </div>
             <div className="grid gap-2 sm:grid-cols-2">
               {[
-                ["web", "🌐 Web-сайт / Веб-приложение", "React / Vite / HTML-CSS"],
-                ["mobile", "📱 Мобильное приложение", "Capacitor / Android APK / iOS"],
-                ["desktop", "💻 Десктоп-приложение", ".exe / Electron"],
-                ["all", "⚡ Все в одном", "Web + APK + EXE"],
-                ["telegram", "🤖 Telegram-бот / Backend API", "Node.js / Express"],
+                ["web", "рџЊђ Web-СЃР°Р№С‚ / Р’РµР±-РїСЂРёР»РѕР¶РµРЅРёРµ", "React / Vite / HTML-CSS"],
+                ["mobile", "рџ“± РњРѕР±РёР»СЊРЅРѕРµ РїСЂРёР»РѕР¶РµРЅРёРµ", "Capacitor / Android APK / iOS"],
+                ["desktop", "рџ’» Р”РµСЃРєС‚РѕРї-РїСЂРёР»РѕР¶РµРЅРёРµ", ".exe / Electron"],
+                ["all", "вљЎ Р’СЃРµ РІ РѕРґРЅРѕРј", "Web + APK + EXE"],
+                ["telegram", "рџ¤– Telegram-Р±РѕС‚ / Backend API", "Node.js / Express"],
               ].map(([id, label, description]) => (
                 <button key={id} type="button" onClick={() => setTemplateId(id)} className={`rounded border p-3 text-left ${templateId === id ? "border-[#007acc] bg-[#264f78]" : "border-[var(--border-default)] bg-[var(--bg-app)]"}`}>
                   <p className="text-xs font-semibold">{label}</p>
@@ -3353,8 +3406,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 </button>
               ))}
             </div>
-            <p className="mt-3 text-[10px] text-[var(--text-secondary)]">{workspaceRootDraft || (locale === "ru" ? "Папка проекта не подключена" : "Project folder is not connected")}</p>
-            <button type="button" onClick={() => void generateTemplate()} disabled={busy || !workspaceRootDraft.trim()} className="mt-3 w-full rounded bg-[#0e639c] px-3 py-2 text-xs text-white disabled:opacity-50">{locale === "ru" ? "Создать структуру проекта" : "Generate project structure"}</button>
+            <p className="mt-3 text-[10px] text-[var(--text-secondary)]">{workspaceRootDraft || (locale === "ru" ? "РџР°РїРєР° РїСЂРѕРµРєС‚Р° РЅРµ РїРѕРґРєР»СЋС‡РµРЅР°" : "Project folder is not connected")}</p>
+            <button type="button" onClick={() => void generateTemplate()} disabled={busy || !workspaceRootDraft.trim()} className="mt-3 w-full rounded bg-[#0e639c] px-3 py-2 text-xs text-white disabled:opacity-50">{locale === "ru" ? "РЎРѕР·РґР°С‚СЊ СЃС‚СЂСѓРєС‚СѓСЂСѓ РїСЂРѕРµРєС‚Р°" : "Generate project structure"}</button>
           </section>
         </div>
       ) : null}
@@ -3380,7 +3433,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   rel="noreferrer"
                   className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-amber-400 to-yellow-400 px-4 py-2.5 text-sm font-bold text-black shadow-[0_0_18px_rgba(251,191,36,0.6)] transition hover:from-amber-300 hover:to-yellow-300 hover:shadow-[0_0_26px_rgba(251,191,36,0.9)]"
                 >
-                  ❤️ {t.supportProjectBtn}
+                  вќ¤пёЏ {t.supportProjectBtn}
                 </a>
               </section>
 
@@ -3404,9 +3457,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       {reportOpen ? (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60 p-3">
           <section className="flex max-h-[85vh] w-[92vw] max-w-[720px] flex-col rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-4 shadow-xl">
-            <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold">{locale === "ru" ? "Системный Markdown-отчёт" : "System Markdown report"}</h2><button type="button" onClick={() => setReportOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button></div>
+            <div className="mb-3 flex items-center justify-between"><h2 className="text-sm font-semibold">{locale === "ru" ? "РЎРёСЃС‚РµРјРЅС‹Р№ Markdown-РѕС‚С‡С‘С‚" : "System Markdown report"}</h2><button type="button" onClick={() => setReportOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button></div>
             <textarea readOnly value={reportText} className="min-h-[320px] flex-1 resize-none rounded border border-[var(--border-default)] bg-[var(--bg-app)] p-3 font-mono text-xs text-[var(--text-primary)] outline-none" />
-            <button type="button" onClick={() => void copyReport()} className="mt-3 rounded bg-[#0e639c] px-3 py-2 text-xs text-white">{locale === "ru" ? "Скопировать" : "Copy"}</button>
+            <button type="button" onClick={() => void copyReport()} className="mt-3 rounded bg-[#0e639c] px-3 py-2 text-xs text-white">{locale === "ru" ? "РЎРєРѕРїРёСЂРѕРІР°С‚СЊ" : "Copy"}</button>
           </section>
         </div>
       ) : null}

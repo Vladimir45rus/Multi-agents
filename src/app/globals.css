@@ -394,3 +394,37 @@ html * {
               border-color 0.15s ease,
               color 0.15s ease;
 }
+
+
+/* ============================================================
+   PANEL ACCENTS (UX: colored panel identity + collapsed badges)
+   ============================================================ */
+.panel-accent-explorer { --panel-accent: #22d3ee; }
+.panel-accent-editor { --panel-accent: #3b82f6; }
+.panel-accent-lead { --panel-accent: #8b5cf6; }
+.panel-accent-group { --panel-accent: #a855f7; }
+.panel-accent-terminal { --panel-accent: #22c55e; }
+.panel-accent-logs { --panel-accent: #f97316; }
+
+.panel-accent-explorer > .panel > .panel-header,
+.panel-accent-editor > .panel > .panel-header,
+.panel-accent-lead > .panel > .panel-header,
+.panel-accent-group > .panel > .panel-header,
+.panel-accent-terminal > .panel > .panel-header,
+.panel-accent-logs > .panel > .panel-header {
+  border-top: 2px solid var(--panel-accent);
+  background: linear-gradient(
+    to bottom,
+    color-mix(in srgb, var(--panel-accent) 14%, transparent),
+    transparent 70%
+  );
+}
+
+.panel-accent-explorer > .panel > .panel-header > span:first-child,
+.panel-accent-editor > .panel > .panel-header > span:first-child,
+.panel-accent-lead > .panel > .chat-panel-title > span:first-child,
+.panel-accent-group > .panel > .chat-panel-title > span:first-child,
+.panel-accent-terminal > .panel > .panel-header > span:first-child,
+.panel-accent-logs > .panel > .panel-header > span:first-child {
+  color: var(--panel-accent);
+}
