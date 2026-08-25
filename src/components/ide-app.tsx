@@ -535,7 +535,6 @@ export function IdeApp() {
   });
   const [topProportions, setTopProportions] = useState([240, 560, 320, 320]);
   const [bottomProportions, setBottomProportions] = useState([0.5, 0.5]);
-  const [bottomRowHeight, setBottomRowHeight] = useState(220);
   const [workspaceTreeEntries, setWorkspaceTreeEntries] = useState<WorkspaceTreeEntry[]>([]);
   const [fileStatuses, setFileStatuses] = useState<Record<string, "new" | "modified" | "saved">>({});
   const [selectedDirectory, setSelectedDirectory] = useState("");
@@ -1227,19 +1226,6 @@ export function IdeApp() {
     window.addEventListener("pointerup", onUp, { once: true });
   }, [topProportions]);
 
-  const startRowResize = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const startY = event.clientY;
-    const startHeight = bottomRowHeight;
-    const onMove = (moveEvent: PointerEvent) => setBottomRowHeight(Math.max(80, Math.min(520, startHeight - (moveEvent.clientY - startY))));
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-    };
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp, { once: true });
-  }, [bottomRowHeight]);
-
   // --- Panel controls ---
 
   function toggleCollapse(name: PanelName) {
@@ -1922,14 +1908,17 @@ export function IdeApp() {
         }
         if (event.type === "agent_error" && event.identity) {
           const identity = event.identity;
+          const httpStatus = event.status === 403 || event.status === 429 ? event.status : undefined;
+          const accessError = httpStatus !== undefined
+            ? `Ошибка доступа к модели (HTTP ${httpStatus}). Смените модель в Настройках на qwen/qwen-2.5-coder-32b-instruct:free или google/gemini-2.0-flash-lite-001:free`
+            : undefined;
           setStreamingMessages((previous) => {
             const current = previous[identity.agentId];
             return {
               ...previous,
-              [identity.agentId]: finishStream(current, event.channel as ChatChannel, identity, "", "error", undefined, new Date().toISOString(), false),
+              [identity.agentId]: finishStream(current, event.channel as ChatChannel, identity, "", "error", accessError ?? event.message, new Date().toISOString(), httpStatus === 429),
             };
           });
-          // Provider errors are stored in System Events and intentionally omitted from chat.
         }
       };
 
@@ -2307,7 +2296,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
 
   function renderStreamingMessages(channel: ChatChannel) {
     return liveMessages
-      .filter((message) => message.channel === channel && message.status !== "error")
+      .filter((message) => message.channel === channel)
       .map((message) => (
         <article key={`stream-${message.identity.agentId}`} className="mr-auto w-fit max-w-[92%] rounded border border-[#007acc] bg-[var(--bg-panel)] p-2 text-sm">
           <div className="flex items-center justify-between gap-2">
@@ -2315,7 +2304,11 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             <span className={`text-[10px] ${statusClass(message.status)}`}>{statusLabel(message.status)}</span>
           </div>
           <p className="mt-1 whitespace-pre-wrap">{message.content || "…"}</p>
-          {message.status === "error" ? <p className="mt-1 text-xs text-[var(--text-muted)]">{t.errorStatus}</p> : null}
+          {message.status === "error" ? (
+            <p className={`mt-1 whitespace-pre-wrap text-xs ${message.rateLimited || message.error?.startsWith("Ошибка доступа к модели (HTTP ") ? "text-red-300" : "text-[var(--text-muted)]"}`}>
+              {message.error?.startsWith("Ошибка доступа к модели (HTTP ") ? message.error : message.rateLimited ? "Ошибка доступа к модели (HTTP 429). Смените модель в Настройках на qwen/qwen-2.5-coder-32b-instruct:free или google/gemini-2.0-flash-lite-001:free" : message.error ?? t.errorStatus}
+            </p>
+          ) : null}
           {renderMessageActions(`stream-${message.identity.agentId}`, message.content, false)}
         </article>
       ));
@@ -2351,7 +2344,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
   const bottomGrows = [bottomFlexGrow(0), bottomFlexGrow(1)];
 
   return (
-    <main className="relative flex h-screen flex-col overflow-hidden pb-6" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
+    <main className="app-container h-screen w-screen overflow-hidden relative" style={{ background: "var(--bg-app)", color: "var(--text-primary)" }}>
       {/* Auto-update banner */}
       {updateVersion && (
         <div
@@ -2393,7 +2386,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </button>
         </div>
       )}
-      <header className="flex h-14 shrink-0 items-center justify-between gap-4 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
+      <header className="app-header flex items-center justify-between gap-4 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="flex min-w-0 items-center gap-2">
           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-lg">👑</span>
           <div className="min-w-0">
@@ -2456,11 +2449,11 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       </header>
 
       {/* Main content area: flex column, top flex area + resizer + bottom area */}
-      <div className="relative flex min-h-0 flex-1 flex-col">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* Full-height side panels with a central editor/terminal work area. */}
-        <div className="flex min-h-0 flex-1">
+        <div className="workspace-top-row flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
           {/* Explorer / File Tree */}
-          <div className={`relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%`, minWidth: 0 }}>
+          <div className={`workspace-column relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%` }}>
             {collapsedStrip("explorer", t.explorer)}
             {!collapsedPanels.explorer && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2513,7 +2506,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Editor */}
-          <div className={`relative ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%`, minWidth: 0 }}>
+          <div className={`workspace-column relative ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%` }}>
             {collapsedStrip("editor", t.editor)}
             {!collapsedPanels.editor && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2571,7 +2564,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Lead Chat */}
-          <div className={`relative ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%`, minWidth: 0 }}>
+          <div className={`workspace-column relative ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2628,7 +2621,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Group Chat */}
-          <div className={`relative ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%`, minWidth: 0 }}>
+          <div className={`workspace-column relative ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
             {collapsedStrip("group", t.allChat)}
             {!collapsedPanels.group && (
               <section className="panel h-full">
@@ -2712,21 +2705,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </div>
         </div>
 
-        {/* Horizontal resizer between top and bottom */}
-        <div className="absolute bottom-0 z-20 h-2 w-full cursor-row-resize bg-transparent hover:bg-[#007acc]" style={{ transform: `translateY(-${bottomRowHeight}px)` }} onPointerDown={startRowResize} />
-
-        {/* Bottom row: Terminal | Logs */}
-        <div
-          className="relative z-10 flex min-h-0 shrink-0 border-t border-[var(--border-default)] bg-[var(--bg-terminal)] shadow-[0_-12px_30px_rgba(0,0,0,0.24)]"
-          style={{
-            left: collapsedPanels.explorer ? `${COLLAPSED_SIDE}px` : `${topGrows[0] * 100}%`,
-            right: `${(topGrows[2] + topGrows[3]) * 100}%`,
-            height: `${bottomRowHeight}px`,
-            minHeight: collapsedPanels.terminal && collapsedPanels.logs ? `${COLLAPSED_BOTTOM}px` : "auto",
-          }}
-        >
+        {/* Bottom panel stays in the flex flow, so collapsing it cannot overlap the workspace. */}
+        <div className="logs-panel h-[200px] w-full shrink-0 overflow-y-auto relative z-10 flex border-t border-[var(--border-default)] bg-slate-950 shadow-[0_-12px_30px_rgba(0,0,0,0.24)]">
           {/* Terminal */}
-          <div className={`relative min-h-0 ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%`, minWidth: 0 }}>
+          <div className={`workspace-column relative ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%` }}>
             {collapsedStrip("terminal", t.terminal, false)}
             {!collapsedPanels.terminal && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2758,7 +2740,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </div>
 
           {/* Logs / System Events */}
-          <div className={`relative min-h-0 ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%`, minWidth: 0 }}>
+          <div className={`workspace-column relative ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%` }}>
             {collapsedStrip("logs", t.logsTitle, false)}
             {!collapsedPanels.logs && (
               <section className="panel h-full">
@@ -2836,13 +2818,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           type="button"
           aria-label={t.close}
           onClick={() => setSettingsOpen(false)}
-          className="absolute inset-0 z-20 cursor-default bg-black/40"
+          className="fixed inset-0 z-40 cursor-default bg-black/40"
         />
       ) : null}
       {settingsOpen ? (
         <aside
           aria-label={t.settings}
-          className="settings-drawer absolute inset-y-0 right-0 z-30 flex max-h-[85vh] min-h-0 w-[460px] max-w-[calc(100vw-16px)] flex-col overflow-y-auto border-l shadow-2xl"
+          className="settings-drawer flex min-h-0 max-w-[calc(100vw-16px)] flex-col overflow-hidden"
           style={{
             borderColor: "var(--border-default)",
             background: "var(--bg-panel)",
