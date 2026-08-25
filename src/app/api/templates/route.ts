@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { generateProjectTemplate, PROJECT_TEMPLATES, type ProjectTemplateId } from "@/lib/project-templates";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -9,6 +10,8 @@ export async function GET() {
 }
 
 export async function POST(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json()) as { template?: ProjectTemplateId; directory?: string };
     if (!body.template || !PROJECT_TEMPLATES.some((item) => item.id === body.template)) return NextResponse.json({ error: "Invalid template" }, { status: 400 });

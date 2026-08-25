@@ -1,10 +1,13 @@
 import { listOrchestratorEvents } from "@/lib/orchestrator";
 import { recordApiError } from "@/lib/api-errors";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function GET(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const url = new URL(request.url);
     const limitParam = Number(url.searchParams.get("limit"));

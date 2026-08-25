@@ -33,3 +33,32 @@ export function parsePatchInstruction(raw: string): PatchInstruction {
     return { decision: raw.trim(), patches: [] };
   }
 }
+
+// B3 fix: detect model responses whose JSON was cut off mid-object (aborted
+// stream, gateway timeout or max_tokens truncation). Such responses must not
+// be silently treated as "zero patches" / a completed decision.
+export function looksLikeTruncatedJson(raw: string): boolean {
+  const cleaned = raw.trim().replace(/^```(?:json)?\s*/i, "").replace(/```\s*$/, "");
+  const start = cleaned.search(/[{[]/);
+  if (start < 0) return false;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = start; i < cleaned.length; i += 1) {
+    const ch = cleaned[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (ch === "\\") escaped = true;
+      else if (ch === '"') inString = false;
+      continue;
+    }
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{" || ch === "[") depth += 1;
+    else if (ch === "}" || ch === "]") depth -= 1;
+  }
+  return depth > 0 || inString;
+}

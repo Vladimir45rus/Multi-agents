@@ -1,9 +1,12 @@
 import { createAgent, getWorkspaceSnapshot } from "@/lib/workspace";
 import { recordApiError } from "@/lib/api-errors";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const workspace = await getWorkspaceSnapshot();
     return Response.json(workspace.agents, {

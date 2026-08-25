@@ -1,10 +1,13 @@
 import { createWorkspaceEntry, deleteWorkspaceEntry, renameWorkspaceEntry } from "@/lib/workspace-files";
 import { recordApiError } from "@/lib/api-errors";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json()) as { actorAgentId?: number; path?: string; kind?: "file" | "directory"; content?: string };
     if (!body.actorAgentId || !body.path || !body.kind) {
@@ -19,6 +22,8 @@ export async function POST(request: Request) {
 }
 
 export async function PATCH(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json()) as { actorAgentId?: number; path?: string; nextPath?: string };
     if (!body.actorAgentId || !body.path || !body.nextPath) {
@@ -33,6 +38,8 @@ export async function PATCH(request: Request) {
 }
 
 export async function DELETE(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json()) as { actorAgentId?: number; path?: string };
     if (!body.actorAgentId || !body.path) {

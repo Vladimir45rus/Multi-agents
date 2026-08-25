@@ -332,6 +332,39 @@ export async function deleteWorkspaceEntry(actorAgentId: number, relativePath: s
 
   const target = await safeAbsolutePath(root, relativePath);
   const info = await lstat(target.absolutePath);
+
+  // B2 fix: snapshot every text file that is about to be removed (a single
+  // file or a whole directory tree) into the standard history mechanism, so
+  // deletes stay recoverable via rollback just like patch operations.
+  const deletable: Array<{ relativePath: string; content: string }> = [];
+  const collectDeletable = async (entryRelativePath: string) => {
+    try {
+      const state = await readTextState(root, entryRelativePath);
+      if (state.exists) deletable.push({ relativePath: entryRelativePath, content: state.content });
+    } catch {
+      // Binary, oversized or otherwise non-editable files cannot be
+      // represented in the text history and are removed without a snapshot.
+    }
+  };
+  if (info.isFile()) {
+    await collectDeletable(target.relativePath);
+  } else if (info.isDirectory()) {
+    const subFiles: WorkspaceTreeFile[] = [];
+    const subEntries: WorkspaceTreeEntry[] = [];
+    await walkDirectory(root, target.absolutePath, subFiles, subEntries);
+    for (const file of subFiles) await collectDeletable(file.path);
+  }
+  for (const entry of deletable) {
+    const backupPath = await writeBackup(root, entry.relativePath, entry.content);
+    await db.insert(workspaceFileHistory).values({
+      filePath: entry.relativePath,
+      previousContent: entry.content,
+      operation: "delete",
+      backupPath,
+      actorAgentId,
+    });
+  }
+
   await rm(target.absolutePath, { recursive: info.isDirectory(), force: false });
   const indexedFiles = await db.select().from(projectFiles);
   const prefix = `${target.relativePath}/`;
@@ -434,14 +467,20 @@ export async function applyWorkspacePatch(actorAgentId: number, patch: Workspace
   }
 
   const applied: number[] = [];
+  // B1 fix: journal every applied item so a mid-patch failure can undo the
+  // files that were already written instead of leaving a half-applied patch.
+  const journal: Array<{ item: (typeof prepared)[number]; historyId: number | null; wrote: boolean }> = [];
   try {
     for (const item of prepared) {
+      const record: { item: (typeof prepared)[number]; historyId: number | null; wrote: boolean } = { item, historyId: null, wrote: false };
+      journal.push(record);
       const backupPath = item.previous.exists ? await writeBackup(root, item.relativePath, item.previous.content) : "";
       if (item.operation === "delete") await unlink(item.absolutePath);
       else {
         await mkdir(path.dirname(item.absolutePath), { recursive: true });
         await writeFile(item.absolutePath, item.content ?? "", { encoding: "utf8", flag: item.operation === "create" ? "wx" : "w" });
       }
+      record.wrote = true;
 
       const [history] = await db.insert(workspaceFileHistory).values({
         filePath: item.relativePath,
@@ -450,13 +489,38 @@ export async function applyWorkspacePatch(actorAgentId: number, patch: Workspace
         backupPath,
         actorAgentId,
       }).returning({ id: workspaceFileHistory.id });
+      record.historyId = history.id;
       applied.push(history.id);
 
       if (item.operation === "delete") await db.delete(projectFiles).where(eq(projectFiles.path, item.relativePath));
       else await db.insert(projectFiles).values({ path: item.relativePath, language: languageFromPath(item.relativePath), content: item.content ?? "", updatedAt: new Date() }).onConflictDoUpdate({ target: projectFiles.path, set: { content: item.content ?? "", language: languageFromPath(item.relativePath), updatedAt: new Date() } });
     }
   } catch (error) {
-    throw new Error(`Patch failed after ${applied.length} file(s): ${error instanceof Error ? error.message : "unknown error"}`);
+    // B1 fix: compensating rollback of everything this session touched.
+    const restoreErrors: string[] = [];
+    for (const record of journal.reverse()) {
+      const done = record.item;
+      try {
+        if (done.operation === "delete") {
+          await mkdir(path.dirname(done.absolutePath), { recursive: true });
+          await writeFile(done.absolutePath, done.previous.content, "utf8");
+          await db.insert(projectFiles).values({ path: done.relativePath, language: languageFromPath(done.relativePath), content: done.previous.content, updatedAt: new Date() }).onConflictDoUpdate({ target: projectFiles.path, set: { content: done.previous.content, updatedAt: new Date() } });
+        } else if (done.operation === "create") {
+          if (record.wrote) await unlink(done.absolutePath).catch((unlinkError) => { if ((unlinkError as NodeJS.ErrnoException).code !== "ENOENT") throw unlinkError; });
+          await db.delete(projectFiles).where(eq(projectFiles.path, done.relativePath));
+        } else {
+          await writeFile(done.absolutePath, done.previous.content, "utf8");
+          await db.insert(projectFiles).values({ path: done.relativePath, language: languageFromPath(done.relativePath), content: done.previous.content, updatedAt: new Date() }).onConflictDoUpdate({ target: projectFiles.path, set: { content: done.previous.content, updatedAt: new Date() } });
+        }
+        if (record.historyId !== null) await db.delete(workspaceFileHistory).where(eq(workspaceFileHistory.id, record.historyId));
+      } catch (restoreError) {
+        restoreErrors.push(`${done.relativePath}: ${restoreError instanceof Error ? restoreError.message : "unknown error"}`);
+      }
+    }
+    const rollbackNote = restoreErrors.length > 0
+      ? ` Rollback incomplete for: ${restoreErrors.join("; ")}`
+      : " Workspace rolled back to its previous state.";
+    throw new Error(`Patch failed after ${applied.length} file(s): ${error instanceof Error ? error.message : "unknown error"}.${rollbackNote}`);
   }
 
   return { applied: prepared.map((item) => item.relativePath), historyIds: applied };

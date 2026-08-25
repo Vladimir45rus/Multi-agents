@@ -3,10 +3,13 @@ import { db } from "@/db";
 import { agentEvents, orchestratorReports } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
 import { recordApiError } from "@/lib/api-errors";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const activeTask = await loadActiveTaskState();
 
@@ -59,7 +62,9 @@ export async function GET() {
   }
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     await clearActiveTaskState();
     return Response.json({ ok: true });

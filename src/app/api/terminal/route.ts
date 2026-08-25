@@ -1,11 +1,14 @@
 import { runSandboxCommand } from "@/lib/terminal-sandbox";
 import { clearTerminalHistory } from "@/lib/workspace";
 import { recordSystemEvent } from "@/lib/system-events";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     await clearTerminalHistory();
     return Response.json({ ok: true });
@@ -17,6 +20,8 @@ export async function DELETE() {
 }
 
 export async function POST(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json()) as { command?: string; locale?: "ru" | "en"; timeoutMs?: number; actorAgentId?: number };
     if (!body.command?.trim()) {

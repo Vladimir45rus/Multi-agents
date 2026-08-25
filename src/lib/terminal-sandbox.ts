@@ -1,6 +1,8 @@
 import "server-only";
 
 import { spawn } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { db } from "@/db";
 import { agents, terminalEntries } from "@/db/schema";
 import { eq } from "drizzle-orm";
@@ -11,6 +13,18 @@ type Locale = "ru" | "en";
 
 const MAX_OUTPUT_BYTES = 1_000_000;
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+// H1 fix: give the command parser the real set of package.json scripts so
+// "npm run <name>" can be validated against what the project actually defines.
+async function loadAllowedNpmScripts(root: string): Promise<ReadonlySet<string>> {
+  try {
+    const raw = await readFile(path.resolve(root, "package.json"), "utf8");
+    const parsed = JSON.parse(raw) as { scripts?: Record<string, unknown> };
+    return new Set(Object.keys(parsed.scripts ?? {}));
+  } catch {
+    return new Set();
+  }
+}
 
 function t(locale: Locale, ru: string, en: string) {
   return locale === "en" ? en : ru;
@@ -27,7 +41,8 @@ async function assertAgentTerminalPermission(actorAgentId: number | undefined, c
 
 export async function runSandboxCommand(command: string, locale: Locale = "ru", options?: { timeoutMs?: number; actorAgentId?: number }) {
   const root = await getWorkspaceRoot();
-  const parsed = parseCommand(command);
+  const allowedNpmScripts = await loadAllowedNpmScripts(root);
+  const parsed = parseCommand(command, { allowedNpmScripts });
   await assertAgentTerminalPermission(options?.actorAgentId, parsed.name);
   const timeoutMs = Math.max(1_000, Math.min(options?.timeoutMs ?? DEFAULT_TIMEOUT_MS, 300_000));
   const isWindowsCmd = process.platform === "win32" && parsed.executable.toLowerCase().endsWith(".cmd");

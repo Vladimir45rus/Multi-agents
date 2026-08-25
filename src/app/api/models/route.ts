@@ -3,10 +3,13 @@ import { fetchProviderModels } from "@/lib/provider-models";
 import { getStoredProviderApiKey } from "@/lib/workspace";
 import { validateApiKey } from "@/lib/provider-gateway";
 import { recordSystemEvent } from "@/lib/system-events";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json().catch(() => ({}))) as {
       provider?: string;

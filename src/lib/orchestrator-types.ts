@@ -8,9 +8,10 @@ export type AgentEventType =
   | "PATCH_APPLIED"
   | "TEST_STARTED"
   | "TEST_FAILED"
-  | "REVIEW_APPROVED";
+  | "REVIEW_APPROVED"
+  | "GENERATION_ERROR";
 
-export type EventStatus = "open" | "accepted" | "rejected" | "resolved";
+export type EventStatus = "open" | "accepted" | "rejected" | "resolved" | "failed";
 
 export type OrchestratorRole =
   | "main"

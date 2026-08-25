@@ -10,7 +10,7 @@ import { and, asc, desc, eq, ne } from "drizzle-orm";
 import { completeProviderResponse, providerRequestFromAgent, type GatewayMessage } from "@/lib/provider-gateway";
 import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
 import { getProviderPreset } from "@/lib/providers";
-import { parsePatchInstruction } from "@/lib/patch-parser";
+import { parsePatchInstruction, looksLikeTruncatedJson } from "@/lib/patch-parser";
 import { ensureWorkspaceBootstrap, getStoredProviderApiKey, getWorkspaceSettingsRow } from "@/lib/workspace";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
@@ -771,6 +771,23 @@ export async function* runOrchestrator(options: {
         );
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
         const decisionInstruction = parsePatchInstruction(rawDecision);
+        // B3 fix: a truncated model response must surface as a generation
+        // error instead of silently continuing with zero patches.
+        if (decisionInstruction.patches.length === 0 && looksLikeTruncatedJson(rawDecision)) {
+          const truncationMessage = t(locale, "Ошибка генерации: ответ модели обрезан (таймаут или лимит токенов). JSON-решение неполно, патчи не применены.", "Generation error: the model response was truncated (timeout or token limit). The JSON decision is incomplete, no patches were applied.");
+          await recordEvent({
+            taskId,
+            type: "GENERATION_ERROR",
+            agent: mainAgent.name,
+            role: "main",
+            agentId: mainAgent.id,
+            iteration,
+            arguments: truncationMessage,
+            proposal: summarize(rawDecision),
+            status: "failed",
+          });
+          throw new Error(truncationMessage);
+        }
         lastDecision = decisionInstruction.decision || rawDecision.trim();
         lastPatches = decisionInstruction.patches;
         yield {
@@ -794,6 +811,22 @@ export async function* runOrchestrator(options: {
         const rawFix = await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), fixPrompt(locale, task, lastCheckFailure), signal, true, locale, options.projectContext);
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
         const fixInstruction = parsePatchInstruction(rawFix);
+        // B3 fix: same truncation guard for the auto-fix branch.
+        if (fixInstruction.patches.length === 0 && looksLikeTruncatedJson(rawFix)) {
+          const truncationMessage = t(locale, "Ошибка генерации: ответ модели обрезан (таймаут или лимит токенов). JSON-исправление неполно, патчи не применены.", "Generation error: the model response was truncated (timeout or token limit). The fix JSON is incomplete, no patches were applied.");
+          await recordEvent({
+            taskId,
+            type: "GENERATION_ERROR",
+            agent: mainAgent.name,
+            role: "main",
+            agentId: mainAgent.id,
+            iteration,
+            arguments: truncationMessage,
+            proposal: summarize(rawFix),
+            status: "failed",
+          });
+          throw new Error(truncationMessage);
+        }
         lastDecision = fixInstruction.decision || rawFix.trim();
         lastPatches = fixInstruction.patches;
         yield {

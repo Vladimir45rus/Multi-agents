@@ -4,11 +4,15 @@ import { registerTaskController, releaseTaskController, runOrchestrator } from "
 import type { OrchestratorStreamEvent } from "@/lib/orchestrator-types";
 import type { ProjectContextInput } from "@/lib/project-context";
 import { recordApiError } from "@/lib/api-errors";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
+
   let body: {
     task?: string;
     taskId?: string;

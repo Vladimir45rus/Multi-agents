@@ -1,9 +1,13 @@
 import { NextResponse } from "next/server";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
+
   const url = new URL(request.url).searchParams.get("url") ?? "";
 
   if (!url || url.length > 2048) {

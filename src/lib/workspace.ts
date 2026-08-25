@@ -1,6 +1,7 @@
 import "server-only";
 
 import { execFile } from "node:child_process";
+import { lookup as dnsLookup } from "node:dns/promises";
 import { mkdir, writeFile } from "node:fs/promises";
 import pathModule from "node:path";
 import { promisify } from "node:util";
@@ -291,27 +292,102 @@ function cleanHtml(input: string) {
     .trim();
 }
 
+// H3 fix: block server-side requests to private / internal network targets
+// (SSRF). Covers loopback, RFC1918 ranges, link-local (incl. cloud metadata),
+// CGNAT, benchmark range and IPv6 equivalents, plus localhost-like hostnames.
+function isPrivateIpv4(address: string): boolean {
+  const parts = address.split(".").map(Number);
+  if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part) || part < 0 || part > 255)) return false;
+  const [first, second] = parts;
+  return first === 0
+    || first === 10
+    || first === 127
+    || (first === 100 && second >= 64 && second <= 127)
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && second === 168)
+    || (first === 198 && (second === 18 || second === 19));
+}
+
+function isPrivateIpv6(address: string): boolean {
+  const value = address.toLowerCase();
+  if (value === "::" || value === "::1") return true;
+  const mapped = value.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/);
+  if (mapped) return isPrivateIpv4(mapped[1]);
+  return value.startsWith("fe80:") || value.startsWith("fc") || value.startsWith("fd");
+}
+
+async function assertPublicHttpUrl(rawUrl: string): Promise<URL> {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error("Invalid link URL");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") throw new Error("Only http(s) links are supported");
+  if (parsed.username || parsed.password) throw new Error("Links with embedded credentials are not supported");
+
+  const hostname = parsed.hostname.replace(/^\[/, "").replace(/\]$/, "").toLowerCase();
+  if (!hostname) throw new Error("Invalid link host");
+  if (hostname === "localhost" || hostname.endsWith(".localhost") || hostname.endsWith(".local") || hostname.endsWith(".internal")) {
+    throw new Error("Internal links are not allowed");
+  }
+  if (hostname.includes(":")) {
+    if (isPrivateIpv6(hostname)) throw new Error("Links to private addresses are not allowed");
+  } else if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(hostname)) {
+    if (isPrivateIpv4(hostname)) throw new Error("Links to private addresses are not allowed");
+  } else {
+    const resolved = await dnsLookup(hostname, { all: true, verbatim: true }).catch(() => null);
+    if (!resolved) throw new Error("Link host could not be resolved");
+    for (const entry of resolved) {
+      const private_ = entry.family === 6 ? isPrivateIpv6(entry.address) : isPrivateIpv4(entry.address);
+      if (private_) throw new Error("Links resolving to private addresses are not allowed");
+    }
+  }
+  return parsed;
+}
+
 async function enrichLinkAttachment(attachment: ChatAttachment): Promise<ChatAttachment> {
   if (attachment.type !== "link" || !attachment.url) return attachment;
 
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 6000);
-    const res = await fetch(attachment.url, {
-      signal: controller.signal,
-      headers: { "User-Agent": "MultiAgentCodeStudio/1.0" },
-    });
-    clearTimeout(timeout);
+    let target = attachment.url;
+    // H3 fix: validate every hop manually so redirects cannot bounce the
+    // fetch into an internal address after the initial check.
+    for (let hop = 0; ; hop += 1) {
+      await assertPublicHttpUrl(target);
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 6000);
+      let res: Response;
+      try {
+        res = await fetch(target, {
+          signal: controller.signal,
+          redirect: "manual",
+          headers: { "User-Agent": "MultiAgentCodeStudio/1.0" },
+        });
+      } finally {
+        clearTimeout(timeout);
+      }
 
-    if (!res.ok) {
-      return { ...attachment, title: attachment.title ?? "Link", previewText: `HTTP ${res.status}` };
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (location && hop < 4) {
+          target = new URL(location, target).toString();
+          continue;
+        }
+        return { ...attachment, title: attachment.title ?? "Link", previewText: `HTTP ${res.status}` };
+      }
+
+      if (!res.ok) {
+        return { ...attachment, title: attachment.title ?? "Link", previewText: `HTTP ${res.status}` };
+      }
+
+      const html = await res.text();
+      const title = html.match(/<title>([\s\S]*?)<\/title>/i)?.[1]?.trim() || attachment.title || "Link";
+      const previewText = cleanHtml(html).slice(0, 700);
+
+      return { ...attachment, title, previewText };
     }
-
-    const html = await res.text();
-    const title = html.match(/<title>([\s\S]*?)<\/title>/i)?.[1]?.trim() || attachment.title || "Link";
-    const previewText = cleanHtml(html).slice(0, 700);
-
-    return { ...attachment, title, previewText };
   } catch {
     return { ...attachment, title: attachment.title ?? "Link", previewText: "Failed to fetch URL preview" };
   }

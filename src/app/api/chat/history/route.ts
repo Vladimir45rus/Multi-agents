@@ -1,9 +1,12 @@
 import { clearChatHistory, ensureWorkspaceBootstrap } from "@/lib/workspace";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function DELETE(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     await ensureWorkspaceBootstrap();
     const channel = new URL(request.url).searchParams.get("channel");

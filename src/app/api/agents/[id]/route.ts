@@ -1,9 +1,12 @@
 import { updateAgentProfile } from "@/lib/workspace";
 import { recordApiError } from "@/lib/api-errors";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const { id } = await params;
     const agentId = Number(id);

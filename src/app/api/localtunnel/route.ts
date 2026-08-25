@@ -3,6 +3,7 @@ import { getWorkspaceSettingsRow, updateWorkspaceSettings } from "@/lib/workspac
 import { ensureMobileAccessToken } from "@/lib/mobile-auth";
 import { recordSystemEvent } from "@/lib/system-events";
 import { startLocalTunnel, type LocalTunnelHandle } from "@/lib/localtunnel";
+import { setTunnelActive } from "@/lib/tunnel-state";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -24,6 +25,7 @@ async function start() {
   starting = startLocalTunnel(port)
     .then(async (handle) => {
       tunnel = handle;
+      setTunnelActive(true);
       await updateWorkspaceSettings({ localtunnelUrl: handle.url });
       await recordSystemEvent("success", "localtunnel", `Tunnel started: ${handle.url}`);
       return handle;
@@ -44,6 +46,7 @@ export async function POST(request: Request) {
         await tunnel.close();
         tunnel = null;
       }
+      setTunnelActive(false);
       await updateWorkspaceSettings({ localtunnelEnabled: false, localtunnelUrl: "" });
       await recordSystemEvent("info", "localtunnel", "Tunnel stopped by user");
       return NextResponse.json({ ok: true, running: false, url: "" });

@@ -3,6 +3,7 @@ import "server-only";
 import { randomBytes } from "node:crypto";
 import { ensureWorkspaceBootstrap, getWorkspaceSettingsRow, updateWorkspaceSettings } from "@/lib/workspace";
 import { recordSystemEvent } from "@/lib/system-events";
+import { isTunnelActive } from "@/lib/tunnel-state";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
@@ -31,9 +32,12 @@ export function getMobileAccessToken(request: Request) {
 }
 
 export function isLoopbackRequest(request: Request) {
+  // Security fix (S1): X-Forwarded-For and Host are client-controlled headers.
+  // While the localtunnel is active, remote traffic can spoof both, so no
+  // request may be treated as local without a valid mobile access token.
+  if (isTunnelActive()) return false;
   const host = request.headers.get("host") ?? "";
-  const forwardedIp = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "";
-  return LOOPBACK_HOSTS.has(hostWithoutPort(host)) || forwardedIp === "127.0.0.1" || forwardedIp === "::1";
+  return LOOPBACK_HOSTS.has(hostWithoutPort(host));
 }
 
 export async function mobileAccessError(request: Request) {

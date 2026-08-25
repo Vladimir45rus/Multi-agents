@@ -1,17 +1,23 @@
 import { NextResponse } from "next/server";
 import { clearSystemEvents, listSystemEvents } from "@/lib/system-events";
 import { recordApiError } from "@/lib/api-errors";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
+
   const url = new URL(request.url);
   const requestedLimit = Number(url.searchParams.get("limit") ?? "100");
   const limit = Number.isFinite(requestedLimit) ? Math.max(1, Math.min(Math.round(requestedLimit), 200)) : 100;
   return NextResponse.json({ events: await listSystemEvents(limit) }, { headers: { "Cache-Control": "no-store" } });
 }
 
-export async function DELETE() {
+export async function DELETE(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     await clearSystemEvents();
     return NextResponse.json({ ok: true });

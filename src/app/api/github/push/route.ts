@@ -1,8 +1,11 @@
 import { pushWorkspaceToGitHub } from "@/lib/workspace";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json().catch(() => ({}))) as {
       locale?: "ru" | "en";

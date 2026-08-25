@@ -1,11 +1,14 @@
 import { connectWorkspaceDirectory, getWorkspaceRoot } from "@/lib/workspace-files";
 import { recordSystemEvent } from "@/lib/system-events";
 import { recordApiError } from "@/lib/api-errors";
+import { mobileAccessError } from "@/lib/mobile-auth";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-export async function GET() {
+export async function GET(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     return Response.json({ root: await getWorkspaceRoot() });
   } catch (error) {
@@ -15,6 +18,8 @@ export async function GET() {
 }
 
 export async function PUT(request: Request) {
+  const accessError = await mobileAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json()) as { directory?: string };
     if (!body.directory?.trim()) {

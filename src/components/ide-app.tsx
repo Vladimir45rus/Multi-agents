@@ -1152,6 +1152,14 @@ export function IdeApp() {
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
     setMobileTokenDraft(payload.settings.mobileAuthToken ?? "");
+    // S1 companion fix: mirror the mobile access token into a cookie so the
+    // desktop UI keeps working against every API route while the localtunnel
+    // is active (routes then require the token even for loopback-looking
+    // requests).
+    const mobileAccessToken = payload.settings.mobileAuthToken ?? "";
+    if (mobileAccessToken) {
+      document.cookie = `mobile_access_token=${encodeURIComponent(mobileAccessToken)}; path=/; max-age=31536000; samesite=strict`;
+    }
     setPreviewUrl(payload.settings.previewUrl ?? "");
     setPreviewCommandDraft(payload.settings.previewCommand ?? "npm run dev");
     setPreviewPortDraft(payload.settings.previewPort ?? 4173);
@@ -1172,7 +1180,14 @@ export function IdeApp() {
     setOpenTabs((previous) => previous.filter((tab) => validFileIds.has(tab.id)));
     if (target != null) localStorage.setItem("ui-selected-file", String(target));
     const file = payload.files.find((f) => f.id === target) ?? payload.files[0];
-    setEditorText(file?.content ?? "");
+    // H8 fix: incoming agent/chat-driven refreshes must not wipe unsaved code
+    // the user is currently typing in the editor buffer.
+    const keepsUnsavedBuffer = Boolean(
+      file
+      && file.id === selectedFileId
+      && (fileStatuses[file.path] === "modified" || fileStatuses[file.path] === "new"),
+    );
+    if (!keepsUnsavedBuffer) setEditorText(file?.content ?? "");
     setFileStatuses((previous) => Object.fromEntries(payload.files.map((item) => [item.path, previous[item.path] === "modified" || previous[item.path] === "new" ? previous[item.path] : "saved"])));
     setStatus(dict[l].synced);
 
@@ -2469,7 +2484,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         {/* Full-height side panels with a central editor/terminal work area. */}
         <div className="workspace-top-row flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
           {/* Explorer / File Tree */}
-          <div className={`workspace-column relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.explorer ? "workspace-column-collapsed" : ""} relative ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%` }}>
             {collapsedStrip("explorer", t.explorer)}
             {!collapsedPanels.explorer && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2522,7 +2537,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Editor */}
-          <div className={`workspace-column relative ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.editor ? "workspace-column-collapsed" : ""} relative ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%` }}>
             {collapsedStrip("editor", t.editor)}
             {!collapsedPanels.editor && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2580,14 +2595,17 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Lead Chat */}
-          <div className={`workspace-column relative ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} relative ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
-                <div className="panel-header flex items-center justify-between">
-                  <span className="flex min-w-0 items-center gap-2"><span className="truncate">{t.leadChat}</span><span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span></span>
-                  <div className="relative flex items-center gap-0.5">
-                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                <div className="panel-header chat-panel-header">
+                  <div className="chat-panel-title">
+                    <span className="truncate">{t.leadChat}</span>
+                    <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span>
+                  </div>
+                  <div className="chat-panel-actions relative">
+                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "lead" ? null : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("lead")}
                     <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
@@ -2637,14 +2655,17 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Group Chat */}
-          <div className={`workspace-column relative ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} relative ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
             {collapsedStrip("group", t.allChat)}
             {!collapsedPanels.group && (
               <section className="panel h-full">
-                <div className="panel-header flex items-center justify-between">
-                  <span className="flex min-w-0 items-center gap-2"><span className="truncate">{t.allChat}</span><span className={`whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span></span>
-                  <div className="relative flex items-center gap-1">
-                    <span className="hidden text-[10px] text-[var(--text-secondary)] 2xl:inline">Агентов: {data?.agents.length ?? 0} | Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                <div className="panel-header chat-panel-header">
+                  <div className="chat-panel-title">
+                    <span className="truncate">{t.allChat}</span>
+                    <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span>
+                  </div>
+                  <div className="chat-panel-actions relative">
+                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "group" ? null : "group")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("group")}
                     {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
@@ -2652,7 +2673,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         {filter === "all" ? "Все" : filter === "tester" ? "QA" : filter === "uiux" ? "UI/UX" : "Архитектор"}
                       </button>
                     ))}
-                    <label className="hidden items-center gap-1 text-[9px] text-[var(--text-muted)] xl:flex" title="Автоматически утверждать цикл">
+                    <label className="flex items-center gap-1 rounded border border-[var(--border-default)] px-1.5 py-1 text-[9px] text-[var(--text-muted)]" title="Автоматически утверждать цикл">
                       <span>AUTO</span>
                       <input type="checkbox" checked={autoApproveDraft} onChange={(event) => void toggleAutoApprove(event.target.checked)} disabled={busy} />
                     </label>
@@ -2724,7 +2745,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         {/* Bottom panel stays in the flex flow, so collapsing it cannot overlap the workspace. */}
         <div className="logs-panel h-[200px] w-full shrink-0 overflow-y-auto relative z-10 flex border-t border-[var(--border-default)] bg-slate-950 shadow-[0_-12px_30px_rgba(0,0,0,0.24)]">
           {/* Terminal */}
-          <div className={`workspace-column relative ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.terminal ? "workspace-column-collapsed" : ""} relative ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%` }}>
             {collapsedStrip("terminal", t.terminal, false)}
             {!collapsedPanels.terminal && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2756,7 +2777,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </div>
 
           {/* Logs / System Events */}
-          <div className={`workspace-column relative ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.logs ? "workspace-column-collapsed" : ""} relative ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%` }}>
             {collapsedStrip("logs", t.logsTitle, false)}
             {!collapsedPanels.logs && (
               <section className="panel h-full">
