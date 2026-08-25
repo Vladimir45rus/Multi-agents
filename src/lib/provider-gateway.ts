@@ -341,7 +341,20 @@ async function* readSse(response: Response): AsyncGenerator<string> {
   }
 }
 
-function extractText(provider: string, raw: string) {
+// H6 fix: streamed OpenAI-style tool_call deltas arrive fragmented (name in
+// the first delta, argument pieces spread over the rest of the stream). The
+// accumulator joins them per tool-call index so one complete call can be
+// emitted when the stream finishes.
+type ToolCallAccumulator = {
+  calls: Map<number, { name: string; arguments: string }>;
+  order: number[];
+};
+
+function createToolCallAccumulator(): ToolCallAccumulator {
+  return { calls: new Map(), order: [] };
+}
+
+function extractText(provider: string, raw: string, tools?: ToolCallAccumulator) {
   if (raw === "[DONE]") return { done: true, text: "" };
 
   let payload: unknown;
@@ -375,6 +388,23 @@ function extractText(provider: string, raw: string) {
   // Tool call delta
   const toolCalls = Array.isArray(delta?.tool_calls) ? delta.tool_calls : [];
   if (toolCalls.length > 0) {
+    if (tools) {
+      for (const entry of toolCalls) {
+        const tc = entry as Record<string, unknown>;
+        const index = typeof tc.index === "number" ? tc.index : 0;
+        const func = tc.function as Record<string, unknown> | undefined;
+        let slot = tools.calls.get(index);
+        if (!slot) {
+          slot = { name: "", arguments: "" };
+          tools.calls.set(index, slot);
+          tools.order.push(index);
+        }
+        if (typeof func?.name === "string" && func.name) slot.name = func.name;
+        if (typeof func?.arguments === "string") slot.arguments += func.arguments;
+      }
+      return { done: false, text: "" };
+    }
+
     const tc = toolCalls[0] as Record<string, unknown>;
     const func = tc?.function as Record<string, unknown> | undefined;
     if (typeof func?.name === "string" && typeof func?.arguments === "string") {
@@ -415,10 +445,18 @@ export async function* streamProviderResponse(
       const normalized = validateRequest(candidate);
       const { response, cleanup } = await fetchWithRetry(normalized, messages, options, options.tools);
       try {
+        // H6 fix: accumulate fragmented tool_call deltas and emit complete
+        // calls when the stream ends, instead of forwarding raw fragments
+        // that concatenate into unparseable JSON downstream.
+        const toolStream = createToolCallAccumulator();
         for await (const raw of readSse(response)) {
-          const parsed = extractText(normalized.provider, raw);
+          const parsed = extractText(normalized.provider, raw, toolStream);
           if (parsed.text) yield parsed.text;
-          if (parsed.done) return;
+          if (parsed.done) break;
+        }
+        for (const index of toolStream.order) {
+          const call = toolStream.calls.get(index);
+          if (call && call.name) yield JSON.stringify({ function: { name: call.name, arguments: call.arguments } });
         }
         return;
       } finally {

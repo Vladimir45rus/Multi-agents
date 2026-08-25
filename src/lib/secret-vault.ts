@@ -1,6 +1,7 @@
 import "server-only";
 
 import { randomUUID } from "node:crypto";
+import { decryptLocalSecret, isLocalCipherSecret } from "@/lib/secret-cipher";
 
 // Stored secrets that were encrypted by Electron's safeStorage are prefixed with this marker.
 const ENC_PREFIX = "enc:v1:";
@@ -50,10 +51,13 @@ function decryptViaIpc(encryptedBase64: string): Promise<string> {
 }
 
 /**
- * Returns the plaintext of a stored secret. Plaintext values (legacy / non-Electron)
- * are returned unchanged; `enc:v1:` values are decrypted via the Electron SafeStorage bridge.
+ * Returns the plaintext of a stored secret. Values are dispatched by marker:
+ * `enc:s2:` — local AES-GCM at-rest encryption; `enc:v1:` — Electron SafeStorage
+ * via IPC bridge; anything else is legacy plaintext returned unchanged.
  */
 export async function decryptSecret(stored: string): Promise<string> {
+  // H2 fix: locally encrypted values are decrypted without the Electron vault.
+  if (isLocalCipherSecret(stored)) return decryptLocalSecret(stored);
   if (!isEncryptedSecret(stored)) return stored;
 
   const encoded = stored.slice(ENC_PREFIX.length);

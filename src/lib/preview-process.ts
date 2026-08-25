@@ -1,6 +1,6 @@
 import "server-only";
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { db } from "@/db";
 import { workspaceSettings } from "@/db/schema";
 import { getWorkspaceRoot } from "@/lib/workspace-files";
@@ -14,6 +14,24 @@ let starting = false;
 let stopping = false;
 
 let failureReported = false;
+
+// H7 fix: on Windows the preview command runs through `cmd /c npm.cmd ...`,
+// so killing only the direct child leaves npm/node grandchildren alive and
+// holding the port. taskkill /T terminates the whole process tree; on POSIX a
+// detached child gets its own process group which receives the signal.
+function killProcessTree(target: ChildProcess) {
+  const pid = target.pid;
+  if (!pid) return;
+  if (process.platform === "win32") {
+    execFile("taskkill", ["/pid", String(pid), "/T", "/F"], () => undefined);
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    target.kill("SIGTERM");
+  }
+}
 
 function appendOutput(chunk: Buffer | string) {
   output = `${output}${chunk.toString()}`.slice(-MAX_OUTPUT);
@@ -56,7 +74,7 @@ export async function startPreview() {
       "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "ComSpec", "COMSPEC", "LANG", "LC_ALL",
     ]);
     const safeEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => allowedEnvironmentKeys.has(key)));
-    child = spawn(parts.executable, parts.args, { cwd: root, env: { ...safeEnv, NODE_ENV: "development", BROWSER: "none", PORT: String(port) }, shell: false, windowsHide: true });
+    child = spawn(parts.executable, parts.args, { cwd: root, env: { ...safeEnv, NODE_ENV: "development", BROWSER: "none", PORT: String(port) }, shell: false, windowsHide: true, detached: process.platform !== "win32" });
     const onOutput = (chunk: Buffer | string) => {
       const text = chunk.toString();
       appendOutput(text);
@@ -98,7 +116,19 @@ export async function startPreview() {
 
 export async function stopPreview() {
   stopping = true;
-  if (child && !child.killed) child.kill();
+  // H7 fix: kill the entire process tree and wait (bounded) for it to exit so
+  // no zombie processes keep the preview port busy on Windows.
+  const dying = child;
+  if (dying && !dying.killed && dying.pid) {
+    killProcessTree(dying);
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(() => resolve(), 3_000);
+      dying.once("close", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+    });
+  }
   child = null;
   await db.update(workspaceSettings).set({ previewUrl: "", updatedAt: new Date() });
   await recordSystemEvent("info", "preview", "Preview stopped");

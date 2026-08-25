@@ -257,6 +257,19 @@ async function startEmbeddedServer() {
 
 // --- window ---
 
+// Security fix (H4): block top-level navigations away from the app origin so
+// previewed project content cannot load arbitrary pages inside the main
+// window (where the desktopBridge preload is exposed). External http(s) URLs
+// are handed to the system browser instead.
+function guardNavigation(webContents, allowedPrefixes) {
+  webContents.on("will-navigate", (event, url) => {
+    if (allowedPrefixes.some((prefix) => url.startsWith(prefix))) return;
+    event.preventDefault();
+    log("app", `Blocked navigation to ${url}`);
+    if (url.startsWith("https://") || url.startsWith("http://")) shell.openExternal(url);
+  });
+}
+
 function createWindow(startUrl) {
   const state = loadSessionState();
   const bounds = state.bounds || { width: 1680, height: 1050 };
@@ -288,6 +301,8 @@ function createWindow(startUrl) {
     if (url.startsWith("https://") || url.startsWith("http://")) shell.openExternal(url);
     return { action: "deny" };
   });
+
+  guardNavigation(mainWindow.webContents, [startUrl]);
 
   mainWindow.webContents.on("console-message", (_event, details) => {
     const level = ["verbose", "info", "warning", "error"][details.level] ?? details.level;
@@ -391,6 +406,7 @@ function createOverlayWindow(startUrl) {
   const overlayUrl = typeof startUrl === "string"
     ? startUrl.replace(/\/[^/]*$/, "") + "/overlay"
     : `http://127.0.0.1:${DEFAULT_SERVER_PORT}/overlay`;
+  guardNavigation(overlayWindow.webContents, [overlayUrl]);
   log("app", `Opening overlay at ${overlayUrl}`);
   overlayWindow.loadURL(overlayUrl);
 }

@@ -37,7 +37,7 @@ export function PreviewModal({ open, url, loading = false, onClose, onReload, on
         </header>
         <div className="flex min-h-0 flex-1 items-center justify-center bg-[#111214] p-2">
           {url ? (
-            <iframe key={`${url}-${reloadKey}`} title="Project live preview" src={url} className={`h-full border border-[#3a3d41] bg-white ${mobile ? "w-[390px] max-w-full" : "w-full"}`} />
+            <iframe key={`${url}-${reloadKey}`} title="Project live preview" src={url} sandbox="allow-scripts allow-forms allow-popups allow-modals" className={`h-full border border-[#3a3d41] bg-white ${mobile ? "w-[390px] max-w-full" : "w-full"}`} />
           ) : (
             <div className="text-center text-xs text-[#9da3b2]">
               <p className="mb-3">{loading ? "Запуск dev-сервера..." : "Dev-сервер проекта не запущен."}</p>

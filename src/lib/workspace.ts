@@ -27,6 +27,7 @@ import {
   type ProviderGatewayOptions,
 } from "@/lib/provider-gateway";
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
+import { encryptSecret } from "@/lib/secret-cipher";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
@@ -713,7 +714,8 @@ function mergeApiKeys(current: Record<string, string>, incoming?: Record<string,
     if (normalizedProvider.length > 80 || normalizedValue.length > 2048 || hasControlCharacters) {
       throw new Error(`Invalid API key for provider ${normalizedProvider}`);
     }
-    next[normalizedProvider] = normalizedValue;
+    // H2 fix: API keys are encrypted before they touch SQLite.
+    next[normalizedProvider] = encryptSecret(normalizedValue);
   }
   return next;
 }
@@ -742,7 +744,10 @@ export async function updateWorkspaceSettings(payload: {
 }) {
   await ensureWorkspaceBootstrap();
   const current = await getWorkspaceSettingsRow();
-  const githubToken = payload.removeGithubToken ? "" : compact(payload.githubToken) || current.githubToken;
+  // H2 fix: the GitHub token is encrypted before it is persisted; values that
+  // already carry an encryption marker (local or Electron vault) pass through.
+  const githubTokenInput = payload.removeGithubToken ? "" : compact(payload.githubToken) || current.githubToken;
+  const githubToken = githubTokenInput ? encryptSecret(githubTokenInput) : "";
   const githubRepo = payload.githubRepo === undefined ? current.githubRepo : compact(payload.githubRepo);
   const telegramToken = payload.removeTelegramToken ? "" : compact(payload.telegramToken) || current.telegramToken;
   const fallbackModels = (payload.fallbackModels ?? current.fallbackModels ?? []).map((model) => compact(model)).filter(Boolean).slice(0, 12);
