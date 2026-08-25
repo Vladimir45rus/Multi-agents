@@ -9,6 +9,7 @@
     { "idx": 4, "version": "7", "when": 1787341632803, "tag": "0004_mobile_auth", "breakpoints": true },
     { "idx": 5, "version": "7", "when": 1787341632804, "tag": "0005_ngrok", "breakpoints": true },
     { "idx": 6, "version": "7", "when": 1787341632805, "tag": "0006_localtunnel", "breakpoints": true },
-    { "idx": 7, "version": "7", "when": 1787341632806, "tag": "0007_v150", "breakpoints": true }
+    { "idx": 7, "version": "7", "when": 1787341632806, "tag": "0007_v150", "breakpoints": true },
+    { "idx": 8, "version": "7", "when": 1787341632807, "tag": "0008_hot_path_indexes", "breakpoints": true }
   ]
 }

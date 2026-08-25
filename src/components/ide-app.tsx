@@ -915,7 +915,7 @@ export function IdeApp() {
     const setter = channel === "lead" ? setLeadMessage : setGroupMessage;
     setter(value);
     const beforeCursor = value.slice(0, cursor);
-    const match = beforeCursor.match(/(^|\\s)@([^\\s@]*)$/);
+    const match = beforeCursor.match(/(^|\s)@([^\s@]*)$/);
     if (!match) {
       setMentionState(null);
       return;

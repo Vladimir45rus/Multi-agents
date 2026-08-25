@@ -258,9 +258,16 @@ export async function executeToolCall(
 export function parseToolCall(
   content: string,
 ): { name: string; arguments: Record<string, unknown> } | null {
+  // H5 fix: only a pure JSON document counts as a tool call. Descriptive prose
+  // that merely contains a JSON snippet (prompt injection from read files,
+  // code samples, etc.) must never trigger tool execution.
+  const trimmed = content.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  if (trimmed.length > 100_000) return null;
+
   // Try JSON format (OpenAI-style tool call results)
   try {
-    const obj = JSON.parse(content);
+    const obj = JSON.parse(trimmed);
     if (obj?.function?.name) {
       const args = typeof obj.function.arguments === "string"
         ? JSON.parse(obj.function.arguments)

@@ -289,6 +289,10 @@ export function resolveConfirmation(confirmationId: string, approved: boolean) {
   return true;
 }
 
+// Fix: manual confirmations must not wait forever — if the user (or Telegram)
+// never answers, the task resolves as "not approved" after this TTL.
+const CONFIRMATION_TIMEOUT_MS = 10 * 60_000;
+
 function waitForConfirmation(confirmationId: string, signal?: AbortSignal): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     if (signal?.aborted) {
@@ -297,12 +301,20 @@ function waitForConfirmation(confirmationId: string, signal?: AbortSignal): Prom
     }
 
     const onAbort = () => {
+      clearTimeout(timeout);
       pendingConfirmations.delete(confirmationId);
       reject(new OrchestratorCancelledError("cancelled"));
     };
 
+    const timeout = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      pendingConfirmations.delete(confirmationId);
+      resolve(false);
+    }, CONFIRMATION_TIMEOUT_MS);
+
     signal?.addEventListener("abort", onAbort, { once: true });
     pendingConfirmations.set(confirmationId, (approved) => {
+      clearTimeout(timeout);
       signal?.removeEventListener("abort", onAbort);
       resolve(approved);
     });

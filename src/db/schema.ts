@@ -1,4 +1,4 @@
-import { integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { AgentIdentity } from "@/lib/agent-identity";
 
 export const workspaceSettings = sqliteTable("workspace_settings", {
@@ -63,7 +63,10 @@ export const chatMessages = sqliteTable("chat_messages", {
     .notNull()
     .default({}),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
-});
+}, (table) => [
+  // Fix: hot-path indexes for chat history lookups (channel filter + ordering).
+  index("chat_messages_channel_id_idx").on(table.chatChannel, table.id),
+]);
 
 export const systemEvents = sqliteTable("system_events", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -98,7 +101,10 @@ export const fileHistory = sqliteTable("file_history", {
   previousContent: text("previous_content").notNull(),
   actorAgentId: integer("actor_agent_id").notNull(),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
-});
+}, (table) => [
+  // Fix: rollback lookups filter by file id.
+  index("file_history_file_id_idx").on(table.fileId),
+]);
 
 export const workspaceFileHistory = sqliteTable("workspace_file_history", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -108,7 +114,10 @@ export const workspaceFileHistory = sqliteTable("workspace_file_history", {
   backupPath: text("backup_path").notNull().default(""),
   actorAgentId: integer("actor_agent_id").notNull(),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
-});
+}, (table) => [
+  // Fix: workspace rollback selects the latest entry per path.
+  index("workspace_file_history_file_path_idx").on(table.filePath),
+]);
 
 export const agentEvents = sqliteTable("agent_events", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -124,7 +133,10 @@ export const agentEvents = sqliteTable("agent_events", {
   proposal: text("proposal").notNull().default(""),
   iteration: integer("iteration").notNull().default(0),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
-});
+}, (table) => [
+  // Fix: orchestrator state/recovery fetches events per task.
+  index("agent_events_task_id_idx").on(table.taskId),
+]);
 
 export const orchestratorReports = sqliteTable("orchestrator_reports", {
   id: integer("id").primaryKey({ autoIncrement: true }),

@@ -5,6 +5,7 @@ import { readFile, readdir, realpath, stat, lstat, mkdir, writeFile, unlink, ren
 import path from "node:path";
 import { asc, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
+import { sqlite } from "@/db";
 import { agents, projectFiles, workspaceFileHistory, workspaceSettings } from "@/db/schema";
 import { ensureWorkspaceBootstrap } from "@/lib/workspace";
 import { assertRelativePath, compact, resolveWithinRoot, toPosix } from "@/lib/workspace-paths";
@@ -284,10 +285,23 @@ export async function renameWorkspaceEntry(actorAgentId: number, relativePath: s
     const affected = rows.filter((row) => row.path === sourcePath || row.path === sourceMarker || row.path.startsWith(`${sourcePath}/`));
     if (affected.length === 0) throw new Error("Workspace path not found");
     if (rows.some((row) => row.path === targetPath || row.path === `${VIRTUAL_DIRECTORY_PREFIX}${targetPath}` || row.path.startsWith(`${targetPath}/`))) throw new Error("Target path already exists");
-    for (const row of affected) {
-      const nextPath = row.path === sourceMarker ? `${VIRTUAL_DIRECTORY_PREFIX}${targetPath}` : row.path === sourcePath ? targetPath : `${targetPath}/${row.path.slice(`${sourcePath}/`.length)}`;
-      await db.delete(projectFiles).where(eq(projectFiles.path, row.path));
-      await db.insert(projectFiles).values({ path: nextPath, language: row.language, content: row.content, updatedAt: new Date() });
+    // Fix: the per-row delete+insert rename loop runs inside one transaction,
+    // so a mid-loop failure cannot leave the unique-path index inconsistent.
+    sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      for (const row of affected) {
+        const nextPath = row.path === sourceMarker ? `${VIRTUAL_DIRECTORY_PREFIX}${targetPath}` : row.path === sourcePath ? targetPath : `${targetPath}/${row.path.slice(`${sourcePath}/`.length)}`;
+        await db.delete(projectFiles).where(eq(projectFiles.path, row.path));
+        await db.insert(projectFiles).values({ path: nextPath, language: row.language, content: row.content, updatedAt: new Date() });
+      }
+      sqlite.exec("COMMIT");
+    } catch (error) {
+      try {
+        sqlite.exec("ROLLBACK");
+      } catch {
+        // No active transaction: nothing to roll back.
+      }
+      throw error;
     }
     return { path: sourcePath, nextPath: targetPath };
   }
@@ -306,10 +320,22 @@ export async function renameWorkspaceEntry(actorAgentId: number, relativePath: s
   const indexedFiles = await db.select().from(projectFiles);
   const prefix = `${source.relativePath}/`;
   const affected = indexedFiles.filter((file) => file.path === source.relativePath || file.path.startsWith(prefix));
-  for (const file of affected) {
-    const nextPath = file.path === source.relativePath ? target.relativePath : `${target.relativePath}/${file.path.slice(prefix.length)}`;
-    await db.delete(projectFiles).where(eq(projectFiles.path, file.path));
-    await db.insert(projectFiles).values({ path: nextPath, language: languageFromPath(nextPath), content: file.content, updatedAt: new Date() });
+  // Fix: same transactional guarantee for the physical-root rename loop.
+  sqlite.exec("BEGIN IMMEDIATE");
+  try {
+    for (const file of affected) {
+      const nextPath = file.path === source.relativePath ? target.relativePath : `${target.relativePath}/${file.path.slice(prefix.length)}`;
+      await db.delete(projectFiles).where(eq(projectFiles.path, file.path));
+      await db.insert(projectFiles).values({ path: nextPath, language: languageFromPath(nextPath), content: file.content, updatedAt: new Date() });
+    }
+    sqlite.exec("COMMIT");
+  } catch (error) {
+    try {
+      sqlite.exec("ROLLBACK");
+    } catch {
+      // No active transaction: nothing to roll back.
+    }
+    throw error;
   }
   return { path: source.relativePath, nextPath: target.relativePath };
 }

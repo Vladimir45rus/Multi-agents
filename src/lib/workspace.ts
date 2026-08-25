@@ -5,7 +5,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import { mkdir, writeFile } from "node:fs/promises";
 import pathModule from "node:path";
 import { promisify } from "node:util";
-import { db, runMigrations } from "@/db";
+import { db, runMigrations, sqlite } from "@/db";
 import {
   agents,
   analysisFindings,
@@ -958,9 +958,22 @@ export async function assignMainCoder(agentId: number, locale?: string) {
   const candidate = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (candidate.length === 0) throw new Error(t(activeLocale, "Агент не найден", "Agent not found"));
 
-  await db.update(agents).set({ role: "advisor" }).where(eq(agents.role, "main"));
-  await db.update(agents).set({ role: "main" }).where(eq(agents.id, agentId));
-  await db.update(workspaceSettings).set({ mainCoderAgentId: agentId, updatedAt: new Date() });
+  // Fix: demote/promote/settings run inside a single SQLite transaction so a
+  // crash between the steps can never leave the workspace without a Lead.
+  sqlite.exec("BEGIN IMMEDIATE");
+  try {
+    await db.update(agents).set({ role: "advisor" }).where(eq(agents.role, "main"));
+    await db.update(agents).set({ role: "main" }).where(eq(agents.id, agentId));
+    await db.update(workspaceSettings).set({ mainCoderAgentId: agentId, updatedAt: new Date() });
+    sqlite.exec("COMMIT");
+  } catch (error) {
+    try {
+      sqlite.exec("ROLLBACK");
+    } catch {
+      // No active transaction: nothing to roll back.
+    }
+    throw error;
+  }
 
   await pushMessage({
     chatChannel: "group",
