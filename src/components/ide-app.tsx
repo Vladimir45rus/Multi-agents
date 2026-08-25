@@ -548,7 +548,9 @@ export function IdeApp() {
   const [searchResults, setSearchResults] = useState<Array<{ path: string; line: number; content: string }>>([]);
 
   const [apiKeysDraft, setApiKeysDraft] = useState<Record<string, string>>({});
+  const [apiKeysToRemove, setApiKeysToRemove] = useState<Record<string, boolean>>({});
   const [githubTokenDraft, setGithubTokenDraft] = useState("");
+  const [removeGithubToken, setRemoveGithubToken] = useState(false);
   const [githubRepoDraft, setGithubRepoDraft] = useState("");
   const [githubAutoPushDraft, setGithubAutoPushDraft] = useState(false);
   const [autoApproveDraft, setAutoApproveDraft] = useState(false);
@@ -567,6 +569,7 @@ export function IdeApp() {
   const [previewCommandDraft, setPreviewCommandDraft] = useState("npm run dev");
   const [previewPortDraft, setPreviewPortDraft] = useState(4173);
   const [telegramTokenDraft, setTelegramTokenDraft] = useState("");
+  const [removeTelegramToken, setRemoveTelegramToken] = useState(false);
   const [telegramChatIdDraft, setTelegramChatIdDraft] = useState("");
   const [fallbackModelsDraft, setFallbackModelsDraft] = useState("");
   const [templateOpen, setTemplateOpen] = useState(false);
@@ -654,6 +657,7 @@ export function IdeApp() {
     if (!saved) return false;
     return Object.values(apiKeysDraft).some((value) => Boolean(value.trim()))
       || githubTokenDraft.trim() !== ""
+      || removeGithubToken
       || githubRepoDraft !== saved.githubRepo
       || githubAutoPushDraft !== saved.githubAutoPush
       || autoApproveDraft !== saved.autoApprove
@@ -662,9 +666,12 @@ export function IdeApp() {
       || previewCommandDraft !== saved.previewCommand
       || previewPortDraft !== saved.previewPort
       || telegramTokenDraft.trim() !== ""
+      || removeTelegramToken
       || telegramChatIdDraft !== saved.telegramChatId
-      || fallbackModelsDraft !== saved.fallbackModels.join("\n");
-  }, [apiKeysDraft, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, autoApproveDraft, mobileTokenDraft, localtunnelEnabledDraft, previewCommandDraft, previewPortDraft, telegramTokenDraft, telegramChatIdDraft, fallbackModelsDraft]);
+      || fallbackModelsDraft !== saved.fallbackModels.join("\n")
+      || Object.values(apiKeysToRemove).some(Boolean);
+  }, [apiKeysDraft, apiKeysToRemove, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, removeGithubToken, autoApproveDraft, mobileTokenDraft, localtunnelEnabledDraft, previewCommandDraft, previewPortDraft, telegramTokenDraft, removeTelegramToken, telegramChatIdDraft, fallbackModelsDraft]);
+
   const newAgentDirty = useMemo(() => Boolean(
     newAgent.name.trim()
       || newAgent.description.trim()
@@ -1138,7 +1145,9 @@ export function IdeApp() {
     setData(payload);
     setWorkspaceRootDraft(payload.settings?.projectRoot ?? "");
     setApiKeysDraft(payload.settings?.apiKeys ?? {});
+    setApiKeysToRemove({});
     setGithubTokenDraft(payload.settings?.githubToken ?? "");
+    setRemoveGithubToken(false);
     setGithubRepoDraft(payload.settings?.githubRepo ?? "");
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
@@ -1147,6 +1156,7 @@ export function IdeApp() {
     setPreviewCommandDraft(payload.settings.previewCommand ?? "npm run dev");
     setPreviewPortDraft(payload.settings.previewPort ?? 4173);
     setTelegramTokenDraft("");
+    setRemoveTelegramToken(false);
     setTelegramChatIdDraft(payload.settings.telegramChatId ?? "");
     setFallbackModelsDraft((payload.settings.fallbackModels ?? []).join("\n"));
     setLocaltunnelEnabledDraft(Boolean(payload.settings.localtunnelEnabled));
@@ -1573,6 +1583,9 @@ export function IdeApp() {
           telegramToken: telegramTokenPayload,
           telegramChatId: telegramChatIdDraft,
           fallbackModels: fallbackModelsDraft.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean),
+          removeApiKeys: Object.entries(apiKeysToRemove).filter(([, remove]) => remove).map(([provider]) => provider),
+          removeGithubToken,
+          removeTelegramToken,
           previewCommand: previewCommandDraft,
           previewPort: previewPortDraft,
           previewUrl,
@@ -1584,8 +1597,11 @@ export function IdeApp() {
       }
       await loadWorkspace(selectedFileId, locale);
       setApiKeysDraft({});
+      setApiKeysToRemove({});
       setGithubTokenDraft("");
+      setRemoveGithubToken(false);
       setTelegramTokenDraft("");
+      setRemoveTelegramToken(false);
       setStatus(locale === "ru" ? "Настройки сохранены" : "Settings saved");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Settings update failed");
@@ -2887,11 +2903,28 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   <p className="text-[11px] text-[var(--text-secondary)]">{t.defaultModel}: {provider.defaultModel}</p>
                   <input
                     value={apiKeysDraft[provider.id] ?? ""}
-                    onChange={(e) => setApiKeysDraft((prev) => ({ ...prev, [provider.id]: e.target.value }))}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      setApiKeysDraft((prev) => ({ ...prev, [provider.id]: value }));
+                      if (value.trim()) setApiKeysToRemove((prev) => ({ ...prev, [provider.id]: false }));
+                    }}
                     type="password"
+                    autoComplete="off"
                     className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
-                    placeholder={`${provider.label} API key`}
+                    placeholder={data?.settings.apiKeysConfigured?.[provider.id] ? `${provider.label} API key сохранён локально` : `${provider.label} API key`}
                   />
+                  {data?.settings.apiKeysConfigured?.[provider.id] ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setApiKeysDraft((prev) => ({ ...prev, [provider.id]: "" }));
+                        setApiKeysToRemove((prev) => ({ ...prev, [provider.id]: true }));
+                      }}
+                      className="mt-1 rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400"
+                    >
+                      {locale === "ru" ? "Удалить сохранённый ключ" : "Remove saved key"}
+                    </button>
+                  ) : null}
                 </div>
               ))}
             </div>
@@ -2902,11 +2935,21 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 {t?.githubToken}
                 <input
                   value={githubTokenDraft}
-                  onChange={(e) => setGithubTokenDraft(e.target.value)}
+                  onChange={(e) => {
+                    setGithubTokenDraft(e.target.value);
+                    if (e.target.value.trim()) setRemoveGithubToken(false);
+                  }}
                   type="password"
+                  autoComplete="off"
+                  placeholder={data?.settings.githubTokenConfigured ? "GitHub token сохранён локально" : ""}
                   className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                 />
               </label>
+              {data?.settings.githubTokenConfigured ? (
+                <button type="button" onClick={() => { setGithubTokenDraft(""); setRemoveGithubToken(true); }} className="mb-1 rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400">
+                  {locale === "ru" ? "Удалить сохранённый GitHub-токен" : "Remove saved GitHub token"}
+                </button>
+              ) : null}
               <label className="mb-1 block text-[11px] text-[var(--text-secondary)]">
                 {t?.githubRepo}
                 <input
@@ -2997,8 +3040,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">Telegram</p>
             <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Bot Token
-              <input value={telegramTokenDraft} onChange={(e) => setTelegramTokenDraft(e.target.value)} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "••••••••" : "123456:ABC..."} className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+              <input value={telegramTokenDraft} onChange={(e) => { setTelegramTokenDraft(e.target.value); if (e.target.value.trim()) setRemoveTelegramToken(false); }} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "Telegram token сохранён локально" : "123456:ABC..."} className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             </label>
+            {data?.settings.telegramTokenConfigured ? (
+              <button type="button" onClick={() => { setTelegramTokenDraft(""); setRemoveTelegramToken(true); }} className="mb-2 rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400">
+                {locale === "ru" ? "Удалить сохранённый Telegram-токен" : "Remove saved Telegram token"}
+              </button>
+            ) : null}
             <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Chat ID
               <input value={telegramChatIdDraft} onChange={(e) => setTelegramChatIdDraft(e.target.value)} placeholder="-100..." className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             </label>

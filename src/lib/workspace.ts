@@ -661,12 +661,14 @@ export async function updateWorkspaceSettings(payload: {
   projectTemplate?: string;
   projectTemplatePrompt?: string;
   removeApiKeys?: string[];
+  removeGithubToken?: boolean;
+  removeTelegramToken?: boolean;
 }) {
   await ensureWorkspaceBootstrap();
   const current = await getWorkspaceSettingsRow();
-  const githubToken = compact(payload.githubToken) || current.githubToken;
+  const githubToken = payload.removeGithubToken ? "" : compact(payload.githubToken) || current.githubToken;
   const githubRepo = payload.githubRepo === undefined ? current.githubRepo : compact(payload.githubRepo);
-  const telegramToken = compact(payload.telegramToken) || current.telegramToken;
+  const telegramToken = payload.removeTelegramToken ? "" : compact(payload.telegramToken) || current.telegramToken;
   const fallbackModels = (payload.fallbackModels ?? current.fallbackModels ?? []).map((model) => compact(model)).filter(Boolean).slice(0, 12);
 
   await db

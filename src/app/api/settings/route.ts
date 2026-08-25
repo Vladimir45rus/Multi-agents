@@ -26,6 +26,8 @@ async function handleUpdate(request: Request) {
     projectTemplate?: string;
     projectTemplatePrompt?: string;
     removeApiKeys?: string[];
+    removeGithubToken?: boolean;
+    removeTelegramToken?: boolean;
   };
   await updateWorkspaceSettings(body);
   if (body.telegramToken || body.telegramChatId) {
