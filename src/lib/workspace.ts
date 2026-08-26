@@ -28,7 +28,7 @@ import {
 } from "@/lib/provider-gateway";
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { encryptSecret } from "@/lib/secret-cipher";
-import { isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
+import { isPureToolCallChunk, isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
@@ -64,7 +64,7 @@ export type ChatMessageMetadata = {
 export type ChatStreamEvent =
   | { type: "agent_start"; channel: ChatChannel; identity: AgentIdentity }
   | { type: "delta"; channel: ChatChannel; identity: AgentIdentity; text: string }
-  | { type: "agent_done"; channel: ChatChannel; identity: AgentIdentity; content: string }
+  | { type: "agent_done"; channel: ChatChannel; identity: AgentIdentity; content: string; messageId?: number }
   | { type: "agent_error"; channel: ChatChannel; identity: AgentIdentity; message: string; status?: number; rateLimited?: boolean }
   | { type: "done"; channel: ChatChannel }
   | { type: "error"; channel: ChatChannel; message: string };
@@ -413,10 +413,10 @@ export async function pushMessage(payload: {
   agentName: string | null;
   content: string;
   metadata?: ChatMessageMetadata;
-}) {
+}): Promise<{ id: number } | null> {
   if (payload.senderType === "system") {
     await db.insert(systemEvents).values({ level: "info", source: "workspace", message: payload.content, details: "" });
-    return;
+    return null;
   }
 
   // UX fix (log routing): raw provider/connection errors and tool-call JSON
@@ -425,23 +425,24 @@ export async function pushMessage(payload: {
   if (payload.senderType !== "user") {
     if (isTechnicalErrorText(payload.content)) {
       await db.insert(systemEvents).values({ level: "error", source: payload.agentName ?? "provider", message: payload.content.slice(0, 2_000), details: "" });
-      return;
+      return null;
     }
     const toolCall = parseToolCallDisplay(payload.content);
     if (toolCall) {
       await db.insert(systemEvents).values({ level: "info", source: payload.agentName ?? "agent-tools", message: `Tool call: ${toolCall.name}`, details: payload.content.slice(0, 4_000) });
-      return;
+      return null;
     }
   }
 
   const displayContent = payload.senderType === "user" ? payload.content : sanitizeChatContent(payload.content);
-  await db.insert(chatMessages).values({
+  const [inserted] = await db.insert(chatMessages).values({
     chatChannel: payload.chatChannel,
     senderType: payload.senderType,
     agentName: payload.agentName,
     content: displayContent,
     metadata: payload.metadata ?? {},
-  });
+  }).returning({ id: chatMessages.id });
+  return { id: inserted.id };
 }
 
 export async function getWorkspaceSettingsRow() {
@@ -1400,6 +1401,10 @@ async function* streamAgentReply(
       },
     })) {
       chunkText += chunk;
+      // UX fix (stream suppression): complete tool-call JSON payloads are
+      // consumed by the orchestrator loop above but must never reach the chat
+      // text stream shown to the user.
+      if (isPureToolCallChunk(chunk)) continue;
       yield { type: "delta", channel, identity, text: chunk };
     }
 
@@ -1424,7 +1429,7 @@ async function* streamAgentReply(
 
   if (!fullResponse.trim()) throw new Error(`${agent.name} returned an empty response`);
 
-  await pushMessage({
+  const saved = await pushMessage({
     chatChannel: channel,
     senderType: agent.role === "main" ? "main" : "advisor",
     agentName: agent.name,
@@ -1432,7 +1437,7 @@ async function* streamAgentReply(
     metadata: { identity },
   });
 
-  yield { type: "agent_done", channel, identity, content: fullResponse };
+  yield { type: "agent_done", channel, identity, content: fullResponse, messageId: saved?.id };
 }
 
 export async function* streamWorkspaceMessage(

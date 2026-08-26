@@ -12,6 +12,11 @@ export type ChatStreamState = {
   finishedAt?: string;
   error?: string;
   rateLimited?: boolean;
+  // Dedupe fix: stable temporary card id for the streaming bubble and the real
+  // persisted message id delivered with the done event, so the finished bubble
+  // updates the existing card by ID instead of spawning a duplicate.
+  tempId?: string;
+  savedId?: number;
 };
 
 export function appendStreamDelta(
@@ -20,6 +25,7 @@ export function appendStreamDelta(
   identity: AgentIdentity,
   text: string,
   now = new Date().toISOString(),
+  tempId?: string,
 ): ChatStreamState {
   return {
     channel,
@@ -27,6 +33,7 @@ export function appendStreamDelta(
     content: previous?.identity.agentId === identity.agentId ? previous.content + text : text,
     status: "streaming",
     startedAt: previous?.startedAt ?? now,
+    tempId: previous?.tempId ?? tempId,
   };
 }
 
@@ -39,6 +46,7 @@ export function finishStream(
   error?: string,
   now = new Date().toISOString(),
   rateLimited = false,
+  savedId?: number,
 ): ChatStreamState {
   return {
     channel,
@@ -49,5 +57,7 @@ export function finishStream(
     finishedAt: now,
     error,
     rateLimited,
+    tempId: previous?.tempId,
+    savedId: savedId ?? previous?.savedId,
   };
 }
