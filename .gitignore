@@ -11,5 +11,5 @@ dist/
 *.log
 *.tsbuildinfo
 coverage/
-gemini_cc.bat
+*.bat
 Komanda.txt
