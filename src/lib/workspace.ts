@@ -1308,6 +1308,13 @@ Response format: "Accepted @Architect's structural advice. @Reviewer suggested t
     "Ты работаешь ВНУТРИ IDE. Дерево проекта и код открытых файлов УЖЕ переданы тебе в PROJECT CONTEXT ниже. Используй инструменты read_file для чтения любых файлов. НИКОГДА не говори «у меня нет доступа к файлам» или «я не вижу код» — это ложь, доступ есть. Если нужен файл — вызови read_file.",
     "You are INSIDE an IDE. The project tree and open file contents are ALREADY provided in PROJECT CONTEXT below. Use read_file tool to read any file. NEVER say 'I don't have file access' or 'I can't see the code' — that's false, you have access. If you need a file — call read_file.");
 
+  // Stale-task fix: the model must answer the current user message, not
+  // silently resume previous tasks that are still visible in chat history.
+  const answerScope = t(
+    locale,
+    `\n\n=== ФОКУС ОТВЕТА ===\nОтвечай строго на ПОСЛЕДНЕЕ сообщение пользователя. Старые задачи и обсуждения в истории чата — только справочник: НЕ продолжай и НЕ пересматривай их, если пользователь явно не попросил. Простое приветствие или вопрос «кто ты» — отвечай коротко и по делу, без запуска задач.`,
+    `\n\n=== ANSWER FOCUS ===\nAnswer ONLY the user's latest message. Old tasks and discussions in chat history are reference only: do NOT resume or re-review them unless the user explicitly asks. A simple greeting or "who are you" deserves a short direct answer, never a task launch.`);
+
   const reviewMode = isReview
     ? t(locale,
         `\n\n=== РЕЖИМ РЕВЬЮ ===\nЭто цикл проверки. Прочитай последние изменения в коде. Найди ошибки, баги, проблемы с типами, версткой, дизайном. Если всё идеально — ответь ТОЛЬКО: "[STATUS: RELEASE_READY] Проверка пройдена." Если есть проблемы — укажи файл, строку и конкретное описание что не так. Будь строгим и внимательным.`,
@@ -1326,7 +1333,7 @@ Response format: "Accepted @Architect's structural advice. @Reviewer suggested t
         `\n\n=== RELEASE_READY PROTOCOL ===\nIf you believe code is release-ready, reply EXACTLY: "[STATUS: RELEASE_READY] <your comment>." Only this flag tells the system to stop. Without it the cycle continues.`)
     : "";
 
-  return `${identity} ${persona}.${collaboration} ${fileContext}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  return `${identity} ${persona}.${collaboration} ${fileContext}${answerScope}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
 }
 
 function roleDisplay(role: string, lang: "ru" | "en"): string {
@@ -1345,7 +1352,7 @@ async function* streamAgentReply(
   locale: UiLocale,
   attachments: ChatAttachment[],
   findingsCount: number,
-  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean; reviewOnly?: boolean; fixMode?: boolean },
+  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean },
 ): AsyncGenerator<ChatStreamEvent> {
   const apiKey = await getStoredProviderApiKey(agent.provider);
   const history = await gatewayHistory(channel);
@@ -1383,7 +1390,9 @@ async function* streamAgentReply(
   const tools = getToolDefinitions(agent.role);
   const mainAgentId = (await db.select({ id: agents.id }).from(agents).where(eq(agents.role, "main")).limit(1))[0]?.id ?? agent.id;
 
-  yield { type: "agent_start", channel, identity };
+  // Log routing fix: auto-cycle rounds (review/fix reflections) stream
+  // silently — no chat cards, no toasts. The user sees only direct answers.
+  if (!options.logOnly) yield { type: "agent_start", channel, identity };
 
   let fullResponse = "";
   const MAX_TOOL_ROUNDS = agent.role === "main" ? 10 : 3;
@@ -1405,7 +1414,7 @@ async function* streamAgentReply(
       // consumed by the orchestrator loop above but must never reach the chat
       // text stream shown to the user.
       if (isPureToolCallChunk(chunk)) continue;
-      yield { type: "delta", channel, identity, text: chunk };
+      if (!options.logOnly) yield { type: "delta", channel, identity, text: chunk };
     }
 
     fullResponse += chunkText;
@@ -1428,6 +1437,18 @@ async function* streamAgentReply(
   }
 
   if (!fullResponse.trim()) throw new Error(`${agent.name} returned an empty response`);
+
+  // Log routing fix: in logOnly mode (auto-cycle review/fix rounds) the reply
+  // is stored to the system events log and never lands in the chat windows.
+  if (options.logOnly) {
+    await recordSystemEvent(
+      "info",
+      agent.name,
+      t(locale, `Авто-цикл, роль «${agent.role}»: размышление записано в логи.`, `Auto-cycle, role "${agent.role}": reflection stored to logs.`),
+      fullResponse.slice(0, 8_000),
+    );
+    return;
+  }
 
   const saved = await pushMessage({
     chatChannel: channel,
@@ -1457,13 +1478,16 @@ export async function* streamWorkspaceMessage(
   const userText = trimmed || t(activeLocale, "[прикреплены материалы]", "[materials attached]");
   const metadata = attachments.length > 0 ? { attachments } : {};
 
-  await pushMessage({
+  const savedUserMessage = await pushMessage({
     chatChannel: channel,
     senderType: "user",
     agentName: t(activeLocale, "Пользователь", "User"),
     content: userText,
     metadata,
   });
+  // Stale-vote fix: auto-cycle votes/issues are counted only for messages
+  // created after THIS user request, so old tasks can never close the cycle.
+  const userMessageId = savedUserMessage?.id ?? Number.MAX_SAFE_INTEGER;
 
   if (channel === "group" && duplicateToLead) {
     await pushMessage({
@@ -1499,24 +1523,19 @@ export async function* streamWorkspaceMessage(
 
       const activeAgents = await db.select().from(agents).where(eq(agents.isActive, true));
       const readyVotes = recentMessages.filter((m) =>
-        m.senderType !== "user" && m.senderType !== "system" && m.content.includes("[STATUS: RELEASE_READY]"),
+        m.id > userMessageId
+        && m.senderType !== "user" && m.senderType !== "system" && m.content.includes("[STATUS: RELEASE_READY]"),
       );
 
       // Require ALL active agents to signal ready (or at least 3 if single-agent)
       const requiredVotes = Math.min(activeAgents.length, 4);
       if (readyVotes.length >= requiredVotes) {
-        const finalIdentity = createAgentIdentity({
-          agentId: activeAgents[0]?.id ?? 0,
-          displayName: activeAgents[0]?.name ?? "Main",
-          role: "main",
-          provider: activeAgents[0]?.provider ?? "",
-          model: activeAgents[0]?.model ?? "",
-        });
         const doneMsg = t(activeLocale,
           `[STATUS: RELEASE_READY] ✅ Все ${readyVotes.length} агентов подтвердили готовность. Цикл завершён.`,
           `[STATUS: RELEASE_READY] ✅ All ${readyVotes.length} agents confirmed readiness. Cycle complete.`);
-        yield { type: "delta", channel, identity: finalIdentity, text: doneMsg };
-        yield { type: "agent_done", channel, identity: finalIdentity, content: doneMsg };
+        // Log routing fix: cycle completion is system info — it goes to the logs
+        // panel, never into the chat windows.
+        await recordSystemEvent("success", "auto-cycle", doneMsg);
         break;
       }
 
@@ -1530,6 +1549,7 @@ export async function* streamWorkspaceMessage(
           signal: options?.signal,
           projectContext: options?.projectContext,
           reviewOnly: true,
+          logOnly: true,
         })) {
           yield event;
         }
@@ -1543,7 +1563,8 @@ export async function* streamWorkspaceMessage(
         .orderBy(desc(chatMessages.id))
         .limit(10);
       const hasIssues = lastRoundMessages.some((m) =>
-        m.content.includes("ошибка") || m.content.includes("баг") || m.content.includes("error") || m.content.includes("bug"),
+        m.id > userMessageId
+        && (m.content.includes("ошибка") || m.content.includes("баг") || m.content.includes("error") || m.content.includes("bug")),
       );
 
       if (hasIssues) {
@@ -1556,6 +1577,7 @@ export async function* streamWorkspaceMessage(
             signal: options?.signal,
             projectContext: options?.projectContext,
             fixMode: true,
+            logOnly: true,
           })) {
             yield event;
           }
@@ -1569,16 +1591,17 @@ export async function* streamWorkspaceMessage(
         const limitMsg = t(activeLocale,
           `[STATUS: MAX_ITERATIONS] Достигнут лимит итераций автономного цикла.`,
           `[STATUS: MAX_ITERATIONS] Autonomous cycle iteration limit reached.`);
-        yield { type: "delta", channel, identity: createAgentIdentity({ agentId: 0, displayName: "System", role: "system", provider: "", model: "" }), text: limitMsg };
+        await recordSystemEvent("warning", "auto-cycle", limitMsg);
         break;
       }
     }
   }
 
-  // Post clean summary to lead chat
+  // Post clean summary — log routing fix: the auto-cycle summary is system
+  // info for the logs panel. The lead chat stays a direct user-to-lead
+  // conversation only, with no auto-generated reports dumped into it.
   if (channel === "group" && !options?.signal?.aborted) {
     const allGroupMessages = await db.select().from(chatMessages).where(eq(chatMessages.chatChannel, "group")).orderBy(desc(chatMessages.id)).limit(30);
-    const [mainAgent] = await db.select().from(agents).where(eq(agents.role, "main")).limit(1);
     const summary = allGroupMessages
       .filter((m) => m.senderType !== "user" && m.senderType !== "system")
       .slice(0, 8)
@@ -1586,16 +1609,13 @@ export async function* streamWorkspaceMessage(
       .map((m) => `${m.agentName ?? m.senderType}: ${m.content.slice(0, 200)}`)
       .join("\n\n");
 
-    if (mainAgent && summary) {
-      await pushMessage({
-        chatChannel: "lead",
-        senderType: "main",
-        agentName: mainAgent.name,
-        content: t(activeLocale,
-          `📋 ИТОГОВЫЙ ОТЧЁТ\n\n${summary}\n\n=== КОНЕЦ ОТЧЁТА ===`,
-          `📋 FINAL REPORT\n\n${summary}\n\n=== END OF REPORT ===`),
-        metadata: { identity: createAgentIdentity({ agentId: mainAgent.id, displayName: mainAgent.name, role: "main", provider: mainAgent.provider, model: mainAgent.model }) },
-      });
+    if (summary) {
+      await recordSystemEvent(
+        "info",
+        "auto-cycle",
+        t(activeLocale, "Итоговый отчёт цикла записан в логи.", "Auto-cycle final report stored to logs."),
+        summary.slice(0, 8_000),
+      );
     }
   }
 
@@ -1608,7 +1628,7 @@ async function* runAgentRound(
   userText: string,
   activeLocale: UiLocale,
   attachments: ChatAttachment[],
-  options: { signal?: AbortSignal; projectContext?: ProjectContextInput; reviewOnly?: boolean; fixMode?: boolean },
+  options: { signal?: AbortSignal; projectContext?: ProjectContextInput; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean },
 ): AsyncGenerator<ChatStreamEvent> {
   const [mainAgent] = await db.select().from(agents).where(eq(agents.role, "main")).limit(1);
   if (!mainAgent) throw new Error(t(activeLocale, "Главный агент не назначен.", "No Lead agent is assigned."));
@@ -1635,6 +1655,7 @@ async function* runAgentRound(
         isMultiAgent: ctxIsMulti,
         reviewOnly: Boolean(options.reviewOnly),
         fixMode: Boolean(options.fixMode),
+        logOnly: Boolean(options.logOnly),
         projectContext: options.projectContext,
       })) {
         yield event;
@@ -1650,6 +1671,8 @@ async function* runAgentRound(
           error instanceof Error ? error.stack ?? "" : "",
         );
       } catch { /* best-effort */ }
+      // Log routing fix: auto-cycle failures stay in the logs — no error cards in chat.
+      if (options.logOnly) continue;
       yield {
         type: "agent_error", channel,
         identity: createAgentIdentity({ agentId: agent.id, displayName: agent.name, role: agent.role, provider: agent.provider, model: agent.model }),
