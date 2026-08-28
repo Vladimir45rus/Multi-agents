@@ -342,6 +342,23 @@ function createWindow(startUrl) {
 
 // --- overlay widget window ---
 
+// Widget fix: the previous URL construction (startUrl.replace(/\/[^/]*$/, "") +
+// "/overlay") chopped the host and port off a bare origin like
+// "http://127.0.0.1:3210", producing the invalid URL "http:/overlay". The page
+// never loaded, retries gave up, and the widget stayed as a black inert window
+// that could not be moved or closed. Parse the URL properly instead.
+function toOverlayUrl(startUrl) {
+  if (typeof startUrl === "string") {
+    try {
+      const parsed = new URL(startUrl);
+      return `${parsed.protocol}//${parsed.host}/overlay`;
+    } catch {
+      // Fall through to the default below.
+    }
+  }
+  return `http://127.0.0.1:${DEFAULT_SERVER_PORT}/overlay`;
+}
+
 function createOverlayWindow(startUrl) {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.focus();
@@ -403,9 +420,7 @@ function createOverlayWindow(startUrl) {
     overlayWindow = null;
   });
 
-  const overlayUrl = typeof startUrl === "string"
-    ? startUrl.replace(/\/[^/]*$/, "") + "/overlay"
-    : `http://127.0.0.1:${DEFAULT_SERVER_PORT}/overlay`;
+  const overlayUrl = toOverlayUrl(startUrl);
   guardNavigation(overlayWindow.webContents, [overlayUrl]);
   // Widget fix: if the embedded server is not ready yet, retry loading so the
   // overlay never stays as an empty black window.
@@ -413,11 +428,11 @@ function createOverlayWindow(startUrl) {
   overlayWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!isMainFrame) return;
     log("app", `Overlay failed to load: ${errorDescription} (code=${errorCode}) url=${validatedURL}`);
-    if (overlayLoadRetries < 5) {
+    if (overlayLoadRetries < 10) {
       overlayLoadRetries += 1;
       setTimeout(() => {
         if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.loadURL(overlayUrl);
-      }, 800 * overlayLoadRetries);
+      }, Math.min(1000 * overlayLoadRetries, 4_000));
     }
   });
   log("app", `Opening overlay at ${overlayUrl}`);
