@@ -1,4 +1,4 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, safeStorage, shell, Notification } = require("electron");
+const { app, BrowserWindow, Menu, dialog, ipcMain, session, safeStorage, shell, Notification, clipboard } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { fork } = require("node:child_process");
 const path = require("node:path");
@@ -555,6 +555,13 @@ ipcMain.handle("secrets:decrypt", (_event, encrypted) => {
 });
 
 ipcMain.handle("app:recovered-from-crash", () => recoveredFromCrash);
+
+// Hotfix: reliable clipboard access for the renderer. Web APIs can be blocked
+// by permission policies inside Electron, so the main process does the copy.
+ipcMain.handle("clipboard:write-text", (_event, text) => {
+  clipboard.writeText(String(text ?? ""));
+  return true;
+});
 
 ipcMain.handle("app:notify", (_event, { title, body }) => {
   if (!Notification.isSupported()) return;

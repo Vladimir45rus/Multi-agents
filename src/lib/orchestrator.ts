@@ -12,6 +12,7 @@ import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage }
 import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction, looksLikeTruncatedJson } from "@/lib/patch-parser";
 import { ensureWorkspaceBootstrap, getStoredProviderApiKey, getWorkspaceSettingsRow } from "@/lib/workspace";
+import { resolveFallbackModels } from "@/lib/provider-models";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
 import { saveActiveTaskState, clearActiveTaskState } from "@/lib/orchestrator-state";
@@ -281,6 +282,13 @@ export function releaseTaskController(taskId: string) {
   taskControllers.delete(taskId);
 }
 
+// Hotfix (hang guard): a persisted active-task file can outlive the process
+// (crash/restart). When no in-process controller exists for the task, nothing
+// is actually running and the UI must not stay stuck on "Выполняется".
+export function hasRunningTask(taskId: string) {
+  return taskControllers.has(taskId);
+}
+
 export function resolveConfirmation(confirmationId: string, approved: boolean) {
   const resolver = pendingConfirmations.get(confirmationId);
   if (!resolver) return false;
@@ -497,7 +505,14 @@ async function completeAgent(
     const apiKey = await getStoredProviderApiKey(agent.provider);
     const request = providerRequestFromAgent(agent, apiKey);
     const settings = await getWorkspaceSettingsRow();
-    const fallbackModels = Array.isArray(settings.fallbackModels) ? settings.fallbackModels : [];
+    // Hotfix (auto-fallback): reserve models resolved dynamically before the
+    // cycle — user list or OpenRouter defaults, checked against the catalog.
+    const fallbackModels = await resolveFallbackModels(
+      agent.provider,
+      apiKey || undefined,
+      agent.baseUrl,
+      Array.isArray(settings.fallbackModels) ? settings.fallbackModels : [],
+    );
     const context = await buildProjectContext(projectContext);
     const templatePrompt = compact(settings.projectTemplatePrompt);
     const refreshedSystemPrompt = `${systemPrompt}\n\n=== CURRENT PROJECT CONTEXT (REFRESHED) ===\n${context}`;

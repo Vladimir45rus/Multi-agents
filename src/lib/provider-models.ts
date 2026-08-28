@@ -115,3 +115,45 @@ export function clearProviderModelCache() {
 export function providerCacheTtlMs() {
   return TTL_MS;
 }
+
+// Hotfix: default reserve chain for OpenRouter when the user has not
+// configured their own fallback list in Settings.
+export const DEFAULT_OPENROUTER_FALLBACK_MODELS = [
+  "google/gemini-2.5-flash",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "deepseek/deepseek-chat",
+];
+
+/**
+ * Hotfix (auto-fallback): resolve the reserve-model list for an agent.
+ * Uses the user-configured list when present, otherwise the OpenRouter
+ * defaults. Every candidate is checked against the live provider model
+ * catalog (dynamic availability) before the agent cycle starts; if the
+ * catalog cannot be fetched, candidates pass through unchanged.
+ */
+export async function resolveFallbackModels(
+  provider: string,
+  apiKey: string | undefined,
+  baseUrl: string | undefined,
+  configured?: string[],
+): Promise<string[]> {
+  const list = (Array.isArray(configured) ? configured : []).map((model) => String(model).trim()).filter(Boolean);
+  const candidates = list.length > 0
+    ? list
+    : provider === "openrouter"
+      ? DEFAULT_OPENROUTER_FALLBACK_MODELS
+      : [];
+  if (candidates.length === 0) return [];
+
+  try {
+    const result = await fetchProviderModels(provider, apiKey, baseUrl);
+    if (result.source === "provider" && result.models.length > 0) {
+      const available = new Set(result.models);
+      const reachable = candidates.filter((model) => available.has(model));
+      if (reachable.length > 0) return reachable;
+    }
+  } catch {
+    // Availability check is best-effort: never block the cycle because of it.
+  }
+  return candidates;
+}

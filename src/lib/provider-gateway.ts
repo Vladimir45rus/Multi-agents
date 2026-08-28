@@ -142,9 +142,13 @@ async function responseError(response: Response, provider: string, apiKey: strin
 }
 
 function abortError(provider: string) {
+  // Hotfix: timeouts are reported as HTTP 408 (request timeout) and retryable,
+  // so the model-fallback loop gets a chance to switch to a reserve model
+  // instead of failing the whole agent round.
   return new ProviderGatewayError(connectionErrorMessage(provider), {
     provider,
-    retryable: false,
+    status: 408,
+    retryable: true,
   });
 }
 
@@ -266,7 +270,9 @@ async function fetchWithRetry(
 
       if (response.ok) {
         handedOff = true;
-        return { response, cleanup };
+        // Hotfix: the controller is handed back to the caller so the streaming
+        // loop can enforce an idle (stall) timeout after the headers arrived.
+        return { response, cleanup, controller };
       }
 
       const error = await responseError(response, request.provider, request.apiKey, attempt, maxRetries);
@@ -443,13 +449,26 @@ export async function* streamProviderResponse(
     const candidate = { ...request, model };
     try {
       const normalized = validateRequest(candidate);
-      const { response, cleanup } = await fetchWithRetry(normalized, messages, options, options.tools);
+      const { response, cleanup, controller } = await fetchWithRetry(normalized, messages, options, options.tools);
+      // Hotfix (hang guard): after the response headers arrive the connect
+      // timeout is cleared, so a stalled SSE stream could previously hang the
+      // whole agent/orchestrator loop forever. An idle timer now aborts the
+      // stream when no chunks arrive within the timeout window; the abort is
+      // surfaced as HTTP 408 so the fallback chain can switch models.
+      const idleTimeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const resetIdleTimer = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => controller.abort(), idleTimeoutMs);
+      };
       try {
+        resetIdleTimer();
         // H6 fix: accumulate fragmented tool_call deltas and emit complete
         // calls when the stream ends, instead of forwarding raw fragments
         // that concatenate into unparseable JSON downstream.
         const toolStream = createToolCallAccumulator();
         for await (const raw of readSse(response)) {
+          resetIdleTimer();
           const parsed = extractText(normalized.provider, raw, toolStream);
           if (parsed.text) yield parsed.text;
           if (parsed.done) break;
@@ -460,13 +479,31 @@ export async function* streamProviderResponse(
         }
         return;
       } finally {
+        if (idleTimer) clearTimeout(idleTimer);
         cleanup();
       }
     } catch (error) {
       if (options.signal?.aborted) throw error;
+      // Hotfix: an idle-timeout abort is not a ProviderGatewayError yet —
+      // convert it to a 408 gateway error so the fallback chain engages.
+      if (error instanceof DOMException && error.name === "AbortError") {
+        const stall = new ProviderGatewayError(connectionErrorMessage(request.provider), {
+          provider: request.provider,
+          status: 408,
+          retryable: false,
+        });
+        lastError = stall;
+        if (model !== models[models.length - 1]) {
+          await options.onFallback?.(models[models.indexOf(model) + 1], stall);
+          continue;
+        }
+        throw stall;
+      }
       if (error instanceof ProviderGatewayError) {
         lastError = error;
-        const canFallback = error.status === 403 || error.status === 408 || error.status === 429 || error.status === 500 || error.status === 502 || error.status === 503 || error.status === 504 || error.retryable;
+        // Hotfix: HTTP 404 (model unavailable/renamed) now triggers the same
+        // automatic reserve-model switch as 429/5xx.
+        const canFallback = error.status === 403 || error.status === 404 || error.status === 408 || error.status === 429 || error.status === 500 || error.status === 502 || error.status === 503 || error.status === 504 || error.retryable;
         if (canFallback && model !== models[models.length - 1]) {
           await options.onFallback?.(models[models.indexOf(model) + 1], error);
           continue;

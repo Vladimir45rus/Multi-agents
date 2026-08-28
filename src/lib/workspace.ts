@@ -28,6 +28,7 @@ import {
 } from "@/lib/provider-gateway";
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { encryptSecret } from "@/lib/secret-cipher";
+import { resolveFallbackModels } from "@/lib/provider-models";
 import { isPureToolCallChunk, isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
@@ -1367,6 +1368,14 @@ async function* streamAgentReply(
 
   const [workspaceSettingsRow] = await db.select({ projectTemplatePrompt: workspaceSettings.projectTemplatePrompt, fallbackModels: workspaceSettings.fallbackModels }).from(workspaceSettings).limit(1);
   const templatePrompt = compact(workspaceSettingsRow?.projectTemplatePrompt);
+  // Hotfix (auto-fallback): resolve reserve models dynamically — user list or
+  // OpenRouter defaults, filtered by live provider catalog availability.
+  const fallbackModels = await resolveFallbackModels(
+    agent.provider,
+    apiKey || undefined,
+    agent.baseUrl,
+    Array.isArray(workspaceSettingsRow?.fallbackModels) ? workspaceSettingsRow.fallbackModels : [],
+  );
   const baseSystemPrompt = agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix);
   const refreshedSystemPrompt = `${baseSystemPrompt}\n\n=== CURRENT PROJECT CONTEXT (REFRESHED) ===\n${projectContext}`;
   const gatewayMessages: GatewayMessage[] = [
@@ -1404,7 +1413,7 @@ async function* streamAgentReply(
     for await (const chunk of streamProviderResponse(request, gatewayMessages, {
       ...options,
       tools: tools.length ? tools : undefined,
-      fallbackModels: Array.isArray(workspaceSettingsRow?.fallbackModels) ? workspaceSettingsRow.fallbackModels : [],
+      fallbackModels,
       onFallback: async (model, error) => {
         await recordSystemEvent("warning", "fallback", `${agent.name}: ${agent.model} failed (${error.status ?? "timeout"}); switched to ${model}`);
       },

@@ -1,4 +1,5 @@
 import { loadActiveTaskState, clearActiveTaskState, type ActiveTaskState } from "@/lib/orchestrator-state";
+import { hasRunningTask } from "@/lib/orchestrator";
 import { db } from "@/db";
 import { agentEvents, orchestratorReports } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -11,7 +12,15 @@ export async function GET(request: Request) {
   const accessError = await mobileAccessError(request);
   if (accessError) return accessError;
   try {
-    const activeTask = await loadActiveTaskState();
+    let activeTask = await loadActiveTaskState();
+
+    // Hotfix (hang guard): drop a stale active-task state that has no live
+    // controller (e.g., after a server restart) so the orchestrator panel and
+    // the "Остановить" button never stay stuck in the running state.
+    if (activeTask && !hasRunningTask(activeTask.taskId)) {
+      await clearActiveTaskState();
+      activeTask = null;
+    }
 
     if (!activeTask) {
       return Response.json({ activeTask: null, recovery: null });

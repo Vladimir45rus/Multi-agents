@@ -176,6 +176,7 @@ type DesktopBridge = {
   onUpdateDownloaded?: (callback: (data: { version: string }) => void) => void;
   installUpdate?: () => Promise<void>;
   notify?: (opts: { title: string; body: string }) => Promise<void>;
+  writeClipboard?: (text: string) => Promise<boolean>;
   safeStorage?: {
     isAvailable: () => Promise<boolean>;
     encryptString: (plaintext: string) => Promise<string>;
@@ -1849,6 +1850,7 @@ export function IdeApp() {
 
     const controller = new AbortController();
     chatAbortRef.current = controller;
+    let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
     const optimisticContent = message.trim() || (locale === "ru" ? "[прикреплены материалы]" : "[materials attached]");
     const optimisticMetadata = outgoingAttachments.length > 0 ? { attachments: outgoingAttachments } : {};
     const optimisticIds: number[] = [];
@@ -1906,10 +1908,24 @@ export function IdeApp() {
       }
       if (!res.body) throw new Error("Chat stream is unavailable");
 
-      const reader = res.body.getReader();
+      reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
       let streamError: Error | null = null;
+
+      // Hotfix (hang guard): if the SSE stream stalls with no data, this
+      // watchdog rejects the pending read, the request errors out and the
+      // Stop/Остановить button state resets automatically in the finally block.
+      const READ_IDLE_TIMEOUT_MS = 180_000;
+      let readTimer: ReturnType<typeof setTimeout> | null = null;
+      const readChunk = () => new Promise<ReadableStreamReadResult<Uint8Array>>((resolve, reject) => {
+        if (readTimer) clearTimeout(readTimer);
+        readTimer = setTimeout(() => reject(new Error(locale === "ru" ? "Таймаут: поток ответа не отвечает" : "Timeout: response stream stalled")), READ_IDLE_TIMEOUT_MS);
+        reader?.read().then(
+          (result) => { if (readTimer) clearTimeout(readTimer); resolve(result); },
+          (error) => { if (readTimer) clearTimeout(readTimer); reject(error); },
+        );
+      });
 
       const consumeBlock = (block: string) => {
         if (!hasSseData(block)) return;
@@ -1988,7 +2004,7 @@ export function IdeApp() {
       };
 
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readChunk();
         buffer += decoder.decode(value ?? new Uint8Array(), { stream: !done });
 
         let separator = buffer.search(/\r?\n\r?\n/);
@@ -2020,6 +2036,7 @@ export function IdeApp() {
       if (chatAbortRef.current === controller) chatAbortRef.current = null;
       setChatRunning(false);
       setBusy(false);
+      if (reader) void reader.cancel().catch(() => undefined);
     }
   }
 
@@ -2273,13 +2290,45 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
     setReportOpen(true);
   }
 
-  async function copyReport() {
+  // Hotfix: safe clipboard chain — modern Clipboard API → Electron IPC via
+  // desktopBridge → hidden-textarea execCommand fallback. Never surfaces an
+  // error popup; returns whether the copy succeeded.
+  async function copyTextToClipboard(content: string): Promise<boolean> {
     try {
-      await navigator.clipboard.writeText(reportText);
-      setStatus(locale === "ru" ? "Отчёт скопирован" : "Report copied");
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(content);
+        return true;
+      }
     } catch {
-      setStatus(locale === "ru" ? "Не удалось скопировать отчёт" : "Failed to copy report");
+      // Fall through to the Electron IPC path.
     }
+    try {
+      const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+      if (bridge?.writeClipboard) {
+        await bridge.writeClipboard(content);
+        return true;
+      }
+    } catch {
+      // Fall through to the legacy execCommand path.
+    }
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = content;
+      textarea.style.position = "fixed";
+      textarea.style.opacity = "0";
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      return ok;
+    } catch {
+      return false;
+    }
+  }
+
+  async function copyReport() {
+    const ok = await copyTextToClipboard(reportText);
+    if (ok) setStatus(locale === "ru" ? "Отчёт скопирован" : "Report copied");
   }
 
   async function clearSystemEvents() {
@@ -2311,26 +2360,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
   }
 
   async function copyMessage(messageId: number | string, content: string) {
-    try {
-      // Try modern clipboard API first
-      if (navigator.clipboard?.writeText) {
-        await navigator.clipboard.writeText(content);
-      } else {
-        // Fallback for Electron / older environments
-        const textarea = document.createElement("textarea");
-        textarea.value = content;
-        textarea.style.position = "fixed";
-        textarea.style.opacity = "0";
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand("copy");
-        document.body.removeChild(textarea);
-      }
-      setCopiedMessageId(messageId);
-      window.setTimeout(() => setCopiedMessageId((current) => current === messageId ? null : current), 1500);
-    } catch {
-      setStatus(locale === "ru" ? "Не удалось скопировать сообщение" : "Failed to copy message");
-    }
+    const ok = await copyTextToClipboard(content);
+    if (!ok) return;
+    setCopiedMessageId(messageId);
+    window.setTimeout(() => setCopiedMessageId((current) => current === messageId ? null : current), 1500);
   }
 
   function renderMessageActions(messageId: number | string, content: string, canRetry = false, showCopy = true) {
@@ -3072,7 +3105,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <div className="flex items-center gap-2 rounded bg-[#1e3323] p-2 text-xs">
                         <span className="text-[#6a9955]">🟢 {locale === "ru" ? "Активен" : "Active"}</span>
                         <a href={mobileUrl} target="_blank" rel="noopener noreferrer" className="truncate text-[var(--text-accent)] underline">{mobileUrl}</a>
-                        <button type="button" onClick={() => { navigator.clipboard?.writeText(mobileUrl); setStatus(locale === "ru" ? "Ссылка скопирована" : "Link copied"); }} className="whitespace-nowrap text-[10px] text-[var(--text-secondary)] hover:text-white">{locale === "ru" ? "Копировать" : "Copy"}</button>
+                        <button type="button" onClick={() => { void copyTextToClipboard(mobileUrl).then((ok) => { if (ok) setStatus(locale === "ru" ? "Ссылка скопирована" : "Link copied"); }); }} className="whitespace-nowrap text-[10px] text-[var(--text-secondary)] hover:text-white">{locale === "ru" ? "Копировать" : "Copy"}</button>
                       </div>
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={`/api/qrcode?url=${encodeURIComponent(mobileUrl)}`} alt="QR code" className="mt-2 h-[140px] w-[140px] rounded border border-[#2d2d30]" />
