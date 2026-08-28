@@ -29,6 +29,7 @@ export async function POST(request: Request) {
       description?: string;
       skill?: string;
       systemPrompt?: string;
+      apiKey?: string;
       locale?: "ru" | "en";
     };
 
@@ -48,6 +49,7 @@ export async function POST(request: Request) {
         skill: body.skill,
         systemPrompt: body.systemPrompt,
         color: (body as Record<string, unknown>).color as string | undefined,
+        apiKey: body.apiKey,
       },
       body.locale,
     );

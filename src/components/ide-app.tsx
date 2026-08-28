@@ -97,6 +97,7 @@ type Agent = {
   systemPrompt: string;
   color: string;
   isActive: boolean;
+  apiKeyConfigured?: boolean;
 };
 
 type WorkspaceTreeEntry = {
@@ -594,6 +595,10 @@ export function IdeApp() {
   const [removeTelegramToken, setRemoveTelegramToken] = useState(false);
   const [telegramChatIdDraft, setTelegramChatIdDraft] = useState("");
   const [fallbackModelsDraft, setFallbackModelsDraft] = useState("");
+  // Custom-provider support: per-agent API key drafts (plaintext only in
+  // memory; the server stores them encrypted).
+  const [agentKeyDrafts, setAgentKeyDrafts] = useState<Record<number, string>>({});
+  const [newAgentApiKey, setNewAgentApiKey] = useState("");
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateId, setTemplateId] = useState("web");
   const [telegramTesting, setTelegramTesting] = useState(false);
@@ -1662,15 +1667,21 @@ export function IdeApp() {
 
     setBusy(true);
     try {
+      const agentKey = agentKeyDrafts[agentId]?.trim();
       const res = await fetch(`/api/agents/${agentId}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...draft, locale }),
+        body: JSON.stringify({ ...draft, ...(agentKey ? { apiKey: agentKey } : {}), locale }),
       });
       if (!res.ok) {
         const payload = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error ?? "error");
       }
+      setAgentKeyDrafts((prev) => {
+        const next = { ...prev };
+        delete next[agentId];
+        return next;
+      });
       await loadWorkspace(selectedFileId, locale);
     } catch (e) {
       setStatus(e instanceof Error ? e.message : "Error");
@@ -1690,13 +1701,14 @@ export function IdeApp() {
       const res = await fetch("/api/agents", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...newAgent, locale }),
+        body: JSON.stringify({ ...newAgent, ...(newAgentApiKey.trim() ? { apiKey: newAgentApiKey.trim() } : {}), locale }),
       });
       if (!res.ok) {
         const payload = (await res.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error ?? "Agent creation failed");
       }
       setNewAgent(emptyNewAgent({}, (data?.agents ?? []).map((a) => a.color ?? ROLE_COLORS[a.role] ?? "")));
+      setNewAgentApiKey("");
       await loadWorkspace(selectedFileId, locale);
       setShowAddAgent(false);
       setStatus(locale === "ru" ? "Агент создан" : "Agent created");
@@ -3003,7 +3015,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               {t.freeOpenRouter}
             </a>
             <div className="space-y-3">
-              {PROVIDER_PRESETS.filter((p) => p.id !== "custom" && p.id !== "mock")?.map((provider) => (
+              {PROVIDER_PRESETS.filter((p) => p.id !== "mock")?.map((provider) => (
                 <div key={provider.id} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
                   <p className="text-xs font-semibold text-white">{provider.label}</p>
                   <p className="text-[11px] text-[var(--text-secondary)]">{t.baseUrl}: {provider.baseUrl}</p>
@@ -3237,6 +3249,15 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
 
                     <input value={draft.baseUrl} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, baseUrl: e.target.value } }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
 
+                    <input
+                      type="password"
+                      autoComplete="off"
+                      value={agentKeyDrafts[agent.id] ?? ""}
+                      onChange={(e) => setAgentKeyDrafts((prev) => ({ ...prev, [agent.id]: e.target.value }))}
+                      placeholder={agent.apiKeyConfigured ? (locale === "ru" ? "Ключ агента сохранён (введите новый для замены)" : "Agent key saved (type a new one to replace)") : (locale === "ru" ? "API-ключ агента (свой провайдер)" : "Agent API key (custom provider)")}
+                      className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                    />
+
                     <div className="mb-1 flex gap-1">
                       <select
                         value={draft.manualModel ? "__manual__" : draft.model}
@@ -3371,6 +3392,14 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         <input value={modelSearch.new ?? ""} onChange={(e) => setModelSearch((prev) => ({ ...prev, new: e.target.value }))} placeholder="free / coder / qwen" className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px]" />
                       </div>
                       {newAgent.manualModel ? <input value={newAgent.model} onChange={(e) => setNewAgent((p) => ({ ...p, model: e.target.value }))} placeholder={t.model} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" /> : null}
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        value={newAgentApiKey}
+                        onChange={(e) => setNewAgentApiKey(e.target.value)}
+                        placeholder={locale === "ru" ? "API-ключ агента (свой провайдер)" : "Agent API key (custom provider)"}
+                        className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                      />
                       <select value={newAgent.role} onChange={(e) => {
                         const newRole = e.target.value;
                         setNewAgent((p) => ({ ...p, role: newRole, color: ROLE_COLORS[newRole] ?? "#4fc1ff" }));

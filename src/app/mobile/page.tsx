@@ -42,6 +42,7 @@ export default function MobilePage() {
     return fetch(input, { ...init, headers });
   }, [urlToken]);
   const [authed, setAuthed] = useState<boolean | null>(null);
+  const [tokenDraft, setTokenDraft] = useState(urlToken);
   const [tab, setTab] = useState<MobileTab>("lead");
   const [activeTask, setActiveTask] = useState<ActiveTask | null>(null);
   const [orchestratorEvents, setOrchestratorEvents] = useState<OrchestratorEvent[]>([]);
@@ -186,7 +187,28 @@ export default function MobilePage() {
     <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100dvh", background: "var(--bg-app)", color: "var(--text-primary)", flexDirection: "column", gap: 12, padding: 24, textAlign: "center" }}>
       <div style={{ fontSize: 48 }}>🔒</div>
       <div style={{ fontSize: 18, fontWeight: 700 }}>Нет доступа</div>
-      <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Неверный или отсутствующий токен. Добавьте ?token=... к URL.</div>
+      <div style={{ fontSize: 13, color: "var(--text-secondary)" }}>Неверный или отсутствующий токен. Добавьте ?token=... к URL или введите токен ниже.</div>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          const value = tokenDraft.trim();
+          if (!value) return;
+          const next = new URL(window.location.href);
+          next.searchParams.set("token", value);
+          window.location.replace(next.toString());
+        }}
+        style={{ display: "flex", gap: 8, width: "100%", maxWidth: 360 }}
+      >
+        <input
+          value={tokenDraft}
+          onChange={(e) => setTokenDraft(e.target.value)}
+          placeholder="Токен доступа"
+          autoComplete="off"
+          style={{ flex: 1, minWidth: 0, padding: "8px 10px", borderRadius: 8, border: "1px solid var(--border-default)", background: "var(--bg-panel)", color: "var(--text-primary)", fontSize: 14 }}
+        />
+        <button type="submit" style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: "#0e639c", color: "#fff", fontSize: 14, whiteSpace: "nowrap" }}>Войти</button>
+      </form>
+      <div style={{ fontSize: 11, color: "var(--text-secondary)" }}>Токен: Настройки ПК → Удалённый доступ → ссылка /mobile?token=...</div>
     </div>
   );
   if (authed === null) return <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100dvh", background: "var(--bg-app)", color: "var(--text-secondary)" }}>Загрузка...</div>;

@@ -108,6 +108,7 @@ type WorkspaceSnapshot = {
     systemPrompt: string;
     color: string;
     isActive: boolean;
+    apiKeyConfigured: boolean;
   }>;
   files: Array<{
     id: number;
@@ -698,7 +699,7 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       projectTemplatePrompt: settingsRow.projectTemplatePrompt ?? "",
       vaultAvailable: hasElectronVault(),
     },
-    agents: agentRows,
+    agents: agentRows.map(({ apiKey: agentApiKey, ...agent }) => ({ ...agent, apiKeyConfigured: Boolean(compact(agentApiKey)) })),
     files: fileRows.map((row) => ({ ...row, updatedAt: nowIso(row.updatedAt) })),
     history: historyRows
       .reverse()
@@ -721,6 +722,14 @@ export async function getStoredProviderApiKey(provider: string) {
   const stored = compact(settings.apiKeys?.[provider]);
   if (!stored) return stored;
   return decryptSecret(stored);
+}
+
+// Custom-provider support: an agent may carry its own encrypted API key.
+// Falls back to the shared provider key when the agent has none.
+export async function getAgentProviderKey(agent: { provider: string; apiKey?: string | null }) {
+  const own = compact(agent.apiKey ?? "");
+  if (own) return decryptSecret(own);
+  return getStoredProviderApiKey(agent.provider);
 }
 
 function mergeApiKeys(current: Record<string, string>, incoming?: Record<string, string>, remove?: string[]) {
@@ -861,6 +870,7 @@ export async function createAgent(
     skill?: string;
     systemPrompt?: string;
     color?: string;
+    apiKey?: string;
   },
   locale?: string,
 ) {
@@ -889,6 +899,7 @@ export async function createAgent(
       skill: compact(payload.skill) || roleTemplate.skill,
       systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt ?? "") || roleTemplate.systemPrompt,
       color: ROLE_COLORS[role === "main" ? "main" : role] ?? (compact(payload.color) || "#4fc1ff"),
+      apiKey: compact(payload.apiKey) ? encryptSecret(compact(payload.apiKey)) : "",
       isActive: true,
     })
     .returning({ id: agents.id, name: agents.name });
@@ -916,6 +927,8 @@ export async function updateAgentProfile(
     description?: string;
     role?: string;
     color?: string;
+    apiKey?: string;
+    removeApiKey?: boolean;
   },
   locale?: string,
 ) {
@@ -952,6 +965,8 @@ export async function updateAgentProfile(
       systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt),
       description: payload.description ?? agent.description,
       color: ROLE_COLORS[nextRole] ?? (payload.color !== undefined ? compact(payload.color) || agent.color : agent.color),
+      ...(payload.removeApiKey ? { apiKey: "" } : {}),
+      ...(compact(payload.apiKey) ? { apiKey: encryptSecret(compact(payload.apiKey)) } : {}),
     })
     .where(eq(agents.id, agentId));
 
@@ -1355,7 +1370,9 @@ async function* streamAgentReply(
   findingsCount: number,
   options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean },
 ): AsyncGenerator<ChatStreamEvent> {
-  const apiKey = await getStoredProviderApiKey(agent.provider);
+  // Custom-provider support: prefer the agent's own key, fall back to the
+  // shared provider key.
+  const apiKey = await getAgentProviderKey(agent);
   const history = await gatewayHistory(channel);
   const projectContext = await buildProjectContext(options.projectContext);
   const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${projectContext}`;

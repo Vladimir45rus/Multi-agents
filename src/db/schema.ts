@@ -32,6 +32,9 @@ export const agents = sqliteTable("agents", {
   provider: text("provider").notNull(),
   baseUrl: text("base_url").notNull().default(""),
   model: text("model").notNull(),
+  // Custom-provider support: each agent may carry its own encrypted API key,
+  // enabling any number of unknown/self-hosted providers (one agent each).
+  apiKey: text("api_key").notNull().default(""),
   role: text("role").notNull().default("advisor"),
   description: text("description").notNull().default(""),
   skill: text("skill").notNull().default(""),

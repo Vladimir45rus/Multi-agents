@@ -11,7 +11,7 @@ import { completeProviderResponse, providerRequestFromAgent, type GatewayMessage
 import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
 import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction, looksLikeTruncatedJson } from "@/lib/patch-parser";
-import { ensureWorkspaceBootstrap, getStoredProviderApiKey, getWorkspaceSettingsRow } from "@/lib/workspace";
+import { ensureWorkspaceBootstrap, getAgentProviderKey, getWorkspaceSettingsRow } from "@/lib/workspace";
 import { resolveFallbackModels } from "@/lib/provider-models";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
@@ -502,7 +502,9 @@ async function completeAgent(
   projectContext?: ProjectContextInput,
 ) {
   try {
-    const apiKey = await getStoredProviderApiKey(agent.provider);
+    // Custom-provider support: prefer the agent's own key, fall back to the
+    // shared provider key.
+    const apiKey = await getAgentProviderKey(agent);
     const request = providerRequestFromAgent(agent, apiKey);
     const settings = await getWorkspaceSettingsRow();
     // Hotfix (auto-fallback): reserve models resolved dynamically before the

@@ -1,0 +1,1 @@
+ALTER TABLE `agents` ADD `api_key` text DEFAULT '' NOT NULL;
