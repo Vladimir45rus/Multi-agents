@@ -1023,6 +1023,9 @@ export async function assignMainCoder(agentId: number, locale?: string) {
   const candidate = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (candidate.length === 0) throw new Error(t(activeLocale, "Агент не найден", "Agent not found"));
 
+  // Remember the outgoing Lead(s) so their persona texts can be re-skinned.
+  const previousMainRows = await db.select().from(agents).where(eq(agents.role, "main"));
+
   // Fix: demote/promote/settings run inside a single SQLite transaction so a
   // crash between the steps can never leave the workspace without a Lead.
   sqlite.exec("BEGIN IMMEDIATE");
@@ -1040,11 +1043,40 @@ export async function assignMainCoder(agentId: number, locale?: string) {
     throw error;
   }
 
+  // Skin sync: the new Lead adopts the Lead Coder persona — description,
+  // skill, system prompt and UI color — so no advisor texts bleed through.
+  // A default placeholder name ("Советник") is upgraded to "Главный агент";
+  // personal names are preserved.
+  const mainTemplate = ROLE_PROMPT_TEMPLATES.main;
+  const newMainName = candidate[0].name === "Советник" ? "Главный агент" : candidate[0].name;
+  await db.update(agents).set({
+    description: mainTemplate.description,
+    skill: mainTemplate.skill,
+    systemPrompt: mainTemplate.systemPrompt,
+    color: ROLE_COLORS.main,
+    ...(newMainName !== candidate[0].name ? { name: newMainName } : {}),
+  }).where(eq(agents.id, agentId));
+
+  // The outgoing Lead becomes a full advisor: clean advisor persona, color and
+  // (for auto-named Leads) the advisor name — no stale Lead texts remain.
+  const advisorTemplate = ROLE_PROMPT_TEMPLATES.advisor;
+  for (const previous of previousMainRows) {
+    if (previous.id === agentId) continue;
+    const advisorName = previous.name === "Главный агент" ? "Советник" : previous.name;
+    await db.update(agents).set({
+      description: advisorTemplate.description,
+      skill: advisorTemplate.skill,
+      systemPrompt: advisorTemplate.systemPrompt,
+      color: "#06b6d4",
+      ...(advisorName !== previous.name ? { name: advisorName } : {}),
+    }).where(eq(agents.id, previous.id));
+  }
+
   await pushMessage({
     chatChannel: "group",
     senderType: "system",
     agentName: "System",
-    content: t(activeLocale, `Главный Кодер назначен: ${candidate[0].name}.`, `Lead Coder assigned: ${candidate[0].name}.`),
+    content: t(activeLocale, `Главный Кодер назначен: ${newMainName}.`, `Lead Coder assigned: ${newMainName}.`),
   });
 }
 

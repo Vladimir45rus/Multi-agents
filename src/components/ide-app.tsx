@@ -108,6 +108,14 @@ type WorkspaceTreeEntry = {
   kind: "file" | "directory";
 };
 
+// Multi-terminal: each tab keeps its own output buffer and runs its own
+// commands independently of the other tabs.
+type TerminalTab = {
+  id: number;
+  name: string;
+  lines: Array<{ id: number; command: string; output: string; status: string; createdAt: string }>;
+};
+
 type WorkspaceData = {
   settings: {
     id: number;
@@ -545,6 +553,12 @@ export function IdeApp() {
   const [duplicateToLead, setDuplicateToLead] = useState(true);
   const [groupRoleFilter, setGroupRoleFilter] = useState<GroupRoleFilter>("all");
   const [terminalCommand, setTerminalCommand] = useState("");
+  // Multi-terminal sessions: independent tabs with their own output state.
+  const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([{ id: 1, name: "Терминал 1", lines: [] }]);
+  const [activeTerminalTab, setActiveTerminalTab] = useState(1);
+  const terminalTabIdRef = useRef(2);
+  const terminalLineIdRef = useRef(1);
+  const terminalSeededRef = useRef(false);
   const [status, setStatus] = useState(dict.ru.loading);
   const [busy, setBusy] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -668,6 +682,33 @@ export function IdeApp() {
     expandedDirectoriesInitializedRef.current = true;
     setExpandedDirectories(workspaceTreeEntries.filter((entry) => entry.kind === "directory").map((entry) => entry.path));
   }, [workspaceTreeEntries]);
+
+  // Seed the first terminal tab with the persisted history once.
+  useEffect(() => {
+    if (terminalSeededRef.current || !data?.terminal?.length) return;
+    terminalSeededRef.current = true;
+    setTerminalTabs((prev) => prev.map((tab) => tab.id === 1
+      ? { ...tab, lines: data.terminal.map((entry) => ({ id: entry.id, command: entry.command, output: entry.output, status: entry.status, createdAt: entry.createdAt })) }
+      : tab));
+  }, [data?.terminal]);
+
+  function addTerminalTab() {
+    const id = terminalTabIdRef.current++;
+    setTerminalTabs((prev) => [...prev, { id, name: locale === "ru" ? `Терминал ${prev.length + 1}` : `Terminal ${prev.length + 1}`, lines: [] }]);
+    setActiveTerminalTab(id);
+  }
+
+  function closeTerminalTab(id: number) {
+    const next = terminalTabs.filter((tab) => tab.id !== id);
+    if (next.length === 0) {
+      const fresh: TerminalTab = { id: terminalTabIdRef.current++, name: locale === "ru" ? "Терминал 1" : "Terminal 1", lines: [] };
+      setTerminalTabs([fresh]);
+      setActiveTerminalTab(fresh.id);
+      return;
+    }
+    setTerminalTabs(next);
+    if (activeTerminalTab === id) setActiveTerminalTab(next[next.length - 1].id);
+  }
 
   // Sync fix: the main window never refreshed on its own, so messages sent
   // from the overlay widget or mobile stayed invisible until the user acted.
@@ -2276,20 +2317,26 @@ export function IdeApp() {
 
   async function runTerminal(event: FormEvent) {
     event.preventDefault();
-    if (!terminalCommand.trim()) return;
+    const submitted = terminalCommand.trim();
+    if (!submitted) return;
     setBusy(true);
     try {
       const response = await fetch("/api/terminal", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ command: terminalCommand, locale }),
+        body: JSON.stringify({ command: submitted, locale }),
       });
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as { error?: string } | null;
         throw new Error(payload?.error ?? "Terminal command failed");
       }
+      const payload = (await response.json().catch(() => null)) as { output?: string; status?: string } | null;
       setTerminalCommand("");
-      await loadWorkspace(selectedFileId, locale);
+      // Multi-terminal: the output lands in the tab that ran the command.
+      const lineId = terminalLineIdRef.current++;
+      setTerminalTabs((prev) => prev.map((tab) => tab.id === activeTerminalTab
+        ? { ...tab, lines: [...tab.lines, { id: lineId, command: submitted, output: payload?.output ?? "", status: payload?.status ?? "success", createdAt: new Date().toISOString() }] }
+        : tab));
       setStatus(locale === "ru" ? "Команда выполнена" : "Command completed");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Terminal command failed");
@@ -2505,6 +2552,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
     try {
       const response = await fetch("/api/terminal", { method: "DELETE" });
       if (!response.ok) throw new Error(((await response.json().catch(() => null)) as { error?: string } | null)?.error ?? "Terminal clear failed");
+      // Multi-terminal: clear the active tab's local buffer along with the DB.
+      setTerminalTabs((prev) => prev.map((tab) => tab.id === activeTerminalTab ? { ...tab, lines: [] } : tab));
       await loadWorkspace(selectedFileId, locale);
       setStatus(locale === "ru" ? "Терминал очищен" : "Terminal cleared");
     } catch (error) {
@@ -2999,7 +3048,21 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             {!collapsedPanels.terminal && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
-                  <span className="truncate">{t.terminal}</span>
+                  <div className="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+                    {terminalTabs.map((tab) => (
+                      <div
+                        key={tab.id}
+                        onClick={() => setActiveTerminalTab(tab.id)}
+                        className={`flex shrink-0 cursor-pointer items-center gap-1 rounded px-2 py-0.5 text-[10px] ${tab.id === activeTerminalTab ? "bg-[var(--bg-selection)] text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]"}`}
+                      >
+                        <span>{tab.name}</span>
+                        {terminalTabs.length > 1 ? (
+                          <button type="button" onClick={(e) => { e.stopPropagation(); closeTerminalTab(tab.id); }} className="rounded-full px-1 text-[9px] hover:bg-slate-700" title={locale === "ru" ? "Закрыть вкладку" : "Close tab"}>✕</button>
+                        ) : null}
+                      </div>
+                    ))}
+                    <button type="button" onClick={addTerminalTab} title={locale === "ru" ? "Новый терминал" : "New terminal"} className="shrink-0 rounded px-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">+</button>
+                  </div>
                   <div className="flex items-center gap-0.5">
                     <button type="button" onClick={() => void clearTerminal()} disabled={busy} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-0.5 text-[10px] text-slate-300 hover:border-blue-400 disabled:opacity-50">clear</button>
                     {renderCollapseButton("terminal")}
@@ -3007,7 +3070,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto bg-[var(--bg-terminal)] p-2 font-mono text-[10px]">
-                  {data?.terminal?.map((entry) => (
+                  {(terminalTabs.find((tab) => tab.id === activeTerminalTab)?.lines ?? []).map((entry) => (
                     <div key={entry.id} className="mb-2 grid grid-cols-[auto_1fr] gap-2">
                       <span className="text-slate-600">{new Date(entry.createdAt).toLocaleTimeString(locale)}</span>
                       <div>
@@ -3562,7 +3625,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       autoComplete="off"
                       value={agentKeyDrafts[agent.id] ?? ""}
                       onChange={(e) => setAgentKeyDrafts((prev) => ({ ...prev, [agent.id]: e.target.value }))}
-                      placeholder={agent.apiKeyConfigured ? (locale === "ru" ? "Ключ агента сохранён (введите новый для замены)" : "Agent key saved (type a new one to replace)") : (locale === "ru" ? "API-ключ агента (свой провайдер)" : "Agent API key (custom provider)")}
+                      placeholder={agent.apiKeyConfigured ? (locale === "ru" ? "Ключ агента сохранён (введите новый для замены)" : "Agent key saved (type a new one to replace)") : (locale === "ru" ? "Используется глобальный ключ провайдера" : "Using the provider's global key")}
                       className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                     />
 
@@ -3724,7 +3787,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         autoComplete="off"
                         value={newAgentApiKey}
                         onChange={(e) => setNewAgentApiKey(e.target.value)}
-                        placeholder={locale === "ru" ? "API-ключ агента (свой провайдер)" : "Agent API key (custom provider)"}
+                        placeholder={locale === "ru" ? "Используется глобальный ключ провайдера" : "Using the provider's global key"}
                         className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                       />
                       <select value={newAgent.role} onChange={(e) => {
