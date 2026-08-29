@@ -67,6 +67,9 @@ export type ChatStreamEvent =
   | { type: "delta"; channel: ChatChannel; identity: AgentIdentity; text: string }
   | { type: "agent_done"; channel: ChatChannel; identity: AgentIdentity; content: string; messageId?: number }
   | { type: "agent_error"; channel: ChatChannel; identity: AgentIdentity; message: string; status?: number; rateLimited?: boolean }
+  // Auto-cycle (logOnly) rounds report their full response through this
+  // internal event; it is consumed by the background cycle, never sent to UI.
+  | { type: "agent_log"; channel: ChatChannel; identity: AgentIdentity; content: string }
   | { type: "done"; channel: ChatChannel }
   | { type: "error"; channel: ChatChannel; message: string };
 
@@ -1466,6 +1469,8 @@ async function* streamAgentReply(
 
   // Log routing fix: in logOnly mode (auto-cycle review/fix rounds) the reply
   // is stored to the system events log and never lands in the chat windows.
+  // The full text is reported back to the background cycle via agent_log so
+  // the cycle can count RELEASE_READY votes and finish early.
   if (options.logOnly) {
     await recordSystemEvent(
       "info",
@@ -1473,6 +1478,7 @@ async function* streamAgentReply(
       t(locale, `Авто-цикл, роль «${agent.role}»: размышление записано в логи.`, `Auto-cycle, role "${agent.role}": reflection stored to logs.`),
       fullResponse.slice(0, 8_000),
     );
+    yield { type: "agent_log", channel, identity, content: fullResponse };
     return;
   }
 
@@ -1537,116 +1543,154 @@ export async function* streamWorkspaceMessage(
   const [settingsRow] = await db.select({ autoApprove: workspaceSettings.autoApprove }).from(workspaceSettings).limit(1);
   const autoApprove = Boolean(settingsRow?.autoApprove);
 
+  // Hang fix: the auto-cycle used to run inside this SSE stream. Its logOnly
+  // replies are stored to the logs (not the chat), so the in-stream vote scan
+  // never saw them: the loop burned through all 15 iterations — hours of
+  // silent provider calls — while the open stream kept the UI stuck on the
+  // thinking state all night. The cycle now runs detached in the background:
+  // this stream ends right after the direct answers, and the cycle reports
+  // via the logs panel only.
   if (channel === "group" && autoApprove && !options?.signal?.aborted) {
-    for (let iteration = 0; iteration < 15; iteration += 1) {
-      if (options?.signal?.aborted) break;
+    void runAutoCycleBackground({
+      channel,
+      locale: activeLocale,
+      userMessageId,
+      projectContext: options?.projectContext,
+    }).catch(() => undefined);
+  }
 
-      // Check if all agents voted RELEASE_READY
-      const recentMessages = await db.select().from(chatMessages)
-        .where(eq(chatMessages.chatChannel, "group"))
-        .orderBy(desc(chatMessages.id))
-        .limit(20);
+  if (options?.signal?.aborted) throw new Error("Chat request cancelled");
+  yield { type: "done", channel };
+}
 
-      const activeAgents = await db.select().from(agents).where(eq(agents.isActive, true));
-      const readyVotes = recentMessages.filter((m) =>
-        m.id > userMessageId
-        && m.senderType !== "user" && m.senderType !== "system" && m.content.includes("[STATUS: RELEASE_READY]"),
-      );
+// Hard caps for the detached auto-cycle so it can never spin for hours.
+const AUTO_CYCLE_MAX_ITERATIONS = 4;
+const AUTO_CYCLE_MAX_MS = 10 * 60_000;
 
-      // Require ALL active agents to signal ready (or at least 3 if single-agent)
-      const requiredVotes = Math.min(activeAgents.length, 4);
-      if (readyVotes.length >= requiredVotes) {
-        const doneMsg = t(activeLocale,
-          `[STATUS: RELEASE_READY] ✅ Все ${readyVotes.length} агентов подтвердили готовность. Цикл завершён.`,
-          `[STATUS: RELEASE_READY] ✅ All ${readyVotes.length} agents confirmed readiness. Cycle complete.`);
-        // Log routing fix: cycle completion is system info — it goes to the logs
-        // panel, never into the chat windows.
-        await recordSystemEvent("success", "auto-cycle", doneMsg);
+// One background auto-cycle at a time; overlapping triggers are skipped.
+let autoCycleRunning = false;
+
+async function runAutoCycleBackground(options: {
+  channel: ChatChannel;
+  locale: UiLocale;
+  userMessageId: number;
+  projectContext?: ProjectContextInput;
+}) {
+  if (autoCycleRunning) {
+    await recordSystemEvent("info", "auto-cycle", t(options.locale, "Предыдущий автоцикл ещё выполняется — новый запуск пропущен.", "Previous auto-cycle is still running — new run skipped."));
+    return;
+  }
+  autoCycleRunning = true;
+  const startedAt = Date.now();
+  // Detached cycle: not tied to the user's request signal, but still bounded
+  // by the iteration and wall-clock caps below.
+  const controller = new AbortController();
+  try {
+    await recordSystemEvent("info", "auto-cycle", t(options.locale, "Автоцикл запущен в фоне; размышления и итог — в логах.", "Auto-cycle started in the background; reflections and the summary go to the logs."));
+
+    const activeAgents = await db.select().from(agents).where(eq(agents.isActive, true));
+    const reviewAgents = activeAgents.filter((a) => a.role !== "main");
+    const requiredVotes = Math.max(1, Math.min(reviewAgents.length, 4));
+
+    // Direct answers (non-logOnly round) are persisted: count their READY votes.
+    const persisted = await db.select().from(chatMessages)
+      .where(eq(chatMessages.chatChannel, options.channel))
+      .orderBy(desc(chatMessages.id))
+      .limit(20);
+    const persistedReadyVotes = persisted.filter((m) =>
+      m.id > options.userMessageId
+      && m.senderType !== "user" && m.senderType !== "system"
+      && m.content.includes("[STATUS: RELEASE_READY]"),
+    ).length;
+
+    for (let iteration = 1; iteration <= AUTO_CYCLE_MAX_ITERATIONS; iteration += 1) {
+      if (controller.signal.aborted) break;
+      if (Date.now() - startedAt > AUTO_CYCLE_MAX_MS) {
+        await recordSystemEvent("warning", "auto-cycle", t(options.locale, "[STATUS: MAX_ITERATIONS] Автоцикл остановлен по лимиту времени (10 минут).", "[STATUS: MAX_ITERATIONS] Auto-cycle stopped by the time limit (10 minutes)."));
         break;
       }
 
-      // Run review cycle: ask reviewer + tester to check latest code
-      const reviewText = t(activeLocale,
+      const logs: string[] = [];
+      const reviewText = t(options.locale,
         `Проверь текущий код после последних правок. Найди ошибки, баги, проблемы. Если всё идеально — ответь "[STATUS: RELEASE_READY] Код готов." Если есть проблемы — укажи конкретный файл, строку и что исправить.`,
         `Review the current code after latest changes. Find bugs, errors, issues. If perfect — reply "[STATUS: RELEASE_READY] Code ready." If issues — specify file, line, and fix needed.`);
 
       try {
-        for await (const event of runAgentRound(channel, reviewText, activeLocale, [], {
-          signal: options?.signal,
-          projectContext: options?.projectContext,
+        for await (const event of runAgentRound(options.channel, reviewText, options.locale, [], {
+          signal: controller.signal,
+          projectContext: options.projectContext,
           reviewOnly: true,
           logOnly: true,
         })) {
-          yield event;
+          if (event.type === "agent_log") logs.push(event.content);
         }
       } catch {
-        // Continue to next iteration even if review round fails
+        // Continue to the next iteration even if the review round fails.
       }
 
-      // Check if main needs to fix something (messages contain error mentions)
-      const lastRoundMessages = await db.select().from(chatMessages)
-        .where(eq(chatMessages.chatChannel, "group"))
-        .orderBy(desc(chatMessages.id))
-        .limit(10);
-      const hasIssues = lastRoundMessages.some((m) =>
-        m.id > userMessageId
-        && (m.content.includes("ошибка") || m.content.includes("баг") || m.content.includes("error") || m.content.includes("bug")),
-      );
+      const readyCount = persistedReadyVotes + logs.filter((c) => c.includes("[STATUS: RELEASE_READY]")).length;
+      if (readyCount >= requiredVotes) {
+        await recordSystemEvent("success", "auto-cycle", t(options.locale,
+          `[STATUS: RELEASE_READY] ✅ Автоцикл завершён: ${readyCount} подтверждений готовности.`,
+          `[STATUS: RELEASE_READY] ✅ Auto-cycle complete: ${readyCount} readiness confirmations.`));
+        break;
+      }
 
+      const hasIssues = logs.some((c) => /ошибка|баг|error|bug/i.test(c));
       if (hasIssues) {
-        const fixText = t(activeLocale,
-          `Исправь найденные ошибки. Выше в чате — конкретные замечания от советников. Примени исправления и проверь тестами. Если всё работает — ответь "[STATUS: RELEASE_READY] Исправлено."`,
-          `Fix the issues found. Above in chat — specific feedback from advisors. Apply fixes and verify with tests. If everything works — reply "[STATUS: RELEASE_READY] Fixed."`);
+        // The advisors' feedback lives in the logs now, not in the chat, so it
+        // is embedded into the fix prompt for the Lead agent directly.
+        const issueExcerpts = logs
+          .filter((c) => !c.includes("[STATUS: RELEASE_READY]"))
+          .map((c) => c.slice(0, 600))
+          .join("\n\n")
+          .slice(0, 4_000);
+        const fixText = t(options.locale,
+          `Исправь найденные ошибки. Замечания советников:\n${issueExcerpts || "(нет деталей)"}\n\nПримени исправления и проверь тестами. Если всё работает — ответь "[STATUS: RELEASE_READY] Исправлено."`,
+          `Fix the issues found. Advisors' feedback:\n${issueExcerpts || "(no details)"}\n\nApply fixes and verify with tests. If everything works — reply "[STATUS: RELEASE_READY] Fixed."`);
 
         try {
-          for await (const event of runAgentRound(channel, fixText, activeLocale, [], {
-            signal: options?.signal,
-            projectContext: options?.projectContext,
+          for await (const event of runAgentRound(options.channel, fixText, options.locale, [], {
+            signal: controller.signal,
+            projectContext: options.projectContext,
             fixMode: true,
             logOnly: true,
           })) {
-            yield event;
+            if (event.type === "agent_log") logs.push(event.content);
           }
         } catch {
           // Continue
         }
+        const fixedReady = persistedReadyVotes + logs.filter((c) => c.includes("[STATUS: RELEASE_READY]")).length;
+        if (fixedReady >= requiredVotes) {
+          await recordSystemEvent("success", "auto-cycle", t(options.locale,
+            `[STATUS: RELEASE_READY] ✅ Автоцикл завершён после исправлений: ${fixedReady} подтверждений.`,
+            `[STATUS: RELEASE_READY] ✅ Auto-cycle complete after fixes: ${fixedReady} confirmations.`));
+          break;
+        }
       }
 
-      // Prevent infinite loops
-      if (iteration >= 14) {
-        const limitMsg = t(activeLocale,
-          `[STATUS: MAX_ITERATIONS] Достигнут лимит итераций автономного цикла.`,
-          `[STATUS: MAX_ITERATIONS] Autonomous cycle iteration limit reached.`);
-        await recordSystemEvent("warning", "auto-cycle", limitMsg);
-        break;
+      if (iteration >= AUTO_CYCLE_MAX_ITERATIONS) {
+        await recordSystemEvent("warning", "auto-cycle", t(options.locale,
+          "[STATUS: MAX_ITERATIONS] Достигнут лимит итераций автономного цикла.",
+          "[STATUS: MAX_ITERATIONS] Autonomous cycle iteration limit reached."));
       }
     }
-  }
 
-  // Post clean summary — log routing fix: the auto-cycle summary is system
-  // info for the logs panel. The lead chat stays a direct user-to-lead
-  // conversation only, with no auto-generated reports dumped into it.
-  if (channel === "group" && !options?.signal?.aborted) {
-    const allGroupMessages = await db.select().from(chatMessages).where(eq(chatMessages.chatChannel, "group")).orderBy(desc(chatMessages.id)).limit(30);
+    // Summary → logs (never into the lead chat).
+    const allGroupMessages = await db.select().from(chatMessages).where(eq(chatMessages.chatChannel, options.channel)).orderBy(desc(chatMessages.id)).limit(30);
     const summary = allGroupMessages
       .filter((m) => m.senderType !== "user" && m.senderType !== "system")
       .slice(0, 8)
       .reverse()
       .map((m) => `${m.agentName ?? m.senderType}: ${m.content.slice(0, 200)}`)
       .join("\n\n");
-
     if (summary) {
-      await recordSystemEvent(
-        "info",
-        "auto-cycle",
-        t(activeLocale, "Итоговый отчёт цикла записан в логи.", "Auto-cycle final report stored to logs."),
-        summary.slice(0, 8_000),
-      );
+      await recordSystemEvent("info", "auto-cycle", t(options.locale, "Итоговый отчёт цикла записан в логи.", "Auto-cycle final report stored to logs."), summary.slice(0, 8_000));
     }
+  } finally {
+    autoCycleRunning = false;
   }
-
-  if (options?.signal?.aborted) throw new Error("Chat request cancelled");
-  yield { type: "done", channel };
 }
 
 async function* runAgentRound(
