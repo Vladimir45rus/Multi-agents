@@ -135,6 +135,7 @@ type WorkspaceData = {
     vaultAvailable: boolean;
   };
   agents: Agent[];
+  customProviders: Array<{ id: number; name: string; baseUrl: string; models: string[]; apiKeyConfigured: boolean }>;
   files: Array<{ id: number; path: string; language: string; content: string; updatedAt: string }>;
   messages: WorkspaceMessage[];
   terminal: Array<{ id: number; command: string; output: string; status: string; createdAt: string }>;
@@ -608,6 +609,8 @@ export function IdeApp() {
   // memory; the server stores them encrypted).
   const [agentKeyDrafts, setAgentKeyDrafts] = useState<Record<number, string>>({});
   const [newAgentApiKey, setNewAgentApiKey] = useState("");
+  // Custom provider constructor state (Settings → Кастомные провайдеры).
+  const [customProviderForm, setCustomProviderForm] = useState<{ id: number | null; name: string; baseUrl: string; apiKey: string; models: string } | null>(null);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateId, setTemplateId] = useState("web");
   const [telegramTesting, setTelegramTesting] = useState(false);
@@ -830,6 +833,12 @@ export function IdeApp() {
   }
 
   function providerModelLabel(provider: string, model: string) {
+    // Custom registry providers show their own name instead of the generic
+    // "Custom OpenAI Endpoint" preset label.
+    if (provider.startsWith("custom:")) {
+      const cp = data?.customProviders.find((item) => `custom:${item.id}` === provider);
+      return `${cp?.name ?? "Custom"} / ${model}`;
+    }
     return `${getProviderPreset(provider).label} / ${normalizeProviderModel(provider, model)}`;
   }
 
@@ -1183,6 +1192,14 @@ export function IdeApp() {
 
   async function fetchModels(providerId: string, baseUrl?: string, apiKey?: string, force = false) {
     const preset = getProviderPreset(providerId);
+
+    // Custom registry providers: the model list comes from the constructor,
+    // not from a live /models request.
+    if (providerId.startsWith("custom:")) {
+      const cp = data?.customProviders.find((provider) => `custom:${provider.id}` === providerId);
+      setModelOptions((prev) => ({ ...prev, [providerId]: cp?.models?.length ? cp.models : [] }));
+      return;
+    }
 
     if (!force && modelOptions[providerId]?.length) return;
 
@@ -1702,6 +1719,71 @@ export function IdeApp() {
     } finally {
       setBusy(false);
     }
+  }
+
+  async function saveCustomProvider() {
+    if (!customProviderForm) return;
+    setBusy(true);
+    try {
+      const payload = {
+        name: customProviderForm.name,
+        baseUrl: customProviderForm.baseUrl,
+        models: customProviderForm.models,
+        ...(customProviderForm.apiKey.trim() ? { apiKey: customProviderForm.apiKey.trim() } : {}),
+      };
+      const res = await fetch(customProviderForm.id ? `/api/custom-providers/${customProviderForm.id}` : "/api/custom-providers", {
+        method: customProviderForm.id ? "PUT" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        const errPayload = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(errPayload?.error ?? "Failed to save custom provider");
+      }
+      setCustomProviderForm(null);
+      await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? "Кастомный провайдер сохранён" : "Custom provider saved");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to save custom provider");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeCustomProvider(id: number) {
+    if (!window.confirm(locale === "ru" ? "Удалить кастомного провайдера?" : "Delete this custom provider?")) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/custom-providers/${id}`, { method: "DELETE" });
+      if (!res.ok) {
+        const errPayload = (await res.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(errPayload?.error ?? "Failed to delete custom provider");
+      }
+      await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? "Провайдер удалён" : "Provider deleted");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Failed to delete custom provider");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function editCustomProvider(id: number) {
+    const cp = data?.customProviders.find((provider) => provider.id === id);
+    if (!cp) return;
+    setCustomProviderForm({ id: cp.id, name: cp.name, baseUrl: cp.baseUrl, apiKey: "", models: (cp.models ?? []).join(", ") });
+  }
+
+  // Custom registry providers carry their own baseUrl/model list; built-in
+  // presets keep using their preset defaults.
+  function providerSelection(value: string) {
+    const cp = value.startsWith("custom:") ? data?.customProviders.find((provider) => `custom:${provider.id}` === value) : null;
+    return {
+      provider: value,
+      baseUrl: cp?.baseUrl ?? getProviderPreset(value).baseUrl,
+      model: cp?.models?.length ? cp.models[0] : getProviderPreset(value).defaultModel,
+      manualModel: false,
+    };
   }
 
   async function saveAgentProfile(agentId: number) {
@@ -3207,6 +3289,61 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
           </section>
 
+          <section className="mb-5">
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs uppercase text-[var(--text-secondary)]">{locale === "ru" ? "Кастомные провайдеры" : "Custom providers"}</span>
+              <button type="button" onClick={() => setCustomProviderForm({ id: null, name: "", baseUrl: "", apiKey: "", models: "" })} className="rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white">
+                {locale === "ru" ? "+ Добавить провайдер" : "+ Add provider"}
+              </button>
+            </div>
+            <p className="mb-2 text-[10px] text-[var(--text-secondary)]">
+              {locale === "ru"
+                ? "Любой OpenAI-совместимый сервис (/v1): свой Base URL, ключ и список моделей. Модели появятся в селекторах агентов."
+                : "Any OpenAI-compatible service (/v1): your Base URL, key and model list. Models appear in the agent selectors."}
+            </p>
+            {customProviderForm ? (
+              <div className="mb-2 rounded border border-blue-400/60 bg-blue-500/10 p-2">
+                <input value={customProviderForm.name} onChange={(e) => setCustomProviderForm({ ...customProviderForm, name: e.target.value })} placeholder={locale === "ru" ? "Название (например, Groq AI)" : "Name (e.g., Groq AI)"} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                <input value={customProviderForm.baseUrl} onChange={(e) => setCustomProviderForm({ ...customProviderForm, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                <input
+                  type="password"
+                  autoComplete="off"
+                  value={customProviderForm.apiKey}
+                  onChange={(e) => setCustomProviderForm({ ...customProviderForm, apiKey: e.target.value })}
+                  placeholder={customProviderForm.id ? (locale === "ru" ? "Ключ сохранён (введите новый для замены)" : "Key saved (type a new one to replace)") : (locale === "ru" ? "API-ключ" : "API key")}
+                  className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                />
+                <textarea
+                  value={customProviderForm.models}
+                  onChange={(e) => setCustomProviderForm({ ...customProviderForm, models: e.target.value })}
+                  placeholder={locale === "ru" ? "Модели через запятую: glm-5.2:free, llama-3.3-70b" : "Models, comma separated: glm-5.2:free, llama-3.3-70b"}
+                  className="mb-1 min-h-12 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                />
+                <div className="flex gap-1">
+                  <button type="button" onClick={() => void saveCustomProvider()} disabled={busy || !customProviderForm.name.trim() || !customProviderForm.baseUrl.trim()} className="rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{locale === "ru" ? "Сохранить" : "Save"}</button>
+                  <button type="button" onClick={() => setCustomProviderForm(null)} className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px]">{locale === "ru" ? "Отмена" : "Cancel"}</button>
+                </div>
+              </div>
+            ) : null}
+            <div className="space-y-1">
+              {(data?.customProviders ?? []).map((cp) => (
+                <div key={cp.id} className="flex items-center justify-between gap-2 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold text-white">{cp.name}{cp.apiKeyConfigured ? "" : " ⚠️"}</p>
+                    <p className="truncate text-[10px] text-[var(--text-secondary)]">{cp.baseUrl} · {(cp.models ?? []).length} моделей</p>
+                  </div>
+                  <div className="flex shrink-0 gap-1">
+                    <button type="button" onClick={() => editCustomProvider(cp.id)} className="rounded bg-[#3a3d41] px-2 py-1 text-[10px] text-white">{locale === "ru" ? "Изменить" : "Edit"}</button>
+                    <button type="button" onClick={() => void removeCustomProvider(cp.id)} className="rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400">{locale === "ru" ? "Удалить" : "Delete"}</button>
+                  </div>
+                </div>
+              ))}
+              {(data?.customProviders ?? []).length === 0 && !customProviderForm ? (
+                <p className="text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Пока нет ни одного кастомного провайдера." : "No custom providers yet."}</p>
+              ) : null}
+            </div>
+          </section>
+
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">Telegram</p>
             <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Bot Token
@@ -3284,18 +3421,25 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     <select
                       value={draft.provider}
                       onChange={(e) => {
-                        const preset = getProviderPreset(e.target.value);
+                        const selection = providerSelection(e.target.value);
                         setAgentDrafts((prev) => ({
                           ...prev,
-                          [agent.id]: { ...draft, provider: preset.id, baseUrl: preset.baseUrl, model: preset.defaultModel, manualModel: false },
+                          [agent.id]: { ...draft, ...selection },
                         }));
-                        void fetchModels(preset.id, preset.baseUrl, apiKeysDraft[preset.id]);
+                        void fetchModels(selection.provider, selection.baseUrl, apiKeysDraft[selection.provider]);
                       }}
                       className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                     >
                       {PROVIDER_PRESETS?.map((preset) => (
                         <option key={preset.id} value={preset.id}>{preset.label}</option>
                       ))}
+                      {(data?.customProviders ?? []).length > 0 && (
+                        <optgroup label={locale === "ru" ? "Кастомные" : "Custom"}>
+                          {(data?.customProviders ?? []).map((cp) => (
+                            <option key={`custom:${cp.id}`} value={`custom:${cp.id}`}>{cp.name}</option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
 
                     <input value={draft.baseUrl} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, baseUrl: e.target.value } }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
@@ -3407,15 +3551,22 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         <select
                           value={newAgent.provider}
                           onChange={(e) => {
-                            const preset = getProviderPreset(e.target.value);
-                            setNewAgent((p) => ({ ...p, provider: preset.id, baseUrl: preset.baseUrl, model: preset.defaultModel, manualModel: false }));
-                            void fetchModels(preset.id, preset.baseUrl, apiKeysDraft[preset.id]);
+                            const selection = providerSelection(e.target.value);
+                            setNewAgent((p) => ({ ...p, ...selection }));
+                            void fetchModels(selection.provider, selection.baseUrl, apiKeysDraft[selection.provider]);
                           }}
                           className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                         >
                           {PROVIDER_PRESETS?.map((preset) => (
                             <option key={preset.id} value={preset.id}>{preset.label}</option>
                           ))}
+                          {(data?.customProviders ?? []).length > 0 && (
+                            <optgroup label={locale === "ru" ? "Кастомные" : "Custom"}>
+                              {(data?.customProviders ?? []).map((cp) => (
+                                <option key={`custom:${cp.id}`} value={`custom:${cp.id}`}>{cp.name}</option>
+                              ))}
+                            </optgroup>
+                          )}
                         </select>
                       </label>
                       <input value={newAgent.baseUrl} onChange={(e) => setNewAgent((p) => ({ ...p, baseUrl: e.target.value }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />

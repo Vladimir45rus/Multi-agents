@@ -44,6 +44,17 @@ export const agents = sqliteTable("agents", {
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
 });
 
+// User-defined OpenAI-compatible providers (unlimited): each row is one
+// service endpoint with its own key and model list.
+export const customProviders = sqliteTable("custom_providers", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  name: text("name").notNull(),
+  baseUrl: text("base_url").notNull(),
+  apiKey: text("api_key").notNull().default(""),
+  models: text("models", { mode: "json" }).$type<string[]>().notNull().default([]),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
+});
+
 export const projectFiles = sqliteTable("project_files", {
   id: integer("id").primaryKey({ autoIncrement: true }),
   path: text("path").notNull().unique(),

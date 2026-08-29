@@ -14,6 +14,7 @@ import {
   projectFiles,
   terminalEntries,
   systemEvents,
+  customProviders,
   workspaceSettings,
 } from "@/db/schema";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
@@ -29,6 +30,7 @@ import {
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { encryptSecret } from "@/lib/secret-cipher";
 import { resolveFallbackModels } from "@/lib/provider-models";
+import { getCustomProviderKey } from "@/lib/custom-providers";
 import { isPureToolCallChunk, isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
@@ -111,6 +113,13 @@ type WorkspaceSnapshot = {
     systemPrompt: string;
     color: string;
     isActive: boolean;
+    apiKeyConfigured: boolean;
+  }>;
+  customProviders: Array<{
+    id: number;
+    name: string;
+    baseUrl: string;
+    models: string[];
     apiKeyConfigured: boolean;
   }>;
   files: Array<{
@@ -668,6 +677,7 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
 
   const settingsRow = await getWorkspaceSettingsRow();
   const agentRows = await db.select().from(agents).orderBy(asc(agents.id));
+  const customProviderRows = await db.select().from(customProviders).orderBy(asc(customProviders.id));
   const fileRows = (await db.select().from(projectFiles).orderBy(asc(projectFiles.path)))
     .filter((row) => row.language !== "directory" && !row.path.startsWith(".multi-agent-virtual-dirs/"));
   const historyRows = await db.select().from(fileHistory).orderBy(desc(fileHistory.id)).limit(100);
@@ -703,6 +713,7 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       vaultAvailable: hasElectronVault(),
     },
     agents: agentRows.map(({ apiKey: agentApiKey, ...agent }) => ({ ...agent, apiKeyConfigured: Boolean(compact(agentApiKey)) })),
+    customProviders: customProviderRows.map(({ apiKey: providerApiKey, ...provider }) => ({ ...provider, apiKeyConfigured: Boolean(compact(providerApiKey)) })),
     files: fileRows.map((row) => ({ ...row, updatedAt: nowIso(row.updatedAt) })),
     history: historyRows
       .reverse()
@@ -728,10 +739,15 @@ export async function getStoredProviderApiKey(provider: string) {
 }
 
 // Custom-provider support: an agent may carry its own encrypted API key.
-// Falls back to the shared provider key when the agent has none.
+// Resolution order: agent's own key → registry key of "custom:<id>" → the
+// shared provider key.
 export async function getAgentProviderKey(agent: { provider: string; apiKey?: string | null }) {
   const own = compact(agent.apiKey ?? "");
   if (own) return decryptSecret(own);
+  if (agent.provider.startsWith("custom:")) {
+    const customKey = await getCustomProviderKey(agent.provider.slice("custom:".length));
+    if (customKey) return customKey;
+  }
   return getStoredProviderApiKey(agent.provider);
 }
 
@@ -881,10 +897,16 @@ export async function createAgent(
   await ensureWorkspaceBootstrap();
 
   const name = compact(payload.name);
-  const preset = getProviderPreset(payload.provider);
-  const provider = preset.id;
-  const model = normalizeProviderModel(provider, compact(payload.model) || preset.defaultModel);
-  const baseUrl = compact(payload.baseUrl) || preset.baseUrl;
+  const requestedProvider = compact(payload.provider) || "openrouter";
+  // Custom registry providers ("custom:<id>") pass through untouched so each
+  // built-in preset keeps working exactly as before.
+  const isCustomProvider = requestedProvider.startsWith("custom:");
+  const preset = getProviderPreset(requestedProvider);
+  const provider = isCustomProvider ? requestedProvider : preset.id;
+  const model = isCustomProvider
+    ? compact(payload.model)
+    : normalizeProviderModel(provider, compact(payload.model) || preset.defaultModel);
+  const baseUrl = compact(payload.baseUrl) || (isCustomProvider ? "" : preset.baseUrl);
   const role = normalizeRole(payload.role);
   const roleTemplate = ROLE_PROMPT_TEMPLATES[role] ?? ROLE_PROMPT_TEMPLATES.advisor;
 
@@ -941,10 +963,14 @@ export async function updateAgentProfile(
   const [agent] = await db.select().from(agents).where(eq(agents.id, agentId)).limit(1);
   if (!agent) throw new Error(t(activeLocale, "Агент не найден", "Agent not found"));
 
-  const preset = getProviderPreset(payload.provider ?? agent.provider);
-  const provider = preset.id;
-  const model = normalizeProviderModel(provider, compact(payload.model) || preset.defaultModel);
-  const baseUrl = compact(payload.baseUrl) || preset.baseUrl;
+  const requestedProvider = compact(payload.provider) || agent.provider;
+  const isCustomProvider = requestedProvider.startsWith("custom:");
+  const preset = getProviderPreset(requestedProvider);
+  const provider = isCustomProvider ? requestedProvider : preset.id;
+  const model = isCustomProvider
+    ? compact(payload.model) || agent.model
+    : normalizeProviderModel(provider, compact(payload.model) || preset.defaultModel);
+  const baseUrl = compact(payload.baseUrl) || (isCustomProvider ? agent.baseUrl : preset.baseUrl);
   const nextRole = normalizeRole(payload.role ?? agent.role);
 
   if (agent.role === "main" && nextRole !== "main") {
