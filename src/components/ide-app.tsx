@@ -559,6 +559,7 @@ export function IdeApp() {
   const [topProportions, setTopProportions] = useState([240, 560, 320, 320]);
   const [bottomProportions, setBottomProportions] = useState([0.5, 0.5]);
   const [workspaceTreeEntries, setWorkspaceTreeEntries] = useState<WorkspaceTreeEntry[]>([]);
+  const [workspaceTreeRoot, setWorkspaceTreeRoot] = useState("");
   const [fileStatuses, setFileStatuses] = useState<Record<string, "new" | "modified" | "saved">>({});
   const [selectedDirectory, setSelectedDirectory] = useState("");
   const [expandedDirectories, setExpandedDirectories] = useState<string[]>([]);
@@ -1174,9 +1175,10 @@ export function IdeApp() {
     if (!workspaceResponse.ok) throw new Error(dict[l].errLoad);
 
     const payload = (await workspaceResponse.json()) as WorkspaceData;
-    const treePayload = treeResponse.ok ? (await treeResponse.json()) as { entries?: WorkspaceTreeEntry[] } : null;
+    const treePayload = treeResponse.ok ? (await treeResponse.json()) as { entries?: WorkspaceTreeEntry[]; root?: string } : null;
     const nextTreeEntries = treePayload?.entries ?? payload.files.map((file) => ({ path: file.path, language: file.language, size: file.content.length, updatedAt: file.updatedAt, kind: "file" as const }));
     setWorkspaceTreeEntries(nextTreeEntries);
+    setWorkspaceTreeRoot(treePayload?.root ?? "");
     setSelectedDirectory((previous) => previous && nextTreeEntries.some((entry) => entry.kind === "directory" && entry.path === previous) ? previous : "");
     setData(payload);
     setWorkspaceRootDraft(payload.settings?.projectRoot ?? "");
@@ -1302,8 +1304,14 @@ export function IdeApp() {
   }
 
   function panelClass(name: string) {
-    if (!fullscreenPanel) return "";
-    return fullscreenPanel === name ? "fixed inset-0 z-50 flex flex-col" + (typeof window !== "undefined" && document.documentElement.getAttribute("data-theme") === "light" ? " bg-white" : " bg-[var(--bg-app)]") : "hidden";
+    // Release fix: the fullscreen panel needs position:fixed to cover the app.
+    // The columns hardcode Tailwind's `relative`, and in the generated CSS
+    // `.relative` comes after `.fixed`, so it silently won — the fullscreen
+    // button appeared to do nothing. Positioning is now controlled solely by
+    // this helper: relative in the normal layout, fixed when fullscreen.
+    if (!fullscreenPanel) return "relative";
+    if (fullscreenPanel !== name) return "hidden";
+    return "fixed inset-0 z-50 flex flex-col shadow-2xl" + (typeof window !== "undefined" && document.documentElement.getAttribute("data-theme") === "light" ? " bg-white" : " bg-[var(--bg-app)]");
   }
 
   // --- Collapse-aware flex proportions ---
@@ -2582,12 +2590,14 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         {/* Full-height side panels with a central editor/terminal work area. */}
         <div className="workspace-top-row flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
           {/* Explorer / File Tree */}
-          <div className={`workspace-column ${collapsedPanels.explorer ? "workspace-column-collapsed" : ""} relative panel-accent-explorer ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.explorer ? "workspace-column-collapsed" : ""} panel-accent-explorer ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%` }}>
             {collapsedStrip("explorer", t.explorer)}
             {!collapsedPanels.explorer && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
                 <div className="panel-header flex items-center justify-between">
-                  <span className="truncate">{t.explorer}</span>
+                  <span className="truncate" title={workspaceTreeRoot || (data?.settings.workspaceName ?? "")}>
+                    {workspaceTreeRoot ? workspaceTreeRoot.split(/[\\/]/).filter(Boolean).pop() || t.explorer : data?.settings.workspaceName || t.explorer}
+                  </span>
                   <div className="flex items-center gap-0.5">
                     <button type="button" onClick={() => beginCreateEntry("file")} title={selectedDirectory ? `${t.newFile}: ${selectedDirectory}` : t.newFile} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📄</button>
                     <button type="button" onClick={() => beginCreateEntry("directory")} title={selectedDirectory ? `${t.newFolder}: ${selectedDirectory}` : t.newFolder} className="rounded px-1.5 py-0.5 text-xs hover:bg-[#3a3d41]">📁</button>
@@ -2623,7 +2633,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <button type="button" onClick={cancelCreateEntry} className="text-red-300" title={t.close}>✕</button>
                     </div>
                   ) : null}
-                  {workspaceTree.map((node) => renderWorkspaceTreeNode(node, 0))}
+                  {workspaceTree.length === 0 ? (
+                    <div className="px-2 py-3 text-[10px] leading-relaxed text-[var(--text-secondary)]">
+                      {locale === "ru"
+                        ? "Папка пуста или проект не подключён. Подключи папку: Настройки → Рабочая папка."
+                        : "The folder is empty or no project is connected. Connect one: Settings → Workspace folder."}
+                    </div>
+                  ) : workspaceTree.map((node) => renderWorkspaceTreeNode(node, 0))}
                 </div>
               </section>
             )}
@@ -2635,7 +2651,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Editor */}
-          <div className={`workspace-column ${collapsedPanels.editor ? "workspace-column-collapsed" : ""} relative panel-accent-editor ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.editor ? "workspace-column-collapsed" : ""} panel-accent-editor ${panelClass("editor")}`} style={{ flex: collapsedPanels.editor ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[1]} 1 0%` }}>
             {collapsedStrip("editor", t.editor)}
             {!collapsedPanels.editor && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2693,7 +2709,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Lead Chat */}
-          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} relative panel-accent-lead ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} panel-accent-lead ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2753,7 +2769,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Group Chat */}
-          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} relative panel-accent-group ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} panel-accent-group ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
             {collapsedStrip("group", t.allChat)}
             {!collapsedPanels.group && (
               <section className="panel h-full">
@@ -2843,7 +2859,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         {/* Bottom panel stays in the flex flow, so collapsing it cannot overlap the workspace. */}
         <div className="logs-panel h-[200px] w-full shrink-0 overflow-y-auto relative z-10 flex border-t border-[var(--border-default)] bg-slate-950 shadow-[0_-12px_30px_rgba(0,0,0,0.24)]">
           {/* Terminal */}
-          <div className={`workspace-column ${collapsedPanels.terminal ? "workspace-column-collapsed" : ""} relative panel-accent-terminal ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.terminal ? "workspace-column-collapsed" : ""} panel-accent-terminal ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%` }}>
             {collapsedStrip("terminal", t.terminal, false)}
             {!collapsedPanels.terminal && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -2875,7 +2891,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </div>
 
           {/* Logs / System Events */}
-          <div className={`workspace-column ${collapsedPanels.logs ? "workspace-column-collapsed" : ""} relative panel-accent-logs ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.logs ? "workspace-column-collapsed" : ""} panel-accent-logs ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%` }}>
             {collapsedStrip("logs", t.logsTitle, false)}
             {!collapsedPanels.logs && (
               <section className="panel h-full">
