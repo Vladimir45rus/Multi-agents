@@ -13,6 +13,9 @@ const SERVER_READY_TIMEOUT_MS = 90_000;
 
 let mainWindow = null;
 let overlayWindow = null;
+// Pre-collapse bounds of the overlay widget: while collapsed, resize/move
+// events must not overwrite the saved layout with the tiny strip size.
+let overlayPreCollapseBounds = null;
 let serverChild = null;
 let isQuitting = false;
 let serverRestarts = 0;
@@ -399,6 +402,8 @@ function createOverlayWindow(startUrl) {
 
   let overlaySaveTimer = null;
   const scheduleOverlaySave = () => {
+    // While the widget is collapsed, keep the saved layout intact.
+    if (overlayPreCollapseBounds) return;
     clearTimeout(overlaySaveTimer);
     overlaySaveTimer = setTimeout(() => {
       if (!overlayWindow || overlayWindow.isDestroyed()) return;
@@ -538,6 +543,24 @@ ipcMain.handle("overlay:toggle-on-top", () => {
   const next = !overlayWindow.isAlwaysOnTop();
   overlayWindow.setAlwaysOnTop(next, "floating");
   return next;
+});
+
+// Widget collapse: shrink to a thin always-movable strip and restore later.
+ipcMain.handle("overlay:collapse", () => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  if (!overlayPreCollapseBounds) overlayPreCollapseBounds = overlayWindow.getBounds();
+  const b = overlayPreCollapseBounds;
+  overlayWindow.setBounds({ x: b.x, y: b.y, width: 280, height: 40 });
+  return true;
+});
+
+ipcMain.handle("overlay:restore", () => {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  if (overlayPreCollapseBounds) {
+    overlayWindow.setBounds(overlayPreCollapseBounds);
+    overlayPreCollapseBounds = null;
+  }
+  return true;
 });
 
 ipcMain.handle("workspace:select-directory", async () => {

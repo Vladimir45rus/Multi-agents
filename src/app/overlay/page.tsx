@@ -49,6 +49,8 @@ type DesktopBridge = {
   expandFromOverlay?: () => Promise<void>;
   closeOverlay?: () => Promise<void>;
   toggleOverlayOnTop?: () => Promise<boolean>;
+  collapseOverlay?: () => Promise<boolean>;
+  restoreOverlay?: () => Promise<boolean>;
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -118,6 +120,7 @@ export default function OverlayPage() {
   const [busy, setBusy] = useState(false);
   const [onTop, setOnTop] = useState(true);
   const [changingModel, setChangingModel] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
   const lastMsgEndRef = useRef<HTMLDivElement>(null);
 
   const bridge = typeof window !== "undefined"
@@ -134,6 +137,14 @@ export default function OverlayPage() {
 
   const toggleOnTop = useCallback(() => {
     void bridge?.toggleOverlayOnTop?.().then((value) => setOnTop(value));
+  }, [bridge]);
+
+  const collapse = useCallback(() => {
+    void bridge?.collapseOverlay?.().then((ok) => { if (ok !== false) setCollapsed(true); });
+  }, [bridge]);
+
+  const restore = useCallback(() => {
+    void bridge?.restoreOverlay?.().then((ok) => { if (ok !== false) setCollapsed(false); });
   }, [bridge]);
 
   // Poll workspace every 3s
@@ -340,6 +351,34 @@ export default function OverlayPage() {
             ...({ WebkitAppRegion: "no-drag" } as React.CSSProperties),
           }}
         >
+          {/* collapse / restore */}
+          {collapsed ? (
+            <button
+              type="button"
+              onClick={restore}
+              title="Развернуть виджет"
+              style={{
+                width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center",
+                borderRadius: 4, border: "none", background: "transparent",
+                color: "#8b949e", cursor: "pointer", fontSize: 12,
+              }}
+            >
+              ▾
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={collapse}
+              title="Свернуть в полоску"
+              style={{
+                width: 20, height: 20, display: "flex", alignItems: "center", justifyContent: "center",
+                borderRadius: 4, border: "none", background: "transparent",
+                color: "#8b949e", cursor: "pointer", fontSize: 12,
+              }}
+            >
+              ─
+            </button>
+          )}
           {/* expand */}
           <button
             type="button"
@@ -385,7 +424,7 @@ export default function OverlayPage() {
       {/* --- agents row --- */}
       <div
         style={{
-          display: "flex",
+          display: collapsed ? "none" : "flex",
           gap: 4,
           padding: "3px 8px",
           overflowX: "auto",
@@ -433,7 +472,7 @@ export default function OverlayPage() {
           flex: 1,
           overflow: "auto",
           padding: "6px 8px",
-          display: "flex",
+          display: collapsed ? "none" : "flex",
           flexDirection: "column",
           gap: 4,
         }}
@@ -476,7 +515,7 @@ export default function OverlayPage() {
       <form
         onSubmit={sendChat}
         style={{
-          display: "flex",
+          display: collapsed ? "none" : "flex",
           gap: 4,
           padding: "4px 8px",
           borderTop: "1px solid #30363d",
@@ -523,7 +562,7 @@ export default function OverlayPage() {
       {/* --- footer --- */}
       <div
         style={{
-          display: "flex",
+          display: collapsed ? "none" : "flex",
           alignItems: "center",
           padding: "2px 8px",
           background: "#161b22",
