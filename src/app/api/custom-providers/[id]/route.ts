@@ -15,12 +15,14 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       await recordApiError("custom-providers.update", 400, "Invalid provider id");
       return Response.json({ error: "Invalid provider id" }, { status: 400 });
     }
-    const body = (await request.json()) as { name?: string; baseUrl?: string; apiKey?: string; models?: string[] | string; removeApiKey?: boolean };
+    const body = (await request.json()) as { providerId?: string; name?: string; baseUrl?: string; apiKey?: string; models?: Array<{ id: string; name: string }> | string; headers?: Array<{ name: string; value: string }>; removeApiKey?: boolean };
     await updateCustomProvider(providerId, {
       name: body.name ?? "",
+      providerId: body.providerId,
       baseUrl: body.baseUrl,
       apiKey: body.apiKey,
       models: body.models,
+      headers: body.headers,
       removeApiKey: body.removeApiKey,
     });
     return Response.json({ ok: true });

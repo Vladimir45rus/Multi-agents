@@ -45,15 +45,19 @@ export const agents = sqliteTable("agents", {
 });
 
 // User-defined OpenAI-compatible providers (unlimited): each row is one
-// service endpoint with its own key and model list.
+// service endpoint with its own key, model list and custom headers.
 export const customProviders = sqliteTable("custom_providers", {
   id: integer("id").primaryKey({ autoIncrement: true }),
+  providerId: text("provider_id").notNull().default(""),
   name: text("name").notNull(),
   baseUrl: text("base_url").notNull(),
   apiKey: text("api_key").notNull().default(""),
-  models: text("models", { mode: "json" }).$type<string[]>().notNull().default([]),
+  models: text("models", { mode: "json" }).$type<Array<{ id: string; name: string }>>().notNull().default([]),
+  headers: text("headers", { mode: "json" }).$type<Array<{ name: string; value: string }>>().notNull().default([]),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
-});
+}, (table) => [
+  index("custom_providers_provider_id_idx").on(table.providerId),
+]);
 
 export const projectFiles = sqliteTable("project_files", {
   id: integer("id").primaryKey({ autoIncrement: true }),

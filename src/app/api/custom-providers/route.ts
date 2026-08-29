@@ -5,7 +5,7 @@ import { mobileAccessError } from "@/lib/mobile-auth";
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
-function mask(rows: Array<{ id: number; name: string; baseUrl: string; apiKey: string; models: string[] }>) {
+function mask(rows: Array<{ id: number; providerId: string; name: string; baseUrl: string; apiKey: string; models: unknown; headers: unknown }>) {
   return rows.map(({ apiKey, ...row }) => ({ ...row, apiKeyConfigured: Boolean(apiKey.trim()) }));
 }
 
@@ -24,12 +24,14 @@ export async function POST(request: Request) {
   const accessError = await mobileAccessError(request);
   if (accessError) return accessError;
   try {
-    const body = (await request.json()) as { name?: string; baseUrl?: string; apiKey?: string; models?: string[] | string };
+    const body = (await request.json()) as { providerId?: string; name?: string; baseUrl?: string; apiKey?: string; models?: Array<{ id: string; name: string }> | string; headers?: Array<{ name: string; value: string }> };
     await createCustomProvider({
       name: body.name ?? "",
-      baseUrl: body.baseUrl ?? "",
+      providerId: body.providerId,
+      baseUrl: body.baseUrl,
       apiKey: body.apiKey,
       models: body.models,
+      headers: body.headers,
     });
     return Response.json({ ok: true });
   } catch (error) {

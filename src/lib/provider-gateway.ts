@@ -17,6 +17,9 @@ export type ProviderRequest = {
   apiKey: string;
   baseUrl?: string;
   model: string;
+  // Custom registry providers may define extra headers (merged last, after
+  // the built-in auth headers).
+  headers?: Record<string, string>;
 };
 
 export type ProviderGatewayOptions = {
@@ -100,8 +103,11 @@ function validateRequest(request: ProviderRequest) {
   return {
     provider,
     model,
-    apiKey: validateApiKey(request.apiKey),
+    // Custom registry providers may authenticate via user-defined headers
+    // instead of a bearer key, so an empty key is allowed there.
+    apiKey: provider.startsWith("custom:") ? compact(request.apiKey) : validateApiKey(request.apiKey),
     baseUrl: normalizeBaseUrl(provider, request.baseUrl),
+    headers: request.headers,
   };
 }
 
@@ -258,7 +264,7 @@ async function fetchWithRetry(
           : buildOpenAiBody(request.model, messages, options.jsonMode, tools);
       const headers = nativeGemini
         ? { Accept: "text/event-stream", "Content-Type": "application/json", "x-goog-api-key": request.apiKey }
-        : headersFor(request.provider, request.apiKey);
+        : { ...headersFor(request.provider, request.apiKey), ...(request.headers ?? {}) };
 
       const response = await fetch(url, {
         method: "POST",
@@ -534,11 +540,12 @@ export async function completeProviderJson<T>(
   return extractJson<T>(text);
 }
 
-export function providerRequestFromAgent(agent: { provider: string; baseUrl: string; model: string }, apiKey: string): ProviderRequest {
+export function providerRequestFromAgent(agent: { provider: string; baseUrl: string; model: string }, apiKey: string, headers?: Record<string, string>): ProviderRequest {
   return {
     provider: agent.provider,
     baseUrl: agent.baseUrl,
     model: agent.model,
     apiKey,
+    ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
   };
 }

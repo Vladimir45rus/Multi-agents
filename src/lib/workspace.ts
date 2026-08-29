@@ -14,7 +14,6 @@ import {
   projectFiles,
   terminalEntries,
   systemEvents,
-  customProviders,
   workspaceSettings,
 } from "@/db/schema";
 import { and, asc, desc, eq, ne } from "drizzle-orm";
@@ -30,7 +29,7 @@ import {
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { encryptSecret } from "@/lib/secret-cipher";
 import { resolveFallbackModels } from "@/lib/provider-models";
-import { getCustomProviderKey } from "@/lib/custom-providers";
+import { getCustomProviderKey, listCustomProviders, resolveCustomAgentRequest } from "@/lib/custom-providers";
 import { isPureToolCallChunk, isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
@@ -117,9 +116,11 @@ type WorkspaceSnapshot = {
   }>;
   customProviders: Array<{
     id: number;
+    providerId: string;
     name: string;
     baseUrl: string;
-    models: string[];
+    models: Array<{ id: string; name: string }>;
+    headers: Array<{ name: string; value: string }>;
     apiKeyConfigured: boolean;
   }>;
   files: Array<{
@@ -677,7 +678,7 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
 
   const settingsRow = await getWorkspaceSettingsRow();
   const agentRows = await db.select().from(agents).orderBy(asc(agents.id));
-  const customProviderRows = await db.select().from(customProviders).orderBy(asc(customProviders.id));
+  const customProviderRows = await listCustomProviders();
   const fileRows = (await db.select().from(projectFiles).orderBy(asc(projectFiles.path)))
     .filter((row) => row.language !== "directory" && !row.path.startsWith(".multi-agent-virtual-dirs/"));
   const historyRows = await db.select().from(fileHistory).orderBy(desc(fileHistory.id)).limit(100);
@@ -1400,8 +1401,10 @@ async function* streamAgentReply(
   options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean },
 ): AsyncGenerator<ChatStreamEvent> {
   // Custom-provider support: prefer the agent's own key, fall back to the
-  // shared provider key.
+  // registry key of "custom:<id>", then to the shared provider key.
   const apiKey = await getAgentProviderKey(agent);
+  const customMeta = await resolveCustomAgentRequest(agent);
+  const effectiveAgent = customMeta ? { ...agent, baseUrl: customMeta.baseUrl } : agent;
   const history = await gatewayHistory(channel);
   const projectContext = await buildProjectContext(options.projectContext);
   const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${projectContext}`;
@@ -1416,12 +1419,15 @@ async function* streamAgentReply(
   const templatePrompt = compact(workspaceSettingsRow?.projectTemplatePrompt);
   // Hotfix (auto-fallback): resolve reserve models dynamically — user list or
   // OpenRouter defaults, filtered by live provider catalog availability.
-  const fallbackModels = await resolveFallbackModels(
-    agent.provider,
-    apiKey || undefined,
-    agent.baseUrl,
-    Array.isArray(workspaceSettingsRow?.fallbackModels) ? workspaceSettingsRow.fallbackModels : [],
-  );
+  // Custom registry providers fall back to their own sibling models.
+  const fallbackModels = customMeta
+    ? customMeta.fallbackModels.filter((model) => model !== agent.model)
+    : await resolveFallbackModels(
+        agent.provider,
+        apiKey || undefined,
+        agent.baseUrl,
+        Array.isArray(workspaceSettingsRow?.fallbackModels) ? workspaceSettingsRow.fallbackModels : [],
+      );
   const baseSystemPrompt = agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix);
   const refreshedSystemPrompt = `${baseSystemPrompt}\n\n=== CURRENT PROJECT CONTEXT (REFRESHED) ===\n${projectContext}`;
   const gatewayMessages: GatewayMessage[] = [
@@ -1434,7 +1440,7 @@ async function* streamAgentReply(
     gatewayMessages.push({ role: "user", content: prompt });
   }
 
-  const request = providerRequestFromAgent(agent, apiKey);
+  const request = providerRequestFromAgent(effectiveAgent, apiKey, customMeta?.headers);
   const identity = createAgentIdentity({
     agentId: agent.id,
     displayName: agent.name,

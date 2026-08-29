@@ -135,7 +135,7 @@ type WorkspaceData = {
     vaultAvailable: boolean;
   };
   agents: Agent[];
-  customProviders: Array<{ id: number; name: string; baseUrl: string; models: string[]; apiKeyConfigured: boolean }>;
+  customProviders: Array<{ id: number; providerId: string; name: string; baseUrl: string; models: Array<{ id: string; name: string }>; headers: Array<{ name: string; value: string }>; apiKeyConfigured: boolean }>;
   files: Array<{ id: number; path: string; language: string; content: string; updatedAt: string }>;
   messages: WorkspaceMessage[];
   terminal: Array<{ id: number; command: string; output: string; status: string; createdAt: string }>;
@@ -610,7 +610,15 @@ export function IdeApp() {
   const [agentKeyDrafts, setAgentKeyDrafts] = useState<Record<number, string>>({});
   const [newAgentApiKey, setNewAgentApiKey] = useState("");
   // Custom provider constructor state (Settings → Кастомные провайдеры).
-  const [customProviderForm, setCustomProviderForm] = useState<{ id: number | null; name: string; baseUrl: string; apiKey: string; models: string } | null>(null);
+  const [customProviderForm, setCustomProviderForm] = useState<{
+    id: number | null;
+    providerId: string;
+    name: string;
+    baseUrl: string;
+    apiKey: string;
+    models: Array<{ id: string; name: string }>;
+    headers: Array<{ name: string; value: string }>;
+  } | null>(null);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [templateId, setTemplateId] = useState("web");
   const [telegramTesting, setTelegramTesting] = useState(false);
@@ -1197,7 +1205,7 @@ export function IdeApp() {
     // not from a live /models request.
     if (providerId.startsWith("custom:")) {
       const cp = data?.customProviders.find((provider) => `custom:${provider.id}` === providerId);
-      setModelOptions((prev) => ({ ...prev, [providerId]: cp?.models?.length ? cp.models : [] }));
+      setModelOptions((prev) => ({ ...prev, [providerId]: cp?.models?.length ? cp.models.map((model) => model.id) : [] }));
       return;
     }
 
@@ -1726,9 +1734,11 @@ export function IdeApp() {
     setBusy(true);
     try {
       const payload = {
+        providerId: customProviderForm.providerId,
         name: customProviderForm.name,
         baseUrl: customProviderForm.baseUrl,
-        models: customProviderForm.models,
+        models: customProviderForm.models.filter((model) => model.id.trim()),
+        headers: customProviderForm.headers.filter((header) => header.name.trim()),
         ...(customProviderForm.apiKey.trim() ? { apiKey: customProviderForm.apiKey.trim() } : {}),
       };
       const res = await fetch(customProviderForm.id ? `/api/custom-providers/${customProviderForm.id}` : "/api/custom-providers", {
@@ -1771,7 +1781,15 @@ export function IdeApp() {
   function editCustomProvider(id: number) {
     const cp = data?.customProviders.find((provider) => provider.id === id);
     if (!cp) return;
-    setCustomProviderForm({ id: cp.id, name: cp.name, baseUrl: cp.baseUrl, apiKey: "", models: (cp.models ?? []).join(", ") });
+    setCustomProviderForm({
+      id: cp.id,
+      providerId: cp.providerId,
+      name: cp.name,
+      baseUrl: cp.baseUrl,
+      apiKey: "",
+      models: (cp.models ?? []).map((model) => ({ ...model })),
+      headers: (cp.headers ?? []).map((header) => ({ ...header })),
+    });
   }
 
   // Custom registry providers carry their own baseUrl/model list; built-in
@@ -1781,7 +1799,7 @@ export function IdeApp() {
     return {
       provider: value,
       baseUrl: cp?.baseUrl ?? getProviderPreset(value).baseUrl,
-      model: cp?.models?.length ? cp.models[0] : getProviderPreset(value).defaultModel,
+      model: cp?.models?.length ? cp.models[0].id : getProviderPreset(value).defaultModel,
       manualModel: false,
     };
   }
@@ -3292,45 +3310,23 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <section className="mb-5">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs uppercase text-[var(--text-secondary)]">{locale === "ru" ? "Кастомные провайдеры" : "Custom providers"}</span>
-              <button type="button" onClick={() => setCustomProviderForm({ id: null, name: "", baseUrl: "", apiKey: "", models: "" })} className="rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white">
+              <button type="button" onClick={() => setCustomProviderForm({ id: null, providerId: "", name: "", baseUrl: "", apiKey: "", models: [{ id: "", name: "" }], headers: [] })} className="rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white">
                 {locale === "ru" ? "+ Добавить провайдер" : "+ Add provider"}
               </button>
             </div>
             <p className="mb-2 text-[10px] text-[var(--text-secondary)]">
               {locale === "ru"
-                ? "Любой OpenAI-совместимый сервис (/v1): свой Base URL, ключ и список моделей. Модели появятся в селекторах агентов."
-                : "Any OpenAI-compatible service (/v1): your Base URL, key and model list. Models appear in the agent selectors."}
+                ? "Любой OpenAI-совместимый сервис (/v1): свой Base URL, ключ, модели и заголовки. Модели появятся в селекторах агентов."
+                : "Any OpenAI-compatible service (/v1): your Base URL, key, models and headers. Models appear in the agent selectors."}
             </p>
-            {customProviderForm ? (
-              <div className="mb-2 rounded border border-blue-400/60 bg-blue-500/10 p-2">
-                <input value={customProviderForm.name} onChange={(e) => setCustomProviderForm({ ...customProviderForm, name: e.target.value })} placeholder={locale === "ru" ? "Название (например, Groq AI)" : "Name (e.g., Groq AI)"} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
-                <input value={customProviderForm.baseUrl} onChange={(e) => setCustomProviderForm({ ...customProviderForm, baseUrl: e.target.value })} placeholder="https://api.example.com/v1" className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
-                <input
-                  type="password"
-                  autoComplete="off"
-                  value={customProviderForm.apiKey}
-                  onChange={(e) => setCustomProviderForm({ ...customProviderForm, apiKey: e.target.value })}
-                  placeholder={customProviderForm.id ? (locale === "ru" ? "Ключ сохранён (введите новый для замены)" : "Key saved (type a new one to replace)") : (locale === "ru" ? "API-ключ" : "API key")}
-                  className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
-                />
-                <textarea
-                  value={customProviderForm.models}
-                  onChange={(e) => setCustomProviderForm({ ...customProviderForm, models: e.target.value })}
-                  placeholder={locale === "ru" ? "Модели через запятую: glm-5.2:free, llama-3.3-70b" : "Models, comma separated: glm-5.2:free, llama-3.3-70b"}
-                  className="mb-1 min-h-12 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
-                />
-                <div className="flex gap-1">
-                  <button type="button" onClick={() => void saveCustomProvider()} disabled={busy || !customProviderForm.name.trim() || !customProviderForm.baseUrl.trim()} className="rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{locale === "ru" ? "Сохранить" : "Save"}</button>
-                  <button type="button" onClick={() => setCustomProviderForm(null)} className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px]">{locale === "ru" ? "Отмена" : "Cancel"}</button>
-                </div>
-              </div>
-            ) : null}
             <div className="space-y-1">
               {(data?.customProviders ?? []).map((cp) => (
                 <div key={cp.id} className="flex items-center justify-between gap-2 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
                   <div className="min-w-0">
                     <p className="truncate text-xs font-semibold text-white">{cp.name}{cp.apiKeyConfigured ? "" : " ⚠️"}</p>
-                    <p className="truncate text-[10px] text-[var(--text-secondary)]">{cp.baseUrl} · {(cp.models ?? []).length} моделей</p>
+                    <p className="truncate text-[10px] text-[var(--text-secondary)]">
+                      {cp.providerId} · {cp.baseUrl} · {(cp.models ?? []).length} мод. · {(cp.headers ?? []).length} заголовков
+                    </p>
                   </div>
                   <div className="flex shrink-0 gap-1">
                     <button type="button" onClick={() => editCustomProvider(cp.id)} className="rounded bg-[#3a3d41] px-2 py-1 text-[10px] text-white">{locale === "ru" ? "Изменить" : "Edit"}</button>
@@ -3338,11 +3334,128 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                 </div>
               ))}
-              {(data?.customProviders ?? []).length === 0 && !customProviderForm ? (
+              {(data?.customProviders ?? []).length === 0 ? (
                 <p className="text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Пока нет ни одного кастомного провайдера." : "No custom providers yet."}</p>
               ) : null}
             </div>
           </section>
+
+          {customProviderForm ? (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setCustomProviderForm(null)}>
+              <div className="max-h-[90vh] w-full max-w-lg overflow-y-auto rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel)] p-4 shadow-2xl" onClick={(e) => e.stopPropagation()}>
+                <div className="mb-3 flex items-center justify-between">
+                  <h3 className="text-sm font-semibold text-white">
+                    {customProviderForm.id ? (locale === "ru" ? "Изменить провайдера" : "Edit provider") : (locale === "ru" ? "Новый кастомный провайдер" : "New custom provider")}
+                  </h3>
+                  <button type="button" onClick={() => setCustomProviderForm(null)} className="rounded px-2 text-sm text-[var(--text-secondary)] hover:text-white">✕</button>
+                </div>
+
+                <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">
+                  ID провайдера
+                  <input
+                    value={customProviderForm.providerId}
+                    onChange={(e) => setCustomProviderForm({ ...customProviderForm, providerId: e.target.value })}
+                    placeholder="myprovider"
+                    className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                  />
+                  <span className="mt-0.5 block text-[10px]">{locale === "ru" ? "Строчные буквы, цифры, дефисы или подчёркивания" : "Lowercase letters, digits, hyphens or underscores"}</span>
+                </label>
+
+                <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">
+                  {locale === "ru" ? "Отображаемое имя" : "Display name"}
+                  <input
+                    value={customProviderForm.name}
+                    onChange={(e) => setCustomProviderForm({ ...customProviderForm, name: e.target.value })}
+                    placeholder={locale === "ru" ? "Мой ИИ-провайдер" : "My AI provider"}
+                    className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                  />
+                </label>
+
+                <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">
+                  {locale === "ru" ? "Базовый URL" : "Base URL"}
+                  <input
+                    value={customProviderForm.baseUrl}
+                    onChange={(e) => setCustomProviderForm({ ...customProviderForm, baseUrl: e.target.value })}
+                    placeholder="https://api.myprovider.com/v1"
+                    className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                  />
+                </label>
+
+                <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">
+                  {locale === "ru" ? "Ключ API" : "API key"}
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={customProviderForm.apiKey}
+                    onChange={(e) => setCustomProviderForm({ ...customProviderForm, apiKey: e.target.value })}
+                    placeholder={customProviderForm.id ? (locale === "ru" ? "Ключ сохранён (введите новый для замены)" : "Key saved (type a new one to replace)") : "sk-..."}
+                    className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                  />
+                  <span className="mt-0.5 block text-[10px]">{locale === "ru" ? "Необязательно. Оставьте пустым, если управляете авторизацией через заголовки" : "Optional. Leave empty if you manage auth via headers"}</span>
+                </label>
+
+                <div className="mb-2">
+                  <p className="mb-1 text-[11px] text-[var(--text-secondary)]">{locale === "ru" ? "Модели" : "Models"}</p>
+                  {customProviderForm.models.map((model, index) => (
+                    <div key={`cp-model-${index}`} className="mb-1 flex items-center gap-1">
+                      <input
+                        value={model.id}
+                        onChange={(e) => setCustomProviderForm({ ...customProviderForm, models: customProviderForm.models.map((m, i) => i === index ? { ...m, id: e.target.value } : m) })}
+                        placeholder="glm-5.2:free"
+                        className="min-w-0 flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                      />
+                      <input
+                        value={model.name}
+                        onChange={(e) => setCustomProviderForm({ ...customProviderForm, models: customProviderForm.models.map((m, i) => i === index ? { ...m, name: e.target.value } : m) })}
+                        placeholder={locale === "ru" ? "Отображаемое имя" : "Display name"}
+                        className="min-w-0 flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                      />
+                      <button type="button" onClick={() => setCustomProviderForm({ ...customProviderForm, models: customProviderForm.models.filter((_, i) => i !== index) })} className="rounded px-1.5 py-1 text-xs text-red-300 hover:bg-red-500/10" title={locale === "ru" ? "Удалить модель" : "Remove model"}>🗑</button>
+                    </div>
+                  ))}
+                  <button type="button" onClick={() => setCustomProviderForm({ ...customProviderForm, models: [...customProviderForm.models, { id: "", name: "" }] })} className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] hover:border-blue-400">
+                    {locale === "ru" ? "+ Добавить модель" : "+ Add model"}
+                  </button>
+                </div>
+
+                <div className="mb-3">
+                  <p className="mb-1 text-[11px] text-[var(--text-secondary)]">{locale === "ru" ? "Заголовки" : "Headers"}</p>
+                  {customProviderForm.headers.map((header, index) => (
+                    <div key={`cp-header-${index}`} className="mb-1 flex items-center gap-1">
+                      <input
+                        value={header.name}
+                        onChange={(e) => setCustomProviderForm({ ...customProviderForm, headers: customProviderForm.headers.map((h, i) => i === index ? { ...h, name: e.target.value } : h) })}
+                        placeholder="Header-Name"
+                        className="min-w-0 flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                      />
+                      <input
+                        value={header.value}
+                        onChange={(e) => setCustomProviderForm({ ...customProviderForm, headers: customProviderForm.headers.map((h, i) => i === index ? { ...h, value: e.target.value } : h) })}
+                        placeholder={locale === "ru" ? "значение" : "value"}
+                        className="min-w-0 flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                      />
+                      <button type="button" onClick={() => setCustomProviderForm({ ...customProviderForm, headers: customProviderForm.headers.filter((_, i) => i !== index) })} className="rounded px-1.5 py-1 text-xs text-red-300 hover:bg-red-500/10" title={locale === "ru" ? "Удалить заголовок" : "Remove header"}>🗑</button>
+                    </div>
+                  ))}
+                  <button type="button" onClick={() => setCustomProviderForm({ ...customProviderForm, headers: [...customProviderForm.headers, { name: "", value: "" }] })} className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] hover:border-blue-400">
+                    {locale === "ru" ? "+ Добавить заголовок" : "+ Add header"}
+                  </button>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setCustomProviderForm(null)} className="rounded border border-[var(--border-default)] px-3 py-1.5 text-xs">{locale === "ru" ? "Отмена" : "Cancel"}</button>
+                  <button
+                    type="button"
+                    onClick={() => void saveCustomProvider()}
+                    disabled={busy || !customProviderForm.name.trim() || !customProviderForm.baseUrl.trim()}
+                    className="rounded bg-[#0e639c] px-3 py-1.5 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]"
+                  >
+                    {locale === "ru" ? "Отправить" : "Submit"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null}
 
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">Telegram</p>
@@ -3465,10 +3578,16 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         }}
                         className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                       >
-                        {(modelOptions[draft.provider] ?? getProviderPreset(draft.provider).fallbackModels).filter((model) => model.toLowerCase().includes((modelSearch[`agent-${agent.id}`] ?? "").toLowerCase())).map((model) => (
-                          <option key={model} value={model}>{model}</option>
-                        ))}
-                        {draft.model && !(modelOptions[draft.provider] ?? []).includes(draft.model) ? <option value={draft.model}>{draft.model}</option> : null}
+                        {draft.provider.startsWith("custom:")
+                          ? (data?.customProviders.find((cp) => `custom:${cp.id}` === draft.provider)?.models ?? [])
+                              .filter((m) => `${m.name} ${m.id}`.toLowerCase().includes((modelSearch[`agent-${agent.id}`] ?? "").toLowerCase()))
+                              .map((m) => (
+                                <option key={m.id} value={m.id}>{m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id}</option>
+                              ))
+                          : (modelOptions[draft.provider] ?? getProviderPreset(draft.provider).fallbackModels).filter((model) => model.toLowerCase().includes((modelSearch[`agent-${agent.id}`] ?? "").toLowerCase())).map((model) => (
+                              <option key={model} value={model}>{model}</option>
+                            ))}
+                        {draft.model && !(modelOptions[draft.provider] ?? []).includes(draft.model) && !(draft.provider.startsWith("custom:") && (data?.customProviders.find((cp) => `custom:${cp.id}` === draft.provider)?.models ?? []).some((m) => m.id === draft.model)) ? <option value={draft.model}>{draft.model}</option> : null}
                         <option value="__manual__">{t.manualModel}</option>
                       </select>
                       <button type="button" onClick={() => fetchModels(draft.provider, draft.baseUrl, apiKeysDraft[draft.provider], true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
@@ -3582,10 +3701,16 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                           }}
                           className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                         >
-                          {(modelOptions[newAgent.provider] ?? getProviderPreset(newAgent.provider).fallbackModels).filter((model) => model.toLowerCase().includes((modelSearch.new ?? "").toLowerCase())).map((model) => (
-                            <option key={model} value={model}>{model}</option>
-                          ))}
-                          {newAgent.model && !(modelOptions[newAgent.provider] ?? []).includes(newAgent.model) ? <option value={newAgent.model}>{newAgent.model}</option> : null}
+                          {newAgent.provider.startsWith("custom:")
+                            ? (data?.customProviders.find((cp) => `custom:${cp.id}` === newAgent.provider)?.models ?? [])
+                                .filter((m) => `${m.name} ${m.id}`.toLowerCase().includes((modelSearch.new ?? "").toLowerCase()))
+                                .map((m) => (
+                                  <option key={m.id} value={m.id}>{m.name && m.name !== m.id ? `${m.name} (${m.id})` : m.id}</option>
+                                ))
+                            : (modelOptions[newAgent.provider] ?? getProviderPreset(newAgent.provider).fallbackModels).filter((model) => model.toLowerCase().includes((modelSearch.new ?? "").toLowerCase())).map((model) => (
+                                <option key={model} value={model}>{model}</option>
+                              ))}
+                          {newAgent.model && !(modelOptions[newAgent.provider] ?? []).includes(newAgent.model) && !(newAgent.provider.startsWith("custom:") && (data?.customProviders.find((cp) => `custom:${cp.id}` === newAgent.provider)?.models ?? []).some((m) => m.id === newAgent.model)) ? <option value={newAgent.model}>{newAgent.model}</option> : null}
                           <option value="__manual__">{t.manualModel}</option>
                         </select>
                         <button type="button" onClick={() => fetchModels(newAgent.provider, newAgent.baseUrl, apiKeysDraft[newAgent.provider], true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">

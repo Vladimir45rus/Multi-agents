@@ -13,6 +13,7 @@ import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction, looksLikeTruncatedJson } from "@/lib/patch-parser";
 import { ensureWorkspaceBootstrap, getAgentProviderKey, getWorkspaceSettingsRow } from "@/lib/workspace";
 import { resolveFallbackModels } from "@/lib/provider-models";
+import { resolveCustomAgentRequest } from "@/lib/custom-providers";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
 import { saveActiveTaskState, clearActiveTaskState } from "@/lib/orchestrator-state";
@@ -503,18 +504,23 @@ async function completeAgent(
 ) {
   try {
     // Custom-provider support: prefer the agent's own key, fall back to the
-    // shared provider key.
+    // registry key of "custom:<id>", then to the shared provider key.
     const apiKey = await getAgentProviderKey(agent);
-    const request = providerRequestFromAgent(agent, apiKey);
+    const customMeta = await resolveCustomAgentRequest(agent);
+    const effectiveAgent = customMeta ? { ...agent, baseUrl: customMeta.baseUrl } : agent;
+    const request = providerRequestFromAgent(effectiveAgent, apiKey, customMeta?.headers);
     const settings = await getWorkspaceSettingsRow();
     // Hotfix (auto-fallback): reserve models resolved dynamically before the
     // cycle — user list or OpenRouter defaults, checked against the catalog.
-    const fallbackModels = await resolveFallbackModels(
-      agent.provider,
-      apiKey || undefined,
-      agent.baseUrl,
-      Array.isArray(settings.fallbackModels) ? settings.fallbackModels : [],
-    );
+    // Custom registry providers fall back to their own sibling models.
+    const fallbackModels = customMeta
+      ? customMeta.fallbackModels.filter((model) => model !== agent.model)
+      : await resolveFallbackModels(
+          agent.provider,
+          apiKey || undefined,
+          agent.baseUrl,
+          Array.isArray(settings.fallbackModels) ? settings.fallbackModels : [],
+        );
     const context = await buildProjectContext(projectContext);
     const templatePrompt = compact(settings.projectTemplatePrompt);
     const refreshedSystemPrompt = `${systemPrompt}\n\n=== CURRENT PROJECT CONTEXT (REFRESHED) ===\n${context}`;
