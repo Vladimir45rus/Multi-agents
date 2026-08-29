@@ -34,6 +34,7 @@ type WorkspaceData = {
   };
   agents: AgentInfo[];
   messages: WorkspaceMessage[];
+  systemEvents?: Array<{ id: number; level: string; source: string; message: string; createdAt: string }>;
 };
 
 type OrchestratorState = {
@@ -70,6 +71,17 @@ function roleEmoji(role: string) {
     uiux: "🎨", advisor: "💡", security: "🛡️", observer: "👁️",
   };
   return map[role] ?? "🤖";
+}
+
+// Availability fix: an agent that errored recently (last 10 minutes) shows a
+// red dot instead of green, so dead providers are visible at a glance.
+function agentHasRecentError(agentName: string, workspace: WorkspaceData | null) {
+  const cutoff = Date.now() - 10 * 60_000;
+  return (workspace?.systemEvents ?? []).some((event) =>
+    event.source === agentName
+    && event.level === "error"
+    && new Date(event.createdAt).getTime() >= cutoff,
+  );
 }
 
 function timeAgo(iso: string) {
@@ -236,7 +248,7 @@ export default function OverlayPage() {
       await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, channel: "group", locale: "ru" }),
+        body: JSON.stringify({ message: text, channel: "group", locale: "ru", duplicateToLead: true }),
       });
     } catch { /* ignore */ }
     finally { setBusy(false); }
@@ -438,7 +450,11 @@ export default function OverlayPage() {
         {sortedAgents.map((agent) => {
           const color = agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff";
           const orch = orchestrator?.agents.find((a) => a.name === agent.name);
-          const dot = agent.isActive ? "#3fb950" : "#484f58";
+          const dot = !agent.isActive
+            ? "#484f58"
+            : agentHasRecentError(agent.name, workspace)
+              ? "#f85149"
+              : "#3fb950";
           const statusColor = orch
             ? orch.status === "done" ? "#3fb950"
               : orch.status === "error" ? "#f85149" : "#d29922"
@@ -526,7 +542,7 @@ export default function OverlayPage() {
         <textarea
           value={chatInput}
           onChange={(e) => setChatInput(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }}
           placeholder={activeTask ? "Ответить агентам…" : "Сообщение в общий чат…"}
           disabled={busy}
           rows={2}

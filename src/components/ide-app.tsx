@@ -288,6 +288,13 @@ type CreateEntryDraft = {
   parentPath: string;
 };
 
+// Availability fix: an agent that errored in the last 10 minutes counts as
+// failing, so "Активны" reflects working agents, not just DB flags.
+function agentRecentlyFailed(agentName: string, events: WorkspaceData["systemEvents"] | undefined) {
+  const cutoff = Date.now() - 10 * 60_000;
+  return (events ?? []).some((event) => event.source === agentName && event.level === "error" && new Date(event.createdAt).getTime() >= cutoff);
+}
+
 function buildWorkspaceTree(entries: WorkspaceTreeEntry[]) {
   const nodes = new Map<string, WorkspaceTreeNode>();
   const roots: WorkspaceTreeNode[] = [];
@@ -533,7 +540,8 @@ export function IdeApp() {
   const [editorText, setEditorText] = useState("");
   const [leadMessage, setLeadMessage] = useState("");
   const [groupMessage, setGroupMessage] = useState("");
-  const [duplicateToLead, setDuplicateToLead] = useState(false);
+  // UX fix: duplicated replies to the Lead chat are on by default.
+  const [duplicateToLead, setDuplicateToLead] = useState(true);
   const [groupRoleFilter, setGroupRoleFilter] = useState<GroupRoleFilter>("all");
   const [terminalCommand, setTerminalCommand] = useState("");
   const [status, setStatus] = useState(dict.ru.loading);
@@ -649,6 +657,33 @@ export function IdeApp() {
     expandedDirectoriesInitializedRef.current = true;
     setExpandedDirectories(workspaceTreeEntries.filter((entry) => entry.kind === "directory").map((entry) => entry.path));
   }, [workspaceTreeEntries]);
+
+  // Sync fix: the main window never refreshed on its own, so messages sent
+  // from the overlay widget or mobile stayed invisible until the user acted.
+  // A light 4s snapshot poll keeps every channel in sync; only `data` is
+  // updated — user-typed drafts in Settings are never clobbered.
+  useEffect(() => {
+    const timer = setInterval(async () => {
+      if (chatAbortRef.current || document.hidden) return;
+      try {
+        const res = await fetch("/api/workspace", { cache: "no-store" });
+        if (res.ok) setData((await res.json()) as WorkspaceData);
+      } catch { /* offline — retry on next tick */ }
+    }, 4000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Widget indicator: highlight the 📌 Виджет button while the overlay window
+  // is open, so the user always knows the widget is active somewhere.
+  const [overlayActive, setOverlayActive] = useState(false);
+  useEffect(() => {
+    const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+    if (!bridge?.isOverlayOpen) return;
+    const check = () => { void bridge.isOverlayOpen?.().then((open) => setOverlayActive(Boolean(open))).catch(() => undefined); };
+    check();
+    const timer = setInterval(check, 2000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Collapse/expand helpers moved outside via useMemo render functions
   const renderCollapseButton = (name: PanelName) => {
@@ -2567,10 +2602,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
               bridge?.toggleOverlay?.();
             }}
-            className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400"
+            className={`rounded border px-2 py-1 text-xs ${overlayActive ? "border-[#3fb950] bg-[#23863633] text-white" : "border-[var(--border-default)] bg-[var(--bg-panel-alt)] hover:border-blue-400"}`}
             title={locale === "ru" ? "Поверх всех окон (Ctrl+Shift+O)" : "Always on top (Ctrl+Shift+O)"}
           >
-            📌 {locale === "ru" ? "Виджет" : "Widget"}
+            📌 {locale === "ru" ? (overlayActive ? "Виджет активен" : "Виджет") : (overlayActive ? "Widget active" : "Widget")}
           </button>
           <button type="button" onClick={() => setOrchestratorOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
             🤖 {locale === "ru" ? "Оркестратор" : "Orchestrator"}
@@ -2719,7 +2754,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span>
                   </div>
                   <div className="chat-panel-actions relative">
-                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive && !agentRecentlyFailed(agent.name, data?.systemEvents)).length ?? 0}</span>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "lead" ? null : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("lead")}
                     <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
@@ -2754,7 +2789,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                   <div className="relative flex gap-2">
                     {renderMentionSuggestions("lead")}
-                    <textarea data-chat-channel="lead" value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <textarea data-chat-channel="lead" value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -2779,7 +2814,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span>
                   </div>
                   <div className="chat-panel-actions relative">
-                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive).length ?? 0}</span>
+                    <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive && !agentRecentlyFailed(agent.name, data?.systemEvents)).length ?? 0}</span>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "group" ? null : "group")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("group")}
                     {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
@@ -2846,7 +2881,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                   <div className="relative flex gap-2">
                     {renderMentionSuggestions("group")}
-                    <textarea data-chat-channel="group" value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <textarea data-chat-channel="group" value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>

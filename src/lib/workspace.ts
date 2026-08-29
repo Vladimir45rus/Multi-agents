@@ -1734,9 +1734,11 @@ async function* runAgentRound(
       if (options.signal?.aborted) throw error;
       const message = agentFailureMessage(activeLocale, agent, error);
       try {
+        // Availability fix: record with the agent name as source so the UI
+        // (widget/main) can mark failing agents with a red dot.
         await recordSystemEvent(
           error instanceof ProviderGatewayError && error.status === 429 ? "warning" : "error",
-          "provider",
+          agent.name,
           message,
           error instanceof Error ? error.stack ?? "" : "",
         );

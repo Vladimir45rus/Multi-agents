@@ -550,12 +550,17 @@ ipcMain.handle("overlay:collapse", () => {
   if (!overlayWindow || overlayWindow.isDestroyed()) return false;
   if (!overlayPreCollapseBounds) overlayPreCollapseBounds = overlayWindow.getBounds();
   const b = overlayPreCollapseBounds;
+  // Release fix: BrowserWindow minWidth/minHeight (320x200) silently clamped
+  // setBounds, so "collapse to strip" produced a slightly smaller empty
+  // rectangle. Drop the minimum size while collapsed, restore it with bounds.
+  overlayWindow.setMinimumSize(200, 30);
   overlayWindow.setBounds({ x: b.x, y: b.y, width: 280, height: 40 });
   return true;
 });
 
 ipcMain.handle("overlay:restore", () => {
   if (!overlayWindow || overlayWindow.isDestroyed()) return false;
+  overlayWindow.setMinimumSize(320, 200);
   if (overlayPreCollapseBounds) {
     overlayWindow.setBounds(overlayPreCollapseBounds);
     overlayPreCollapseBounds = null;
