@@ -945,6 +945,7 @@ export async function createAgent(
 export async function updateAgentProfile(
   agentId: number,
   payload: {
+    name?: string;
     provider?: string;
     baseUrl?: string;
     model?: string;
@@ -987,6 +988,9 @@ export async function updateAgentProfile(
   await db
     .update(agents)
     .set({
+      // Role-change fix: the card header name follows the selected role and is
+      // persisted together with the rest of the profile.
+      name: compact(payload.name) || agent.name,
       provider,
       baseUrl,
       model,

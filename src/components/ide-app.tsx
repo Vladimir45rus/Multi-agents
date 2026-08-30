@@ -152,6 +152,7 @@ type WorkspaceData = {
 };
 
 type AgentDraft = {
+  name: string;
   provider: string;
   baseUrl: string;
   model: string;
@@ -196,6 +197,11 @@ type DesktopBridge = {
 };
 
 const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "uiux", "security", "observer", "auto"];
+
+// Role-change fix: switching the role selector re-skins the whole card — name,
+// description, skills and system prompt all follow the selected role.
+const ROLE_NAMES_RU: Record<string, string> = { main: "Главный агент", advisor: "Советник", reviewer: "Ревьюер", tester: "Тестировщик", architect: "Архитектор", uiux: "UI/UX Дизайнер", security: "Секурити", observer: "Наблюдатель", auto: "AUTO" };
+const ROLE_NAMES_EN: Record<string, string> = { main: "Lead agent", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", uiux: "UI/UX Designer", security: "Security", observer: "Observer", auto: "AUTO" };
 
 const ROLE_TEMPLATES: Record<string, { description: string; skill: string; systemPrompt: string }> = {
   main: { description: "Главный кодер: принимает решения и пишет рабочий код.", skill: "Fullstack-разработка, декомпозиция задач, тестирование и безопасные изменения.", systemPrompt: "Ты Главный агент IDE. Анализируй контекст проекта, вноси минимальные проверяемые изменения и запускай подходящие проверки." },
@@ -881,6 +887,19 @@ export function IdeApp() {
     return role === "auto" ? "AUTO" : role;
   }
 
+  // Role-change fix: a role switch re-skins the entire form — name,
+  // description, skills and system prompt follow the selected role. Roles
+  // without a template keep their texts (only name/color update).
+  function rolePresetPatch(role: string) {
+    const template = ROLE_TEMPLATES[role];
+    return {
+      role,
+      name: (locale === "ru" ? ROLE_NAMES_RU[role] : ROLE_NAMES_EN[role]) ?? role,
+      ...(template ?? {}),
+      color: ROLE_COLORS[role] ?? "#4fc1ff",
+    };
+  }
+
   function providerModelLabel(provider: string, model: string) {
     // Custom registry providers show their own name instead of the generic
     // "Custom OpenAI Endpoint" preset label.
@@ -893,7 +912,7 @@ export function IdeApp() {
 
   function isAgentDraftDirty(agent: Agent, draft: AgentDraft) {
     const agentColor = agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff";
-    return agent.provider !== draft.provider || agent.baseUrl !== draft.baseUrl || agent.model !== draft.model || agent.role !== draft.role || agent.description !== draft.description || agent.skill !== draft.skill || agent.systemPrompt !== draft.systemPrompt || agentColor !== draft.color;
+    return agent.name !== draft.name || agent.provider !== draft.provider || agent.baseUrl !== draft.baseUrl || agent.model !== draft.model || agent.role !== draft.role || agent.description !== draft.description || agent.skill !== draft.skill || agent.systemPrompt !== draft.systemPrompt || agentColor !== draft.color;
   }
 
   function agentColorForIdentity(identity?: AgentIdentity, fallbackAgent?: Agent | null) {
@@ -953,6 +972,7 @@ export function IdeApp() {
       agents?.map((agent) => [
         agent.id,
         {
+          name: agent.name,
           provider: agent.provider,
           baseUrl: agent.baseUrl,
           model: agent.model,
@@ -3567,6 +3587,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 const draft =
                   agentDrafts[agent.id] ??
                   ({
+                    name: agent.name,
                     provider: agent.provider,
                     baseUrl: agent.baseUrl,
                     model: agent.model,
@@ -3587,7 +3608,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <div className="flex items-center gap-2">
                         <span className="inline-block h-3 w-3 shrink-0 rounded-full border border-[#555]" style={{ backgroundColor: draft.color || ROLE_COLORS[agent.role] || "#4fc1ff" }} />
                         <div>
-                          <span className="text-sm">{agent.name}</span>
+                          <span className="text-sm">{draft.name || agent.name}</span>
                           <p className="text-[10px] text-[var(--text-accent)]">{providerModelLabel(draft.provider, draft.model)}</p>
                         </div>
                       </div>
@@ -3662,9 +3683,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     {draft.manualModel ? <input value={draft.model} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value } }))} placeholder={t.model} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" /> : null}
 
                     <select value={draft.role} onChange={(e) => {
-                      const newRole = e.target.value;
-                      const newColor = ROLE_COLORS[newRole] ?? "#4fc1ff";
-                      setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, role: newRole, color: draft.color === (ROLE_COLORS[draft.role] ?? "") ? newColor : draft.color } }));
+                      setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, ...rolePresetPatch(e.target.value) } }));
                     }} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs">
                       {roleOptions?.map((role) => <option key={role} value={role}>{roleLabel(role)} ({role})</option>)}
                     </select>
@@ -3791,8 +3810,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                       />
                       <select value={newAgent.role} onChange={(e) => {
-                        const newRole = e.target.value;
-                        setNewAgent((p) => ({ ...p, role: newRole, color: ROLE_COLORS[newRole] ?? "#4fc1ff" }));
+                        setNewAgent((p) => ({ ...p, ...rolePresetPatch(e.target.value) }));
                       }} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs">
                         {roleOptions?.map((role) => <option key={role} value={role}>{roleLabel(role)} ({role})</option>)}
                       </select>

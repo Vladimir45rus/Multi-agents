@@ -17,6 +17,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     }
 
     const body = (await request.json()) as {
+      name?: string;
       provider?: string;
       baseUrl?: string;
       model?: string;
@@ -33,6 +34,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
     await updateAgentProfile(
       agentId,
       {
+        name: body.name,
         provider: body.provider,
         baseUrl: body.baseUrl,
         model: body.model,
