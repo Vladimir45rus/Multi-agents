@@ -170,7 +170,7 @@ export default function OverlayPage() {
           setWorkspace(data);
         }
       } catch { /* ignore */ }
-      if (active) pollTimer = setTimeout(poll, 3000);
+      if (active) pollTimer = setTimeout(poll, 2000);
     }
     let pollTimer = setTimeout(poll, 0);
     return () => { active = false; clearTimeout(pollTimer); };
@@ -493,7 +493,7 @@ export default function OverlayPage() {
           gap: 4,
         }}
       >
-        {workspace?.messages?.slice(-12).filter((msg) => msg.senderType !== "system").map((msg) => {
+        {workspace?.messages?.slice(-12).filter((msg) => msg.senderType !== "system" && msg.chatChannel !== "lead").map((msg) => {
           const isUser = msg.senderType === "user";
           const identity = msg.metadata?.identity;
           const role = identity?.role ?? "";

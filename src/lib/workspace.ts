@@ -1558,6 +1558,20 @@ async function* streamAgentReply(
     metadata: { identity },
   });
 
+  // Lead-mirror fix: every Lead reply from the group chat is automatically
+  // copied into the "ЧАТ С ГЛАВНЫМ" channel, so the Lead tab always shows the
+  // conversation without relying on the duplicate toggle. Direct lead-chat
+  // replies (channel === "lead") and logOnly auto-cycle rounds are not mirrored.
+  if (agent.role === "main" && channel === "group") {
+    await pushMessage({
+      chatChannel: "lead",
+      senderType: "main",
+      agentName: agent.name,
+      content: fullResponse,
+      metadata: { identity },
+    });
+  }
+
   yield { type: "agent_done", channel, identity, content: fullResponse, messageId: saved?.id };
 }
 
