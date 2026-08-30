@@ -1321,13 +1321,12 @@ function agentSystemPrompt(
 1. Прочитай сообщения других агентов (они уже высказались до тебя)
 2. Прочитай нужные файлы через read_file
 3. Найди проблемы через search_code
-4. ОБРАТИСЬ К ДРУГИМ АГЕНТАМ ПО ИМЕНИ — согласись, возрази или дополни
+4. При необходимости кратко ссылайся на выводы других агентов
 5. Выскажи своё мнение, аргументируй
 6. Предложи конкретное решение
 
 ВАЖНО: Ты не кодируешь! Ты анализируешь и советуешь. Главный агент применит код.
-ФОРМАТ: Начинай с обращения к тому, на чьё сообщение отвечаешь.
-Пример: "@Советник, согласен насчёт рефакторинга. @Ревьюер, ты прав про типизацию..."`,
+ФОРМАТ: только суть — без приветствий, без представления, без упоминания своей роли и номера шага.`,
         `` + teamRoster + `
 
 === YOUR ROLE: ADVISOR ===
@@ -1337,13 +1336,12 @@ DIALOGUE PROTOCOL:
 1. Read other agents' messages (they already spoke before you)
 2. Read relevant files via read_file
 3. Find issues via search_code
-4. ADDRESS OTHER AGENTS BY NAME — agree, disagree, or add
+4. When useful, briefly reference other agents' conclusions
 5. Voice your opinion with reasoning
 6. Propose a concrete solution
 
 IMPORTANT: You do NOT code! You analyze and advise. The Lead agent applies code.
-FORMAT: Start by addressing the agent you're responding to.
-Example: "@Advisor, I agree about the refactoring. @Reviewer, you're right about typing..."`,
+FORMAT: substance only — no greetings, no self-introduction, no role or step numbers.`,
       )
     : t(
         locale,
@@ -1364,7 +1362,7 @@ Example: "@Advisor, I agree about the refactoring. @Reviewer, you're right about
 У тебя ВСЕ инструменты: read_file, write_file, create_file, delete_file, search_code, run_command.
 Ты должен довести задачу до работающего результата.
 
-Формат ответа: "Принял совет от @Архитектора по структуре. @Ревьюер предложил улучшить типы — сделал. @Тестировщик был прав про крайний случай — добавил проверку."`,
+Формат ответа: только суть — статус, написанный код, найденные ошибки, конкретные инструкции.`,
         `` + teamRoster + `
 
 === YOUR ROLE: LEAD AGENT ===
@@ -1382,7 +1380,7 @@ CODING PROTOCOL:
 You have ALL tools: read_file, write_file, create_file, delete_file, search_code, run_command.
 Get the task to a working result.
 
-Response format: "Accepted @Architect's structural advice. @Reviewer suggested type improvements — done. @Tester was right about edge case — added guard."`,
+Response format: substance only — status, written code, found errors, concrete instructions.`,
       );
 
   const fileContext = t(
@@ -1396,6 +1394,14 @@ Response format: "Accepted @Architect's structural advice. @Reviewer suggested t
     locale,
     `\n\n=== ФОКУС ОТВЕТА ===\nОтвечай строго на ПОСЛЕДНЕЕ сообщение пользователя. Старые задачи и обсуждения в истории чата — только справочник: НЕ продолжай и НЕ пересматривай их, если пользователь явно не попросил. Простое приветствие или вопрос «кто ты» — отвечай коротко и по делу, без запуска задач.`,
     `\n\n=== ANSWER FOCUS ===\nAnswer ONLY the user's latest message. Old tasks and discussions in chat history are reference only: do NOT resume or re-review them unless the user explicitly asks. A simple greeting or "who are you" deserves a short direct answer, never a task launch.`);
+
+  // Pipeline fix: agents work as a development pipeline, not a chatting room —
+  // no greetings, no self-introductions, answers carry substance only.
+  const pipelineBlock = t(
+    locale,
+    `\n\n=== РЕЖИМ КОНВЕЙЕРА (PIPELINE) ===\nПорядок работы над задачей: 1) Главный/Архитектор декомпозирует задачу пользователя в конкретный список задач и файлов. 2) Главный разработчик пишет или обновляет код в проекте (write_file/create_file). 3) Ревьюер/QA автоматически читает изменённые файлы и возвращает Главному конкретный список правок: баги, уязвимости, ошибки типов. 4) После одобрения (Approved) Главный кратко сообщает пользователю о готовности фичи.\nЗАПРЕЩЕНО: приветствия, представление, перечисление своей роли и номера шага, вводные слова и вода.\nФОРМАТ ОТВЕТА: только суть — статус выполнения, написанный код, найденные ошибки и конкретные инструкции по исправлению.`,
+    `\n\n=== PIPELINE MODE ===\nOrder of work on a task: 1) Lead/Architect decomposes the user task into a concrete list of tasks and files. 2) Lead developer writes or updates code in the project (write_file/create_file). 3) Reviewer/QA automatically reads the changed files and returns a concrete fix list to the Lead: bugs, vulnerabilities, type errors. 4) After approval (Approved) the Lead briefly reports feature readiness to the user.\nFORBIDDEN: greetings, self-introductions, listing your role or step number, filler words.\nRESPONSE FORMAT: substance only — execution status, written code, found errors and concrete fix instructions.`,
+  );
 
   const reviewMode = isReview
     ? t(locale,
@@ -1415,7 +1421,7 @@ Response format: "Accepted @Architect's structural advice. @Reviewer suggested t
         `\n\n=== RELEASE_READY PROTOCOL ===\nIf you believe code is release-ready, reply EXACTLY: "[STATUS: RELEASE_READY] <your comment>." Only this flag tells the system to stop. Without it the cycle continues.`)
     : "";
 
-  return `${identity} ${persona}.${collaboration} ${fileContext}${answerScope}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  return `${identity} ${persona}.${collaboration} ${fileContext}${answerScope}${pipelineBlock}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
 }
 
 function roleDisplay(role: string, lang: "ru" | "en"): string {
@@ -1528,9 +1534,43 @@ async function* streamAgentReply(
     gatewayMessages.push(toolResultMessage(toolCall.name, toolResult));
 
     if (round >= MAX_TOOL_ROUNDS) {
-      fullResponse += `\n\n[Max tool rounds reached (${MAX_TOOL_ROUNDS}).]`;
+      // Pipeline fix: when the tool budget is exhausted, force one final
+      // no-tools completion so the round always ends with a real text answer
+      // instead of hanging on a status chip forever.
+      const forced = await streamProviderResponse(request, gatewayMessages, { ...options, tools: undefined, fallbackModels });
+      let forcedText = "";
+      for await (const chunk of forced) {
+        forcedText += chunk;
+        if (!options.logOnly && !isPureToolCallChunk(chunk)) yield { type: "delta", channel, identity, text: chunk };
+      }
+      if (forcedText.trim()) fullResponse += `\n\n${forcedText.trim()}`;
+      else fullResponse += `\n\n[Max tool rounds reached (${MAX_TOOL_ROUNDS}).]`;
       break;
     }
+  }
+
+  // Pipeline fix: strip raw tool-call JSON blocks from the final text so the
+  // saved message never ends as a dangling "Выполняю инструмент..." chip.
+  const meaningfulResponse = fullResponse
+    .split(/\n{2,}/)
+    .filter((block) => parseToolCallDisplay(block.trim()) === null)
+    .join("\n\n")
+    .trim();
+
+  if (!meaningfulResponse) {
+    // The model only emitted tool calls: force one final textual answer.
+    gatewayMessages.push({
+      role: "user",
+      content: t(locale, "Инструменты выполнены. Дай финальный текстовый ответ: статус и суть, без вызовов инструментов.", "Tools are done. Provide the final textual answer: status and substance, no tool calls."),
+    });
+    let forcedText = "";
+    for await (const chunk of streamProviderResponse(request, gatewayMessages, { ...options, tools: undefined, fallbackModels })) {
+      forcedText += chunk;
+      if (!options.logOnly && !isPureToolCallChunk(chunk)) yield { type: "delta", channel, identity, text: chunk };
+    }
+    fullResponse = forcedText.trim();
+  } else {
+    fullResponse = meaningfulResponse;
   }
 
   if (!fullResponse.trim()) throw new Error(`${agent.name} returned an empty response`);
@@ -1798,8 +1838,10 @@ async function* runAgentRound(
   const uniqueAgents = agentRows.filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i);
   const isMultiAgent = uniqueAgents.length > 1;
 
-  for (const agent of uniqueAgents) {
+  for (const [agentIndex, agent] of uniqueAgents.entries()) {
     if (options.signal?.aborted) throw new Error("Chat request cancelled");
+    // Rate-limit guard: stagger agent starts so provider bursts don't trip 429s.
+    if (agentIndex > 0) await new Promise((resolve) => setTimeout(resolve, 1_500));
     try {
       const ctxIsMulti = isMultiAgent && agent.role !== "main";
       for await (const event of streamAgentReply(agent, channel, userText, activeLocale, attachments, findingsCount, {

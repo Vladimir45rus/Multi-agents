@@ -33,8 +33,11 @@ export type ProviderGatewayOptions = {
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
-const DEFAULT_MAX_RETRIES = 2;
+// Pipeline fix: three automatic retries with exponential backoff before the
+// fallback chain engages.
+const DEFAULT_MAX_RETRIES = 3;
 const RETRY_DELAY_MS = 2_000;
+const MAX_RETRY_DELAY_MS = 15_000;
 const MAX_KEY_LENGTH = 2_048;
 const MAX_MODEL_LENGTH = 256;
 
@@ -127,8 +130,12 @@ function retryableStatus(status: number) {
   return status === 408 || status === 409 || status === 425 || status === 429 || status >= 500;
 }
 
-function retryAfterMs(_response: Response, _attempt: number) {
-  return RETRY_DELAY_MS;
+// Rate-limit guard: honor Retry-After when the provider sends it, otherwise
+// back off exponentially (2s → 4s → 8s…, capped).
+function retryAfterMs(response: Response, attempt: number) {
+  const retryAfter = Number(response.headers.get("retry-after"));
+  if (Number.isFinite(retryAfter) && retryAfter > 0) return Math.min(retryAfter * 1_000, 20_000);
+  return Math.min(RETRY_DELAY_MS * 2 ** attempt, MAX_RETRY_DELAY_MS);
 }
 
 function redact(value: string, apiKey: string) {
@@ -300,7 +307,7 @@ async function fetchWithRetry(
         throw abortError(request.provider);
       }
 
-      await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+      await new Promise((resolve) => setTimeout(resolve, Math.min(RETRY_DELAY_MS * 2 ** attempt, MAX_RETRY_DELAY_MS)));
     } finally {
       if (!handedOff) cleanup();
     }
