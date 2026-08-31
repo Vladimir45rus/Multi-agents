@@ -991,16 +991,19 @@ export async function updateAgentProfile(
   await db
     .update(agents)
     .set({
-      // Role-change fix: the card header name follows the selected role and is
-      // persisted together with the rest of the profile.
-      name: compact(payload.name) || agent.name,
+      // Unified role-change handler: switching the role pulls the role's name,
+      // skills and system context automatically — stale persona texts never
+      // bleed through. Custom user texts still win when provided.
+      name: compact(payload.name) || (nextRole !== agent.role
+        ? (nextRole === "main" ? "Главный агент" : roleDisplayName(nextRole, agent.name))
+        : agent.name),
       provider,
       baseUrl,
       model,
       role: nextRole === "main" ? "main" : nextRole,
-      skill: payload.skill,
-      systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt),
-      description: payload.description ?? agent.description,
+      skill: compact(payload.skill) || (nextRole !== agent.role ? (ROLE_PROMPT_TEMPLATES[nextRole]?.skill ?? agent.skill) : agent.skill),
+      systemPrompt: cleanAgentSystemPrompt(payload.systemPrompt) || (nextRole !== agent.role ? (ROLE_PROMPT_TEMPLATES[nextRole]?.systemPrompt ?? agent.systemPrompt) : agent.systemPrompt),
+      description: compact(payload.description ?? "") || (nextRole !== agent.role ? (ROLE_PROMPT_TEMPLATES[nextRole]?.description ?? agent.description) : agent.description),
       color: ROLE_COLORS[nextRole] ?? (payload.color !== undefined ? compact(payload.color) || agent.color : agent.color),
       ...(payload.removeApiKey ? { apiKey: "" } : {}),
       ...(compact(payload.apiKey) ? { apiKey: encryptSecret(compact(payload.apiKey)) } : {}),
@@ -1287,10 +1290,14 @@ function agentSystemPrompt(
   const persona = promptPersona(locale, { skill: agent.skill, systemPrompt: agent.systemPrompt });
   const configuredModel = normalizeProviderModel(agent.provider, agent.model);
   const configuredProvider = getProviderPreset(agent.provider).label;
+  // Unified dynamic prompt template: every agent builds its header from the
+  // same shape — role, main/assistant status, skills — plus the identification
+  // rule ("(я)" strictly next to the current role).
+  const isMainAgent = agent.role === "main";
   const identity = t(
     locale,
-    `Твоя реальная конфигурация: имя «${agent.name}», роль «${agent.role}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
-    `Your actual configuration: name "${agent.name}", role "${agent.role}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
+    `Ты — ${roleDisplay(agent.role, "ru")}. Твой статус: ${isMainAgent ? "Главный агент" : "Вспомогательный агент"}. Твои обязанности и скиллы: ${compact(agent.skill) || roleDisplay(agent.role, "ru")}.\n\nПРАВИЛО ИДЕНТИФИКАЦИИ:\nПри перечислении команды или представлении указывай "(я)" СТРОГО напротив своей текущей роли. Никогда не называй себя Главным, если твой статус — "Вспомогательный агент".\n\nТвоя реальная конфигурация: имя «${agent.name}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
+    `You are ${roleDisplay(agent.role, "en")}. Your status: ${isMainAgent ? "Lead agent" : "Assistant agent"}. Your duties and skills: ${compact(agent.skill) || roleDisplay(agent.role, "en")}.\n\nIDENTIFICATION RULE:\nWhen listing the team or introducing yourself, put "(me)" STRICTLY next to your current role. Never call yourself the Lead if your status is "Assistant agent".\n\nYour actual configuration: name "${agent.name}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
   );
 
   // Build team roster
@@ -1300,8 +1307,9 @@ function agentSystemPrompt(
       const roleLabel = t(locale,
         roleDisplay(a.role, "ru"),
         roleDisplay(a.role, "en"));
+      // Identification rule: "(я)" strictly next to the current role.
       return isSelf
-        ? `  • ${a.name} (${roleLabel}) — ЭТО ТЫ`
+        ? `  • ${a.name} (${roleLabel}) ${t(locale, "(я)", "(me)")}`
         : `  • ${a.name} (${roleLabel})`;
     })
     .join("\n");
@@ -1441,6 +1449,14 @@ function roleDisplay(role: string, lang: "ru" | "en"): string {
   }
   const map: Record<string, string> = { main: "Lead", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", uiux: "UI/UX Designer", security: "Security", observer: "Observer" };
   return map[role] ?? role;
+}
+
+// Unified role-change handler name: main gets the full "Главный агент" title,
+// every other role is named after itself.
+function roleDisplayName(role: string, fallback: string): string {
+  if (role === "main") return "Главный агент";
+  const ru = roleDisplay(role, "ru");
+  return ru === role ? fallback : ru;
 }
 
 async function* streamAgentReply(
