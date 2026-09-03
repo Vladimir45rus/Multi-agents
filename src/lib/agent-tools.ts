@@ -49,6 +49,30 @@ export function allowedToolNames(role: string): Set<string> {
   return ADVISOR_TOOLS as Set<string>;
 }
 
+// ── Chat contour restriction ──────────────────────────────────────────────
+// Separation of concerns: the conversational loop may only READ the workspace.
+// File writes and console commands are exclusive to the orchestrator
+// execution loop.
+export const CHAT_TOOL_NAMES = new Set(["read_file", "list_files", "search_code"] as const);
+
+export function isReadOnlyTool(name: string) {
+  return (CHAT_TOOL_NAMES as ReadonlySet<string>).has(name);
+}
+
+export function filterToolDefinitions(role: string, allowedNames: ReadonlySet<string>): Array<Record<string, unknown>> {
+  const allowed = new Set([...allowedToolNames(role)].filter((name) => (allowedNames as ReadonlySet<string>).has(name)));
+  return Object.values(TOOL_REGISTRY)
+    .filter((t) => allowed.has(t.name))
+    .map((t) => ({
+      type: "function",
+      function: {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+      },
+    }));
+}
+
 // ── Tool implementations ──────────────────────────────────────────────────
 
 async function toolReadFile(args: Record<string, unknown>, _agentId: number) {

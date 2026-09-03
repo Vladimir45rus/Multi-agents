@@ -35,7 +35,7 @@ import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
 import { buildProjectContext, type ProjectContextInput } from "@/lib/project-context";
 import { recordSystemEvent } from "@/lib/system-events";
 import { resolveWithinRoot } from "@/lib/workspace-paths";
-import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
+import { CHAT_TOOL_NAMES, executeToolCall, filterToolDefinitions, isReadOnlyTool, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
 
 const execFileAsync = promisify(execFile);
 
@@ -1516,7 +1516,10 @@ async function* streamAgentReply(
     provider: agent.provider,
     model: agent.model,
   });
-  const tools = getToolDefinitions(agent.role);
+  // Separation of concerns (chat contour): the conversational loop may only
+  // READ the workspace — no file writes, no console commands. Write tools and
+  // run_command stay exclusive to the orchestrator execution loop.
+  const tools = filterToolDefinitions(agent.role, CHAT_TOOL_NAMES);
   const mainAgentId = (await db.select({ id: agents.id }).from(agents).where(eq(agents.role, "main")).limit(1))[0]?.id ?? agent.id;
 
   // Log routing fix: auto-cycle rounds (review/fix reflections) stream
@@ -1551,6 +1554,16 @@ async function* streamAgentReply(
     // Check for tool calls
     const toolCall = parseToolCall(chunkText);
     if (!toolCall) break; // No tool call — agent is done talking
+
+    // Execution guard: the chat contour refuses everything except read-only
+    // tools — even if the model ignores its instructions and emits a write.
+    if (!isReadOnlyTool(toolCall.name)) {
+      gatewayMessages.push({ role: "assistant", content: chunkText });
+      gatewayMessages.push(toolResultMessage(toolCall.name, t(locale,
+        "Запрещено: в чате доступны только инструменты чтения (read_file, list_files, search_code). Запись файлов и консольные команды выполняет Оркестратор по явной задаче.",
+        "Forbidden: the chat allows read-only tools (read_file, list_files, search_code). File writes and console commands are executed by the Orchestrator on an explicit task.")));
+      continue;
+    }
 
     // Execute tool
     const toolResult = await executeToolCall(toolCall.name, toolCall.arguments, agent.role, mainAgentId);
@@ -1687,25 +1700,12 @@ export async function* streamWorkspaceMessage(
     yield event;
   }
 
-  // Check if auto-approve mode is enabled for autonomous self-correction
-  const [settingsRow] = await db.select({ autoApprove: workspaceSettings.autoApprove }).from(workspaceSettings).limit(1);
-  const autoApprove = Boolean(settingsRow?.autoApprove);
-
-  // Hang fix: the auto-cycle used to run inside this SSE stream. Its logOnly
-  // replies are stored to the logs (not the chat), so the in-stream vote scan
-  // never saw them: the loop burned through all 15 iterations — hours of
-  // silent provider calls — while the open stream kept the UI stuck on the
-  // thinking state all night. The cycle now runs detached in the background:
-  // this stream ends right after the direct answers, and the cycle reports
-  // via the logs panel only.
-  if (channel === "group" && autoApprove && !options?.signal?.aborted) {
-    void runAutoCycleBackground({
-      channel,
-      locale: activeLocale,
-      userMessageId,
-      projectContext: options?.projectContext,
-    }).catch(() => undefined);
-  }
+  // Separation of concerns (execution contour): the chat NEVER starts the
+  // auto-cycle, file writes or console commands — even with AUTO enabled.
+  // Autonomous execution is triggered only by an explicit orchestrator task
+  // (the dedicated ТЗ/task launch). The AUTO toggle now merely permits the
+  // orchestrator pipeline to run unattended; it is consumed by
+  // /api/orchestrate/*, not by conversational messages.
 
   if (options?.signal?.aborted) throw new Error("Chat request cancelled");
   yield { type: "done", channel };

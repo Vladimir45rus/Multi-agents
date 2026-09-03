@@ -5,6 +5,7 @@ import type { OrchestratorStreamEvent } from "@/lib/orchestrator-types";
 import type { ProjectContextInput } from "@/lib/project-context";
 import { recordApiError } from "@/lib/api-errors";
 import { mobileAccessError } from "@/lib/mobile-auth";
+import { getWorkspaceSettingsRow } from "@/lib/workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -38,6 +39,19 @@ export async function POST(request: Request) {
   const taskId = (typeof body.taskId === "string" && body.taskId.trim() ? body.taskId.trim() : "") || randomUUID();
   const maxIterations = typeof body.maxIterations === "number" ? body.maxIterations : undefined;
 
+  // Execution-contour wiring: the AUTO toggle (settings.autoApprove) maps to
+  // the orchestrator's autonomous mode when the panel sends no explicit mode.
+  // Conversational messages can never reach this route with a task payload.
+  let mode = body.mode;
+  if (mode !== "autonomous" && mode !== "controlled") {
+    try {
+      const settings = await getWorkspaceSettingsRow();
+      mode = Boolean(settings.autoApprove) ? "autonomous" : "controlled";
+    } catch {
+      mode = "controlled";
+    }
+  }
+
   const controller = registerTaskController(taskId);
   const abortFromRequest = () => controller.abort();
   request.signal.addEventListener("abort", abortFromRequest, { once: true });
@@ -46,7 +60,7 @@ export async function POST(request: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(streamController) {
       try {
-        for await (const event of runOrchestrator({ task, taskId, maxIterations, mode: body.mode, locale: body.locale, signal: controller.signal, projectContext: body.projectContext })) {
+        for await (const event of runOrchestrator({ task, taskId, maxIterations, mode, locale: body.locale, signal: controller.signal, projectContext: body.projectContext })) {
           streamController.enqueue(encoder.encode(`data: ${JSON.stringify(event)}\n\n`));
         }
       } catch (error) {
