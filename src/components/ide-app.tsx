@@ -188,6 +188,8 @@ type DesktopBridge = {
   installUpdate?: () => Promise<void>;
   notify?: (opts: { title: string; body: string }) => Promise<void>;
   writeClipboard?: (text: string) => Promise<boolean>;
+  openChatPopout?: (channel: "lead" | "group") => Promise<boolean>;
+  isChatWindowOpen?: (channel: "lead" | "group") => Promise<boolean>;
   safeStorage?: {
     isAvailable: () => Promise<boolean>;
     encryptString: (plaintext: string) => Promise<string>;
@@ -742,6 +744,37 @@ export function IdeApp() {
     const timer = setInterval(check, 2000);
     return () => clearInterval(timer);
   }, []);
+
+  // Pop-out chat: the group chat can live in its own OS window (outside the
+  // app UI), sized and moved freely like the overlay widget.
+  const [chatWindowOpen, setChatWindowOpen] = useState(false);
+  useEffect(() => {
+    const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+    if (!bridge?.isChatWindowOpen) return;
+    const check = () => {
+      void Promise.all([
+        bridge.isChatWindowOpen?.("group").catch(() => false),
+        bridge.isChatWindowOpen?.("lead").catch(() => false),
+      ]).then(([groupOpen, leadOpen]) => setChatWindowOpen(Boolean(groupOpen) || Boolean(leadOpen)));
+    };
+    check();
+    const timer = setInterval(check, 2000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Font-size control for chat windows (persisted in localStorage).
+  const [chatFontScale, setChatFontScale] = useState<number>(() => {
+    if (typeof window === "undefined") return 1;
+    const stored = Number(window.localStorage.getItem("chatFontScale"));
+    return Number.isFinite(stored) && stored >= 0.8 && stored <= 1.6 ? stored : 1;
+  });
+  const changeChatFont = (delta: number) => {
+    setChatFontScale((prev) => {
+      const next = Math.min(1.6, Math.max(0.8, Math.round((prev + delta) * 100) / 100));
+      window.localStorage.setItem("chatFontScale", String(next));
+      return next;
+    });
+  };
 
   // Collapse/expand helpers moved outside via useMemo render functions
   const renderCollapseButton = (name: PanelName) => {
@@ -2926,12 +2959,24 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive && !agentRecentlyFailed(agent.name, data?.systemEvents)).length ?? 0}</span>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "lead" ? null : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("lead")}
+                    <button type="button" onClick={() => changeChatFont(-0.1)} title={locale === "ru" ? "Меньше шрифт" : "Smaller font"} className="rounded border border-[var(--border-default)] px-1.5 py-1 text-[10px] text-[var(--text-secondary)] hover:border-blue-400">A−</button>
+                    <button type="button" onClick={() => changeChatFont(0.1)} title={locale === "ru" ? "Больше шрифт" : "Larger font"} className="rounded border border-[var(--border-default)] px-1.5 py-1 text-[10px] text-[var(--text-secondary)] hover:border-blue-400">A+</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+                        if (bridge?.openChatPopout) void bridge.openChatPopout("lead");
+                        else window.open(`/popout?channel=lead`, "_blank", "width=480,height=640");
+                      }}
+                      title={locale === "ru" ? "Вынести чат в отдельное окно" : "Pop chat out to its own window"}
+                      className={`rounded border px-1.5 py-1 text-[10px] ${chatWindowOpen ? "border-[#3fb950] bg-[#23863633] text-white" : "border-[var(--border-default)] text-[var(--text-secondary)] hover:border-blue-400"}`}
+                    >⧉</button>
                     <button type="button" onClick={() => void clearHistory("lead")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[#3a3d41]">🗑️</button>
                     {renderCollapseButton("lead")}
                     {renderExpandButton("lead")}
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3" style={{ zoom: chatFontScale }}>
                   {leadMessages?.map((msg) => (
                     <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[var(--border-default)] bg-[var(--bg-panel)]"}`}>
                       <div className="flex items-center justify-between gap-2">
@@ -2995,12 +3040,24 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <span>AUTO</span>
                       <input type="checkbox" checked={autoApproveDraft} onChange={(event) => void toggleAutoApprove(event.target.checked)} disabled={busy} />
                     </label>
+                    <button type="button" onClick={() => changeChatFont(-0.1)} title={locale === "ru" ? "Меньше шрифт" : "Smaller font"} className="rounded border border-[var(--border-default)] px-1.5 py-1 text-[10px] text-[var(--text-secondary)] hover:border-blue-400">A−</button>
+                    <button type="button" onClick={() => changeChatFont(0.1)} title={locale === "ru" ? "Больше шрифт" : "Larger font"} className="rounded border border-[var(--border-default)] px-1.5 py-1 text-[10px] text-[var(--text-secondary)] hover:border-blue-400">A+</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+                        if (bridge?.openChatPopout) void bridge.openChatPopout("group");
+                        else window.open(`/popout?channel=group`, "_blank", "width=520,height=680");
+                      }}
+                      title={locale === "ru" ? "Вынести общий чат в отдельное окно" : "Pop the group chat out to its own window"}
+                      className={`rounded border px-1.5 py-1 text-[10px] ${chatWindowOpen ? "border-[#3fb950] bg-[#23863633] text-white" : "border-[var(--border-default)] text-[var(--text-secondary)] hover:border-blue-400"}`}
+                    >⧉</button>
                     <button type="button" onClick={() => void clearHistory("group")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[var(--bg-panel-alt)]">🗑️</button>
                     {renderCollapseButton("group")}
                     {renderExpandButton("group")}
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3" style={{ zoom: chatFontScale }}>
                   {groupMessages?.map((msg) => (
                     <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[var(--border-default)] bg-[var(--bg-panel)]"}`}>
                       <div className="flex items-center justify-between gap-2">

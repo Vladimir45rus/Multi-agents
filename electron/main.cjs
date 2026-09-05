@@ -568,6 +568,107 @@ ipcMain.handle("overlay:restore", () => {
   return true;
 });
 
+// Pop-out chat window: an independent OS-level chat window (outside the main
+// app UI), freely movable and resizable; position/size persist per channel.
+let chatPopoutWindows = new Map();
+let chatPopoutState = {};
+
+function loadChatPopoutState() {
+  try {
+    chatPopoutState = JSON.parse(fs.readFileSync(statePath(), "utf8")).chatPopoutState ?? {};
+  } catch {
+    chatPopoutState = {};
+  }
+}
+
+function saveChatPopoutState() {
+  try {
+    const state = { ...loadSessionState(), chatPopoutState };
+    fs.writeFileSync(statePath(), JSON.stringify(state, null, 2), "utf8");
+  } catch { /* ignore */ }
+}
+
+function chatPopoutUrl(startUrl, channel) {
+  if (typeof startUrl === "string") {
+    try {
+      const parsed = new URL(startUrl);
+      return `${parsed.protocol}//${parsed.host}/popout?channel=${channel}`;
+    } catch {
+      // Fall through.
+    }
+  }
+  return `http://127.0.0.1:${DEFAULT_SERVER_PORT}/popout?channel=${channel}`;
+}
+
+ipcMain.handle("chat-popout:open", (_event, channel) => {
+  const key = channel === "lead" ? "lead" : "group";
+  const existing = chatPopoutWindows.get(key);
+  if (existing && !existing.isDestroyed()) {
+    existing.focus();
+    return true;
+  }
+
+  if (chatPopoutWindows.size === 0) loadChatPopoutState();
+  const bounds = chatPopoutState[key] ?? { width: key === "lead" ? 480 : 520, height: key === "lead" ? 640 : 680 };
+  const port = Number(process.env.ELECTRON_SERVER_PORT || process.env.PORT || DEFAULT_SERVER_PORT);
+  // Dev mode (ELECTRON_START_URL) wins over the embedded-server port.
+  let url;
+  try {
+    const devUrl = process.env.ELECTRON_START_URL ? new URL(process.env.ELECTRON_START_URL) : null;
+    url = devUrl ? `${devUrl.protocol}//${devUrl.host}/popout?channel=${key}` : `http://127.0.0.1:${port}/popout?channel=${key}`;
+  } catch {
+    url = `http://127.0.0.1:${port}/popout?channel=${key}`;
+  }
+
+  const win = new BrowserWindow({
+    width: bounds.width,
+    height: bounds.height,
+    x: bounds.x,
+    y: bounds.y,
+    minWidth: 320,
+    minHeight: 260,
+    title: key === "lead" ? "ЧАТ С ГЛАВНЫМ" : "Общий чат",
+    backgroundColor: "#0d1117",
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, "preload.cjs"),
+    },
+  });
+
+  chatPopoutWindows.set(key, win);
+  win.on("resize", scheduleChatPopoutSave(key));
+  win.on("move", scheduleChatPopoutSave(key));
+  win.on("closed", () => chatPopoutWindows.delete(key));
+
+  guardNavigation(win.webContents, [url]);
+  win.loadURL(url);
+  return true;
+});
+
+function scheduleChatPopoutSave(key) {
+  let timer = null;
+  return () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      const win = chatPopoutWindows.get(key);
+      if (!win || win.isDestroyed()) return;
+      try {
+        chatPopoutState[key] = win.getBounds();
+        saveChatPopoutState();
+      } catch { /* ignore */ }
+    }, 500);
+  };
+}
+
+ipcMain.handle("chat-popout:isOpen", (_event, channel) => {
+  const key = channel === "lead" ? "lead" : "group";
+  const win = chatPopoutWindows.get(key);
+  return Boolean(win && !win.isDestroyed());
+});
+
 ipcMain.handle("workspace:select-directory", async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     title: "Select project directory",

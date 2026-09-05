@@ -10,6 +10,8 @@ contextBridge.exposeInMainWorld("desktopBridge", {
   toggleOverlayOnTop: () => ipcRenderer.invoke("overlay:toggle-on-top"),
   collapseOverlay: () => ipcRenderer.invoke("overlay:collapse"),
   restoreOverlay: () => ipcRenderer.invoke("overlay:restore"),
+  openChatPopout: (channel) => ipcRenderer.invoke("chat-popout:open", channel),
+  isChatWindowOpen: (channel) => ipcRenderer.invoke("chat-popout:isOpen", channel),
   onUpdateAvailable: (callback) => {
     ipcRenderer.on("update-available", (_event, data) => callback(data));
   },
