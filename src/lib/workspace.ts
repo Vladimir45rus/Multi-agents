@@ -1145,7 +1145,7 @@ export async function saveFileContent(fileId: number, content: string, actorAgen
         [
           {
             role: "system",
-            content: agentSystemPrompt(activeLocale, helper, findings.length, false, allAgentNamesReview, false, false),
+            content: await agentSystemPrompt(activeLocale, helper, findings.length, false, allAgentNamesReview, false, false),
           },
           {
             role: "user",
@@ -1278,7 +1278,7 @@ function attachmentContext(locale: UiLocale, attachments: ChatAttachment[]) {
   return details.length > 0 ? `\\n\\n${t(locale, "Вложения:", "Attachments:")}\\n${details.join("\\n")}` : "";
 }
 
-function agentSystemPrompt(
+async function agentSystemPrompt(
   locale: UiLocale,
   agent: typeof agents.$inferSelect,
   findingsCount: number,
@@ -1314,10 +1314,34 @@ function agentSystemPrompt(
     })
     .join("\n");
 
+  // Availability fix: agents that recently errored are marked as offline, so
+  // a live agent never reports for a dead one ("один умер — а все пишут, что
+  // он тут"). The current agent is excluded (its own fallback is disclosed
+  // separately via the honesty rules).
+  const offlineAgents = new Set<string>();
+  try {
+    const cutoff = Date.now() - 10 * 60_000;
+    const recentEvents = await db
+      .select({ source: systemEvents.source, level: systemEvents.level, createdAt: systemEvents.createdAt })
+      .from(systemEvents)
+      .orderBy(desc(systemEvents.id))
+      .limit(50);
+    for (const event of recentEvents) {
+      if (event.level === "error" && new Date(event.createdAt).getTime() >= cutoff && event.source !== agent.name) {
+        offlineAgents.add(event.source);
+      }
+    }
+  } catch { /* best-effort roster annotation */ }
+  const offlineNote = offlineAgents.size > 0
+    ? t(locale,
+        `\n\n⚠️ СЕЙЧАС НЕДОСТУПНЫ (не отвечали из-за ошибок провайдера): ${[...offlineAgents].join(", ")}. НЕ отвечай и НЕ докладывай за них — они не в строю.`,
+        `\n\n⚠️ CURRENTLY OFFLINE (failed with provider errors): ${[...offlineAgents].join(", ")}. Do NOT answer or report on their behalf — they are out of commission.`)
+    : "";
+
   const teamRoster = t(
     locale,
-    `\n\n=== СОСТАВ ТВОЕЙ КОМАНДЫ ===\n${teamList}\n\nТы — часть этой команды. Все видят общий чат. Ты должен читать сообщения других агентов, ссылаться на них и строить диалог.`,
-    `\n\n=== YOUR TEAM ===\n${teamList}\n\nYou are part of this team. Everyone sees the shared chat. Read other agents' messages, reference them, and build a dialogue.`,
+    `\n\n=== СОСТАВ ТВОЕЙ КОМАНДЫ ===\n${teamList}${offlineNote}\n\nТы — часть этой команды. Все видят общий чат.`,
+    `\n\n=== YOUR TEAM ===\n${teamList}${offlineNote}\n\nYou are part of this team. Everyone sees the shared chat.`,
   );
 
   const collaboration = isMultiAgent
@@ -1414,6 +1438,14 @@ Response format: substance only — status, written code, found errors, concrete
     `\n\n=== PIPELINE MODE ===\nOrder of work on a task: 1) Lead/Architect decomposes the user task into a concrete list of tasks and files. 2) Lead developer writes or updates code in the project (write_file/create_file). 3) Reviewer/QA automatically reads the changed files and returns a concrete fix list to the Lead: bugs, vulnerabilities, type errors. 4) After approval (Approved) the Lead briefly reports feature readiness to the user.\nFORBIDDEN: greetings, self-introductions, listing your role or step number, filler words.\nRESPONSE FORMAT: substance only — execution status, written code, found errors and concrete fix instructions.`,
   );
 
+  // Speak-for-yourself rule: an agent reports only its own work and status.
+  // Speaking for other agents is reserved for explicit exception questions.
+  const selfOnlyRule = t(
+    locale,
+    `\n\n=== ГОВОРИ ТОЛЬКО ЗА СЕБЯ ===\n1. Отвечай СТРОГО от своего лица: только твой статус, твои действия, твой анализ. Перечислять статусы или действия других агентов ЗАПРЕЩЕНО.\n2. Другой агент сам отчитается о своей работе, когда его спросят или когда наступит его очередь.\n3. Исключение: если вопрос напрямую о том, ПОЧЕМУ другой агент что-то сделал или сказал — можешь предположить его мотивацию, помечая это как предположение («видимо, он решил…»), но не как факт от его имени.\n4. Если агент недоступен (см. список недоступных) — не отвечай и не докладывай за него; просто продолжай свою работу.`,
+    `\n\n=== SPEAK ONLY FOR YOURSELF ===\n1. Answer STRICTLY on your own behalf: your status, your actions, your analysis only. Listing other agents' statuses or actions is FORBIDDEN.\n2. Other agents report their own work when asked or when their turn comes.\n3. Exception: if the question is directly about WHY another agent did or said something, you may hypothesize their motivation, clearly marked as a guess ("apparently they decided…"), never as a fact on their behalf.\n4. If an agent is offline (see the offline list) — do not answer or report for them; just continue your own work.`,
+  );
+
   // Role boundaries: agents are development tools, not system commentators.
   const boundariesBlock = t(
     locale,
@@ -1448,7 +1480,7 @@ Response format: substance only — status, written code, found errors, concrete
         `\n\n=== RELEASE_READY PROTOCOL ===\nIf you believe code is release-ready, reply EXACTLY: "[STATUS: RELEASE_READY] <your comment>." Only this flag tells the system to stop. Without it the cycle continues.`)
     : "";
 
-  return `${identity} ${persona}.${collaboration} ${fileContext}${answerScope}${pipelineBlock}${boundariesBlock}${fallbackHonesty}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  return `${identity} ${persona}.${collaboration} ${fileContext}${answerScope}${pipelineBlock}${selfOnlyRule}${boundariesBlock}${fallbackHonesty}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
 }
 
 function roleDisplay(role: string, lang: "ru" | "en"): string {
@@ -1505,7 +1537,7 @@ async function* streamAgentReply(
         agent.baseUrl,
         Array.isArray(workspaceSettingsRow?.fallbackModels) ? workspaceSettingsRow.fallbackModels : [],
       );
-  const baseSystemPrompt = agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix);
+  const baseSystemPrompt = await agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix);
   // Honesty fix: if a fallback happens mid-round, a disclosure is injected
   // into the conversation and a visible ⚠️ notice lands in the chat.
   const fallbackNotes: string[] = [];
@@ -1892,20 +1924,26 @@ async function* runAgentRound(
   const findingsCount = (await db.select().from(analysisFindings)).length;
   const activeAgents = await db.select().from(agents).where(eq(agents.isActive, true));
 
-  // Addressing fix: a message that explicitly addresses a role/name (@Ревьюер,
-  // @Архитектор, "вопрос Ревьюеру"…) must be answered ONLY by the addressee.
-  // Everyone else stays silent. The Lead answers only for himself too.
+  // Addressing fix: a message must be answered ONLY by its addressee.
+  // Strict patterns only — an @mention, an address at the start of the
+  // message ("Ревьюер, ...") or an explicit "вопрос X". A role name merely
+  // mentioned somewhere in the text (even in a complaint about the Lead)
+  // does NOT count as addressing, otherwise the Lead would answer whenever
+  // the word "главный" appears.
   const normalizedText = userText.toLowerCase();
+  const isExplicitAddress = (token: string) =>
+    normalizedText.includes(`@${token}`)
+    || normalizedText.startsWith(`${token}`)
+    || normalizedText.startsWith(`${token},`)
+    || normalizedText.includes(`вопрос ${token}`)
+    || normalizedText.includes(`к ${token}`);
   const mentionCandidates = activeAgents.filter((agent) => {
     const roleName = roleDisplay(agent.role, "ru").toLowerCase();
     const agentName = agent.name.toLowerCase();
-    return (userText.toLowerCase().includes(`@${agentName}`) && agentName.length > 0)
-      || normalizedText.includes(`@${roleName}`)
-      || normalizedText.includes(` ${roleName}`) && !normalizedText.includes("все")
-      || normalizedText.includes(`вопрос ${roleName}`) && !normalizedText.includes("всем");
+    return (agentName && isExplicitAddress(agentName)) || isExplicitAddress(roleName);
   });
-  const mentionRoles = new Set(mentionCandidates.map((agent) => agent.role));
-  const isAddressed = mentionCandidates.length > 0 && !normalizedText.includes(" всем") && !normalizedText.includes("все агенты") && !normalizedText.includes("@все");
+  const addressedAll = /@все|всем аген|все агенты|всей команде/.test(normalizedText);
+  const isAddressed = mentionCandidates.length > 0 && !addressedAll;
 
   const agentRows = channel === "lead" && !options.reviewOnly
     ? [mainAgent]
@@ -1914,8 +1952,8 @@ async function* runAgentRound(
       : options.reviewOnly
         ? activeAgents.filter((a) => a.role !== "main")
         : isAddressed
-          // Only explicitly addressed agents (plus the Lead when he himself is addressed).
-          ? activeAgents.filter((a) => mentionCandidates.some((m) => m.id === a.id) || (a.role === "main" && mentionRoles.has("main")))
+          // Only explicitly addressed agents answer; everyone else stays silent.
+          ? activeAgents.filter((a) => mentionCandidates.some((m) => m.id === a.id))
           : [mainAgent, ...activeAgents.filter((a) => a.role !== "main")];
 
   const uniqueAgents = agentRows.filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i);
