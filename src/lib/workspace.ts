@@ -16,7 +16,7 @@ import {
   systemEvents,
   workspaceSettings,
 } from "@/db/schema";
-import { and, asc, desc, eq, ne } from "drizzle-orm";
+import { and, asc, desc, eq, lt, ne } from "drizzle-orm";
 import { getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import {
   completeProviderResponse,
@@ -1243,8 +1243,17 @@ function summarizeChatMessages(messages: GatewayMessage[]) {
   return { text: lines.join(" | ").slice(0, 2200), tokens: messages.reduce((total, message) => total + estimateMessageTokens(message), 0) };
 }
 
-async function gatewayHistory(channel: ChatChannel) {
-  const rows = await db.select().from(chatMessages).where(eq(chatMessages.chatChannel, channel)).orderBy(desc(chatMessages.id)).limit(100);
+async function gatewayHistory(channel: ChatChannel, beforeMessageId?: number) {
+  // Parroting fix: agents answering the SAME user message must not see each
+  // other's replies to it — otherwise the second agent parrots the first
+  // agent's roll call ("3. Главный агент (я)" from the Advisor). The history
+  // is cut strictly BEFORE the current round started.
+  const rows = await db.select().from(chatMessages)
+    .where(beforeMessageId
+      ? and(eq(chatMessages.chatChannel, channel), lt(chatMessages.id, beforeMessageId))
+      : eq(chatMessages.chatChannel, channel))
+    .orderBy(desc(chatMessages.id))
+    .limit(100);
   const messages: GatewayMessage[] = rows.reverse().map((row) => ({
     role: row.senderType === "user" ? "user" : "assistant",
     content: row.content,
@@ -1297,8 +1306,8 @@ async function agentSystemPrompt(
   const isMainAgent = agent.role === "main";
   const identity = t(
     locale,
-    `Ты — ${roleDisplay(agent.role, "ru")}. Твой статус: ${isMainAgent ? "Главный агент" : "Вспомогательный агент"}. Твои обязанности и скиллы: ${compact(agent.skill) || roleDisplay(agent.role, "ru")}.\n\nПРАВИЛО ИДЕНТИФИКАЦИИ:\nПри перечислении команды или представлении указывай "(я)" СТРОГО напротив своей текущей роли. Никогда не называй себя Главным, если твой статус — "Вспомогательный агент".\n\nТвоя реальная конфигурация: имя «${agent.name}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
-    `You are ${roleDisplay(agent.role, "en")}. Your status: ${isMainAgent ? "Lead agent" : "Assistant agent"}. Your duties and skills: ${compact(agent.skill) || roleDisplay(agent.role, "en")}.\n\nIDENTIFICATION RULE:\nWhen listing the team or introducing yourself, put "(me)" STRICTLY next to your current role. Never call yourself the Lead if your status is "Assistant agent".\n\nYour actual configuration: name "${agent.name}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
+    `Ты — ${roleDisplay(agent.role, "ru")}. Твой статус: ${isMainAgent ? "Главный агент" : "Вспомогательный агент"}. Твои обязанности и скиллы: ${compact(agent.skill) || roleDisplay(agent.role, "ru")}.\n\nПРАВИЛО ИДЕНТИФИКАЦИИ:\nПри перечислении команды или представлении указывай "(я)" СТРОГО напротив своей текущей роли. Никогда не называй себя Главным, если твой статус — "Вспомогательный агент".\nПорядковый номер при перекличке бери ТОЛЬКО из списка «СОСТАВ ТВОЕЙ КОМАНДЫ» выше, считая позиции сам. Ответы ДРУГИХ агентов в истории — не твой шаблон: не копируй их формат, их номера и их слова. Отвечай ровно одной своей строкой.\n\nТвоя реальная конфигурация: имя «${agent.name}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
+    `You are ${roleDisplay(agent.role, "en")}. Your status: ${isMainAgent ? "Lead agent" : "Assistant agent"}. Your duties and skills: ${compact(agent.skill) || roleDisplay(agent.role, "en")}.\n\nIDENTIFICATION RULE:\nWhen listing the team or introducing yourself, put "(me)" STRICTLY next to your current role. Never call yourself the Lead if your status is "Assistant agent".\nYour roll-call number comes ONLY from the "YOUR TEAM" list above, counted by yourself. Other agents' replies in the history are not your template: never copy their format, numbers or words. Reply with exactly one line of your own.\n\nYour actual configuration: name "${agent.name}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
   );
 
   // Build team roster
@@ -1527,14 +1536,14 @@ async function* streamAgentReply(
   locale: UiLocale,
   attachments: ChatAttachment[],
   findingsCount: number,
-  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean },
+  options: ProviderGatewayOptions & { projectContext?: ProjectContextInput; isMultiAgent?: boolean; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean; beforeMessageId?: number },
 ): AsyncGenerator<ChatStreamEvent> {
   // Custom-provider support: prefer the agent's own key, fall back to the
   // registry key of "custom:<id>", then to the shared provider key.
   const apiKey = await getAgentProviderKey(agent);
   const customMeta = await resolveCustomAgentRequest(agent);
   const effectiveAgent = customMeta ? { ...agent, baseUrl: customMeta.baseUrl } : agent;
-  const history = await gatewayHistory(channel);
+  const history = await gatewayHistory(channel, options.beforeMessageId);
   const projectContext = await buildProjectContext(options.projectContext);
   const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${projectContext}`;
   const isMulti = Boolean(options.isMultiAgent);
@@ -1786,6 +1795,9 @@ export async function* streamWorkspaceMessage(
   for await (const event of runAgentRound(channel, userText, activeLocale, attachments, {
     signal: options?.signal,
     projectContext: options?.projectContext,
+    // Parroting fix: agents see history only BEFORE this user message —
+    // replies of agents in the same round never leak into each other.
+    beforeMessageId: userMessageId,
   })) {
     yield event;
   }
@@ -1936,7 +1948,7 @@ async function* runAgentRound(
   userText: string,
   activeLocale: UiLocale,
   attachments: ChatAttachment[],
-  options: { signal?: AbortSignal; projectContext?: ProjectContextInput; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean },
+  options: { signal?: AbortSignal; projectContext?: ProjectContextInput; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean; beforeMessageId?: number },
 ): AsyncGenerator<ChatStreamEvent> {
   const [mainAgent] = await db.select().from(agents).where(eq(agents.role, "main")).limit(1);
   if (!mainAgent) throw new Error(t(activeLocale, "Главный агент не назначен.", "No Lead agent is assigned."));
@@ -1987,30 +1999,47 @@ async function* runAgentRound(
   const uniqueAgents = agentRows.filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i);
   const isMultiAgent = uniqueAgents.length > 1;
 
+  // Hang fix: one slow/broken provider (e.g., a custom Ollama endpoint that
+  // "thinks" for an hour) must not block the rest of the round. Each agent
+  // gets its own wall-clock budget and its own abort signal.
+  const AGENT_ROUND_TIMEOUT_MS = 300_000;
+
   for (const [agentIndex, agent] of uniqueAgents.entries()) {
     if (options.signal?.aborted) throw new Error("Chat request cancelled");
     // Rate-limit guard: stagger agent starts so provider bursts don't trip 429s.
     if (agentIndex > 0) await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    const agentController = new AbortController();
+    const abortFromOuter = () => agentController.abort();
+    options.signal?.addEventListener("abort", abortFromOuter, { once: true });
+    const roundDeadline = setTimeout(() => agentController.abort(), AGENT_ROUND_TIMEOUT_MS);
+
     try {
       const ctxIsMulti = isMultiAgent && agent.role !== "main";
       for await (const event of streamAgentReply(agent, channel, userText, activeLocale, attachments, findingsCount, {
-        signal: options.signal,
+        signal: agentController.signal,
         isMultiAgent: ctxIsMulti,
         reviewOnly: Boolean(options.reviewOnly),
         fixMode: Boolean(options.fixMode),
         logOnly: Boolean(options.logOnly),
+        beforeMessageId: options.beforeMessageId,
         projectContext: options.projectContext,
       })) {
         yield event;
       }
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      const message = agentFailureMessage(activeLocale, agent, error);
+      const timedOut = agentController.signal.aborted;
+      const message = timedOut
+        ? t(activeLocale,
+            `Агент ${agent.name} (${getProviderPreset(agent.provider).label} / ${agent.model}) не ответил за 5 минут и отключён от раунда.`,
+            `Agent ${agent.name} (${getProviderPreset(agent.provider).label} / ${agent.model}) did not reply within 5 minutes and was dropped from the round.`)
+        : agentFailureMessage(activeLocale, agent, error);
       try {
         // Availability fix: record with the agent name as source so the UI
         // (widget/main) can mark failing agents with a red dot.
         await recordSystemEvent(
-          error instanceof ProviderGatewayError && error.status === 429 ? "warning" : "error",
+          timedOut ? "warning" : error instanceof ProviderGatewayError && error.status === 429 ? "warning" : "error",
           agent.name,
           message,
           error instanceof Error ? error.stack ?? "" : "",
@@ -2025,6 +2054,10 @@ async function* runAgentRound(
         status: error instanceof ProviderGatewayError ? error.status : undefined,
         rateLimited: error instanceof ProviderGatewayError && error.status === 429,
       };
+    } finally {
+      clearTimeout(roundDeadline);
+      options.signal?.removeEventListener("abort", abortFromOuter);
+      agentController.abort();
     }
   }
 }

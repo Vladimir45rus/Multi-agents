@@ -273,6 +273,26 @@ function guardNavigation(webContents, allowedPrefixes) {
   });
 }
 
+// UX fix: Windows users expect the right-click menu (copy/paste/select all).
+// Electron disables it by default, so every window gets a native edit menu.
+function enableContextMenu(windowRef) {
+  windowRef.webContents.on("context-menu", (_event, params) => {
+    const template = [
+      { role: "cut", label: "Вырезать", enabled: params.editFlags.canCut },
+      { role: "copy", label: "Копировать", enabled: params.editFlags.canCopy },
+      { role: "paste", label: "Вставить", enabled: params.editFlags.canPaste },
+      { type: "separator" },
+      { role: "selectAll", label: "Выделить всё" },
+    ];
+    if (params.linkURL) {
+      template.push({ type: "separator" });
+      template.push({ label: "Открыть ссылку в браузере", click: () => shell.openExternal(params.linkURL) });
+      template.push({ label: "Копировать адрес ссылки", click: () => clipboard.writeText(params.linkURL) });
+    }
+    Menu.buildFromTemplate(template).popup({ window: windowRef });
+  });
+}
+
 function createWindow(startUrl) {
   const state = loadSessionState();
   const bounds = state.bounds || { width: 1680, height: 1050 };
@@ -306,6 +326,7 @@ function createWindow(startUrl) {
   });
 
   guardNavigation(mainWindow.webContents, [startUrl]);
+  enableContextMenu(mainWindow);
 
   mainWindow.webContents.on("console-message", (_event, details) => {
     const level = ["verbose", "info", "warning", "error"][details.level] ?? details.level;
@@ -427,6 +448,7 @@ function createOverlayWindow(startUrl) {
 
   const overlayUrl = toOverlayUrl(startUrl);
   guardNavigation(overlayWindow.webContents, [overlayUrl]);
+  enableContextMenu(overlayWindow);
   // Widget fix: if the embedded server is not ready yet, retry loading so the
   // overlay never stays as an empty black window.
   let overlayLoadRetries = 0;
@@ -644,6 +666,7 @@ ipcMain.handle("chat-popout:open", (_event, channel) => {
   win.on("closed", () => chatPopoutWindows.delete(key));
 
   guardNavigation(win.webContents, [url]);
+  enableContextMenu(win);
   win.loadURL(url);
   return true;
 });
