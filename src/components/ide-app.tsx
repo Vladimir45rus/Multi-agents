@@ -2071,6 +2071,39 @@ export function IdeApp() {
     }
   }
 
+  // Bridge button: push a Lead's spec (or any message) to the Orchestrator as
+  // an explicit task. The chat contour itself never executes anything.
+  const [pushingToOrchestrator, setPushingToOrchestrator] = useState(false);
+  async function sendToOrchestrator(content: string) {
+    if (pushingToOrchestrator || !content.trim()) return;
+    if (!window.confirm(locale === "ru" ? "Отправить это ТЗ в Оркестратор на исполнение?" : "Push this spec to the Orchestrator for execution?")) return;
+    setPushingToOrchestrator(true);
+    try {
+      const response = await fetch("/api/orchestrate/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ task: content, locale, projectContext: { activeFilePath: selectedFile?.path, activeFileContent: editorText } }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Orchestrator launch failed");
+      }
+      // Consume the stream in the background; live statuses are mirrored to
+      // the group chat and the orchestrator panel polls /state.
+      const reader = response.body?.getReader();
+      void (async () => {
+        try { while (reader && !(await reader.read()).done) { /* drain */ } } catch { /* ignore */ }
+      })();
+      await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? "🚀 ТЗ отправлено в Оркестратор" : "🚀 Spec pushed to the Orchestrator");
+      setOrchestratorOpen(true);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Orchestrator launch failed");
+    } finally {
+      setPushingToOrchestrator(false);
+    }
+  }
+
   async function toggleLocaltunnel(enabled: boolean) {
     localtunnelAutoStartRef.current = enabled;
     setLocaltunnelEnabledDraft(enabled);
@@ -2986,6 +3019,17 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <p className="mt-1 whitespace-pre-wrap">{sanitizeChatContent(msg.content, locale)}</p>
                       {renderAttachments(msg.metadata?.attachments)}
                       {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
+                      {msg.senderType === "main" && msg.content.trim() ? (
+                        <button
+                          type="button"
+                          onClick={() => void sendToOrchestrator(msg.content)}
+                          disabled={pushingToOrchestrator}
+                          title={locale === "ru" ? "Отправить как ТЗ Оркестратору" : "Push as a spec to the Orchestrator"}
+                          className="mt-1 rounded bg-[#238636] px-2 py-1 text-[10px] font-semibold text-white disabled:opacity-50"
+                        >
+                          {pushingToOrchestrator ? "…" : `🔨 ${locale === "ru" ? "В работу" : "To work"}`}
+                        </button>
+                      ) : null}
                       {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
                     </article>
                   ))}
@@ -3067,6 +3111,17 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <p className="mt-1 whitespace-pre-wrap">{sanitizeChatContent(msg.content, locale)}</p>
                       {renderAttachments(msg.metadata?.attachments)}
                       {msg.senderType !== "user" && msg.senderType !== "system" ? renderMessageActions(msg.id, msg.content) : null}
+                      {msg.senderType === "main" && msg.content.trim() ? (
+                        <button
+                          type="button"
+                          onClick={() => void sendToOrchestrator(msg.content)}
+                          disabled={pushingToOrchestrator}
+                          title={locale === "ru" ? "Отправить как ТЗ Оркестратору" : "Push as a spec to the Orchestrator"}
+                          className="mt-1 rounded bg-[#238636] px-2 py-1 text-[10px] font-semibold text-white disabled:opacity-50"
+                        >
+                          {pushingToOrchestrator ? "…" : `🔨 ${locale === "ru" ? "В работу" : "To work"}`}
+                        </button>
+                      ) : null}
                       {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
                     </article>
                   ))}

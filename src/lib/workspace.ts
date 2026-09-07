@@ -1145,7 +1145,7 @@ export async function saveFileContent(fileId: number, content: string, actorAgen
         [
           {
             role: "system",
-            content: await agentSystemPrompt(activeLocale, helper, findings.length, false, allAgentNamesReview, false, false),
+            content: await agentSystemPrompt(activeLocale, helper, findings.length, false, allAgentNamesReview, false, false, ""),
           },
           {
             role: "user",
@@ -1286,6 +1286,7 @@ async function agentSystemPrompt(
   allAgents: Array<{ name: string; role: string; color: string }>,
   isReview = false,
   isFix = false,
+  userText = "",
 ) {
   const persona = promptPersona(locale, { skill: agent.skill, systemPrompt: agent.systemPrompt });
   const configuredModel = normalizeProviderModel(agent.provider, agent.model);
@@ -1343,6 +1344,16 @@ async function agentSystemPrompt(
     `\n\n=== СОСТАВ ТВОЕЙ КОМАНДЫ ===\n${teamList}${offlineNote}\n\nТы — часть этой команды. Все видят общий чат.`,
     `\n\n=== YOUR TEAM ===\n${teamList}${offlineNote}\n\nYou are part of this team. Everyone sees the shared chat.`,
   );
+
+  // Coverage rule: when the team roster is incomplete (no designer, no
+  // architect...), the Lead closes the missing specialties himself.
+  const missingRoles = (["architect", "uiux", "reviewer", "tester", "security"] as const)
+    .filter((role) => !allAgents.some((a) => a.role === role));
+  const coverageRule = agent.role === "main" && missingRoles.length > 0
+    ? t(locale,
+        `\n\n=== ЗАМЕЩЕНИЕ ===\nВ команде сейчас нет: ${missingRoles.map((role) => roleDisplay(role, "ru")).join(", ")}. Эти зоны ответственности закрываешь ТЫ: делай дизайн-решения, архитектурные оценки и проверки качества за отсутствующих специалистов — но так, чтобы было видно, что это твоя единая работа, а не выдуманные реплики других агентов.`,
+        `\n\n=== COVERAGE ===\nThe team currently lacks: ${missingRoles.map((role) => roleDisplay(role, "en")).join(", ")}. YOU close those areas: make design decisions, architectural assessments and quality checks for the missing specialists — as part of your own single work, not as invented quotes from other agents.`)
+    : "";
 
   const collaboration = isMultiAgent
     ? t(
@@ -1462,6 +1473,15 @@ Response format: substance only — status, written code, found errors, concrete
     `MODEL HONESTY RULE: if the system switched you to a fallback model or provider, you MUST disclose it in the first line of your reply (e.g., "⚠️ Primary model unavailable, answering via fallback."). Claiming to run on the primary model when you are not is forbidden. To "are you there?/all ok?" questions — disclose the switch first.`,
   );
 
+  // TZ mode: when the user asks the Lead to formalize the discussion, the
+  // reply becomes a fixed-up spec that can be pushed to the Orchestrator.
+  const isTzRequest = /оформи|техническое задание|\bтз\b|собери в тз|итоговое решение/i.test(userText);
+  const tzMode = agent.role === "main" && isTzRequest
+    ? t(locale,
+        `\n\n=== РЕЖИМ ТЕХНИЧЕСКОГО ЗАДАНИЯ ===\nПользователь просит оформить итог обсуждения. Выдай СТРОГО в таком формате:\n[ТЕХЗАДАНИЕ]\nЦЕЛЬ: <одна фраза>\nЗАДАЧИ:\n- <конкретная задача 1 (файл/модуль)>\n- <задача 2>\nФАЙЛЫ: <список файлов для создания/изменения>\nКРИТЕРИИ: <как проверяем результат>\n[/ТЕХЗАДАНИЕ]\nБез приветствий и воды — только содержимое блока.`,
+        `\n\n=== SPEC MODE ===\nThe user asks to formalize the discussion. Reply STRICTLY in this format:\n[ТЕХЗАДАНИЕ]\nЦЕЛЬ: <one sentence>\nЗАДАЧИ:\n- <concrete task 1 (file/module)>\n- <task 2>\nФАЙЛЫ: <files to create/modify>\nКРИТЕРИИ: <how the result is verified>\n[/ТЕХЗАДАНИЕ]\nNo greetings, no filler — only the block content.`)
+    : "";
+
   const reviewMode = isReview
     ? t(locale,
         `\n\n=== РЕЖИМ РЕВЬЮ ===\nЭто цикл проверки. Прочитай последние изменения в коде. Найди ошибки, баги, проблемы с типами, версткой, дизайном. Если всё идеально — ответь ТОЛЬКО: "[STATUS: RELEASE_READY] Проверка пройдена." Если есть проблемы — укажи файл, строку и конкретное описание что не так. Будь строгим и внимательным.`,
@@ -1480,7 +1500,7 @@ Response format: substance only — status, written code, found errors, concrete
         `\n\n=== RELEASE_READY PROTOCOL ===\nIf you believe code is release-ready, reply EXACTLY: "[STATUS: RELEASE_READY] <your comment>." Only this flag tells the system to stop. Without it the cycle continues.`)
     : "";
 
-  return `${identity} ${persona}.${collaboration} ${fileContext}${answerScope}${pipelineBlock}${selfOnlyRule}${boundariesBlock}${fallbackHonesty}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
+  return `${identity} ${persona}.${collaboration}${coverageRule} ${fileContext}${answerScope}${pipelineBlock}${selfOnlyRule}${boundariesBlock}${fallbackHonesty}${tzMode}${reviewMode}${fixModePrompt}${releaseProtocol} ${t(locale, `Текущих находок стат. анализа: ${findingsCount}.`, `Current static findings: ${findingsCount}.`)}`;
 }
 
 function roleDisplay(role: string, lang: "ru" | "en"): string {
@@ -1537,7 +1557,7 @@ async function* streamAgentReply(
         agent.baseUrl,
         Array.isArray(workspaceSettingsRow?.fallbackModels) ? workspaceSettingsRow.fallbackModels : [],
       );
-  const baseSystemPrompt = await agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix);
+  const baseSystemPrompt = await agentSystemPrompt(locale, agent, findingsCount, isMulti, allAgentNames, isReview, isFix, userText);
   // Honesty fix: if a fallback happens mid-round, a disclosure is injected
   // into the conversation and a visible ⚠️ notice lands in the chat.
   const fallbackNotes: string[] = [];
@@ -1954,7 +1974,15 @@ async function* runAgentRound(
         : isAddressed
           // Only explicitly addressed agents answer; everyone else stays silent.
           ? activeAgents.filter((a) => mentionCandidates.some((m) => m.id === a.id))
-          : [mainAgent, ...activeAgents.filter((a) => a.role !== "main")];
+          // Reviewer/QA silence rule: checkers speak only when there is
+          // something to check — the user asked for a review, or the message
+          // is a feedback/fix request. During idea brainstorming they keep
+          // quiet (their turn comes after the work is done).
+          : [mainAgent, ...activeAgents.filter((a) =>
+              a.role !== "main"
+              && !(a.role === "reviewer" || a.role === "tester")
+              || (a.role === "reviewer" || a.role === "tester") && /провер|ревью|ошибк|баг|правк|исправ|review|check|bug|fix/i.test(userText),
+            )];
 
   const uniqueAgents = agentRows.filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i);
   const isMultiAgent = uniqueAgents.length > 1;
