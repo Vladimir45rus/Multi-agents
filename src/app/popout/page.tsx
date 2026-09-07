@@ -59,8 +59,10 @@ export default function PopoutChatPage() {
   }, [channel]);
 
   useEffect(() => {
-    void poll();
+    // Initial fetch goes through the timer too: calling setState synchronously
+    // inside the effect body is forbidden by the react-hooks lint rule.
     const timer = setInterval(() => void poll(), 2000);
+    void setTimeout(() => void poll(), 0);
     return () => clearInterval(timer);
   }, [poll]);
 
