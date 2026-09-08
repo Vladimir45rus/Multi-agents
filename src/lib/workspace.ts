@@ -1314,21 +1314,25 @@ async function agentSystemPrompt(
   const isMainAgent = agent.role === "main";
   const identity = t(
     locale,
-    `Ты — ${roleDisplay(agent.role, "ru")}. Твой статус: ${isMainAgent ? "Главный агент" : "Вспомогательный агент"}. Твои обязанности и скиллы: ${compact(agent.skill) || roleDisplay(agent.role, "ru")}.\n\nПРАВИЛО ИДЕНТИФИКАЦИИ:\nПри перечислении команды или представлении указывай "(я)" СТРОГО напротив своей текущей роли. Никогда не называй себя Главным, если твой статус — "Вспомогательный агент".\nПорядковый номер при перекличке бери ТОЛЬКО из списка «СОСТАВ ТВОЕЙ КОМАНДЫ» выше, считая позиции сам. Ответы ДРУГИХ агентов в истории — не твой шаблон: не копируй их формат, их номера и их слова. Отвечай ровно одной своей строкой.\n\nТвоя реальная конфигурация: имя «${agent.name}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
-    `You are ${roleDisplay(agent.role, "en")}. Your status: ${isMainAgent ? "Lead agent" : "Assistant agent"}. Your duties and skills: ${compact(agent.skill) || roleDisplay(agent.role, "en")}.\n\nIDENTIFICATION RULE:\nWhen listing the team or introducing yourself, put "(me)" STRICTLY next to your current role. Never call yourself the Lead if your status is "Assistant agent".\nYour roll-call number comes ONLY from the "YOUR TEAM" list above, counted by yourself. Other agents' replies in the history are not your template: never copy their format, numbers or words. Reply with exactly one line of your own.\n\nYour actual configuration: name "${agent.name}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
+    `Ты — ${roleDisplay(agent.role, "ru")}. Твой статус: ${isMainAgent ? "Главный агент" : "Вспомогательный агент"}. Твои обязанности и скиллы: ${compact(agent.skill) || roleDisplay(agent.role, "ru")}.\n\nПРАВИЛО ИДЕНТИФИКАЦИИ:\nПри перечислении команды или представлении указывай "(я)" СТРОГО напротив своей текущей роли. Никогда не называй себя Главным, если твой статус — "Вспомогательный агент".\nТвой порядковый номер указан в списке «СОСТАВ ТВОЕЙ КОМАНДЫ» (Главный всегда первый). Бери номер ОТТУДА — не придумывай и не копируй чужие. Ответы ДРУГИХ агентов в истории — не твой шаблон: не копируй их формат, номера и слова. Отвечай ровно одной своей строкой.\n\nТвоя реальная конфигурация: имя «${agent.name}», провайдер «${configuredProvider}», модель «${configuredModel}». Не выдумывай себе другое имя и не заявляй, что работаешь на другой модели.`,
+    `You are ${roleDisplay(agent.role, "en")}. Your status: ${isMainAgent ? "Lead agent" : "Assistant agent"}. Your duties and skills: ${compact(agent.skill) || roleDisplay(agent.role, "en")}.\n\nIDENTIFICATION RULE:\nWhen listing the team or introducing yourself, put "(me)" STRICTLY next to your current role. Never call yourself the Lead if your status is "Assistant agent".\nYour roll-call number is printed in the "YOUR TEAM" list (the Lead is always first). Take it from THERE — never invent or copy someone else's. Other agents' replies in the history are not your template: never copy their format, numbers or words. Reply with exactly one line of your own.\n\nYour actual configuration: name "${agent.name}", provider "${configuredProvider}", model "${configuredModel}". Do not invent another name or claim to run on a different model.`,
   );
 
-  // Build team roster
-  const teamList = allAgents
-    .map((a) => {
+  // Build team roster. Roll-call fix: the Lead is ALWAYS first in the list,
+  // so his number is 1 — numbering follows the roster order, not the
+  // accidental agent-creation order in the database.
+  const teamList = [...allAgents]
+    .sort((a, b) => (b.role === "main" ? 1 : 0) - (a.role === "main" ? 1 : 0))
+    .map((a, index) => {
       const isSelf = a.name === agent.name;
       const roleLabel = t(locale,
         roleDisplay(a.role, "ru"),
         roleDisplay(a.role, "en"));
-      // Identification rule: "(я)" strictly next to the current role.
+      // Identification rule: "(я)" strictly next to the current role, plus the
+      // precomputed number so roll calls are deterministic.
       return isSelf
-        ? `  • ${a.name} (${roleLabel}) ${t(locale, "(я)", "(me)")}`
-        : `  • ${a.name} (${roleLabel})`;
+        ? `  ${index + 1}. ${a.name} (${roleLabel}) ${t(locale, "(я)", "(me)")}`
+        : `  ${index + 1}. ${a.name} (${roleLabel})`;
     })
     .join("\n");
 
