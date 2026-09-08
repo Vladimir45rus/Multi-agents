@@ -886,12 +886,23 @@ export function IdeApp() {
 
   useEffect(() => () => chatAbortRef.current?.abort(), []);
 
+  // UI-fix safety net: on (re)mount the input is always unlocked, whatever
+  // happened to a previous session's stream. Deferred to a macro-task so the
+  // lint rule against synchronous setState-in-effect stays satisfied.
+  useEffect(() => {
+    const id = setTimeout(() => { setChatRunning(false); setBusy(false); }, 0);
+    return () => clearTimeout(id);
+  }, []);
+
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (contextMenu && !(e.target as HTMLElement).closest(".context-menu")) setContextMenu(null);
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && contextMenu) { setContextMenu(null); return; }
+      // UX fix: Esc collapses the fullscreen panel (e.g., logs covering the
+      // whole app) so the user can never get "stuck" without the chat.
+      if (e.key === "Escape" && fullscreenPanel) { setFullscreenPanel(null); return; }
       if (e.key === "Escape" && searchQuery) { setSearchQuery(""); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === "p") { e.preventDefault(); setSearchQuery(""); setSearchResults([]); return; }
       if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); saveFileRef.current(); return; }
@@ -903,7 +914,7 @@ export function IdeApp() {
       window.removeEventListener("click", close);
       window.removeEventListener("keydown", onKey);
     };
-  }, [contextMenu, searchQuery]);
+  }, [contextMenu, searchQuery, fullscreenPanel]);
 
   function roleLabel(role: string) {
     if (locale === "ru") {
@@ -2167,6 +2178,10 @@ export function IdeApp() {
     if (channel === "group") setGroupMessage("");
 
     try {
+      // Hang fix: the fetch itself (connect + first byte) needs a hard
+      // deadline too. Without it a stuck server leaves chatRunning=true
+      // forever and the input stays frozen.
+      const connectWatchdog = setTimeout(() => controller.abort(), 30_000);
       const res = await fetch("/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -2183,6 +2198,9 @@ export function IdeApp() {
         }),
         signal: controller.signal,
       });
+      // The connect watchdog only guards until the response headers arrive —
+      // from here on the per-chunk read watchdog (below) takes over.
+      clearTimeout(connectWatchdog);
 
       if (!res.ok) {
         const payload = (await res.json().catch(() => null)) as { error?: string } | null;
@@ -3047,7 +3065,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                   <div className="relative flex gap-2">
                     {renderMentionSuggestions("lead")}
-                    <textarea data-chat-channel="lead" value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <textarea data-chat-channel="lead" value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!chatRunning) e.currentTarget.form?.requestSubmit(); } }} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none" placeholder={chatRunning ? "Агенты отвечают — можно печатать следующий вопрос…" : undefined} />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -3162,7 +3180,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                   <div className="relative flex gap-2">
                     {renderMentionSuggestions("group")}
-                    <textarea data-chat-channel="group" value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); e.currentTarget.form?.requestSubmit(); } }} disabled={chatRunning} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none disabled:opacity-60" />
+                    <textarea data-chat-channel="group" value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!chatRunning) e.currentTarget.form?.requestSubmit(); } }} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none" placeholder={chatRunning ? "Агенты отвечают — можно печатать следующий вопрос…" : undefined} />
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>

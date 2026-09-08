@@ -655,9 +655,17 @@ export async function ensureWorkspaceBootstrap() {
     }
   }
 
+  // Flood fix: the welcome message is written ONCE per installation (guarded
+  // by system_events), not once per "empty chat" — clearing the chat history
+  // used to re-trigger it on every snapshot poll and flood the logs.
   const existingMessages = await db.select().from(chatMessages).limit(1);
   const isFreshWorkspace = existingMessages.length === 0;
-  if (isFreshWorkspace) {
+  const [welcomeFlag] = await db.select({ id: systemEvents.id })
+    .from(systemEvents)
+    .where(and(eq(systemEvents.source, "workspace"), eq(systemEvents.message, "workspace-welcome-sent")))
+    .limit(1);
+  if (isFreshWorkspace && !welcomeFlag) {
+    await db.insert(systemEvents).values({ level: "info", source: "workspace", message: "workspace-welcome-sent", details: "" });
     await pushMessage({
       chatChannel: "group",
       senderType: "system",
