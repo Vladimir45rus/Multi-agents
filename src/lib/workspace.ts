@@ -1384,15 +1384,14 @@ async function agentSystemPrompt(
 === ТВОЯ РОЛЬ: СОВЕТНИК ===
 Ты — ${agent.name}, твоя специализация — ${roleDisplay(agent.role, "ru")}.
 
-ПРОТОКОЛ ДИАЛОГА:
+ПРОТОКОЛ ОБСУЖДЕНИЯ:
 1. Прочитай сообщения других агентов (они уже высказались до тебя)
-2. Прочитай нужные файлы через read_file
-3. Найди проблемы через search_code
+2. Сразу выскажи свою идею по своей роли — коротко и конкретно, опираясь на PROJECT CONTEXT (он уже в промпте)
+3. Не начинай ответ с чтения файлов и не пиши код в чате — исполнение делает Оркестратор после подтверждения пользователя
 4. При необходимости кратко ссылайся на выводы других агентов
-5. Выскажи своё мнение, аргументируй
-6. Предложи конкретное решение
+5. Предложи конкретное решение
 
-ВАЖНО: Ты не кодируешь! Ты анализируешь и советуешь. Главный агент применит код.
+ВАЖНО: Ты не кодируешь! Ты анализируешь и советуешь. Главный агент применит код через Оркестратор.
 ФОРМАТ: только суть — без приветствий, без представления, без упоминания своей роли и номера шага.`,
         `` + teamRoster + `
 
@@ -1401,14 +1400,13 @@ You are ${agent.name}, your specialty is ${roleDisplay(agent.role, "en")}.
 
 DIALOGUE PROTOCOL:
 1. Read other agents' messages (they already spoke before you)
-2. Read relevant files via read_file
-3. Find issues via search_code
+2. State your role-specific idea immediately and concretely — PROJECT CONTEXT is already in your prompt
+3. Do not start with file reading and do not write code in chat — the Orchestrator executes after user confirmation
 4. When useful, briefly reference other agents' conclusions
-5. Voice your opinion with reasoning
-6. Propose a concrete solution
+5. Propose a concrete solution
 
-IMPORTANT: You do NOT code! You analyze and advise. The Lead agent applies code.
-FORMAT: substance only — no greetings, no self-introduction, no role or step numbers.`,
+IMPORTANT: You do NOT code! You analyze and advise. The Lead agent applies code via the Orchestrator.
+FORMAT: substance only - no greetings, no self-introduction, no role or step numbers.`,
       )
     : t(
         locale,
@@ -1605,7 +1603,13 @@ async function* streamAgentReply(
   // Separation of concerns (chat contour): the conversational loop may only
   // READ the workspace — no file writes, no console commands. Write tools and
   // run_command stay exclusive to the orchestrator execution loop.
-  const tools = filterToolDefinitions(agent.role, CHAT_TOOL_NAMES);
+  // Discussion-first rule: the chat is a meeting room, not a build site.
+  // File reading tools are enabled ONLY when the user explicitly asks for
+  // analysis ("проверь/проанализируй/посмотри код..."). For every other
+  // conversational message agents discuss from the PROJECT CONTEXT that is
+  // already in their prompt — no tool rounds, no long silences, no waiting.
+  const wantsAnalysis = /проанализ|провер(ь|и)|посмотри|прочитай|изучи|оцени|ревью|review|analyze|check code|читай/i.test(userText);
+  const tools = wantsAnalysis ? filterToolDefinitions(agent.role, CHAT_TOOL_NAMES) : [];
   const mainAgentId = (await db.select({ id: agents.id }).from(agents).where(eq(agents.role, "main")).limit(1))[0]?.id ?? agent.id;
 
   // Log routing fix: auto-cycle rounds (review/fix reflections) stream
@@ -1613,7 +1617,10 @@ async function* streamAgentReply(
   if (!options.logOnly) yield { type: "agent_start", channel, identity };
 
   let fullResponse = "";
-  const MAX_TOOL_ROUNDS = agent.role === "main" ? 10 : 3;
+  // Contour separation: deep tool work is the Orchestrator's job. The chat
+  // keeps a tight tool budget so a discussion never turns into an hour of
+  // silent file reading.
+  const MAX_TOOL_ROUNDS = agent.role === "main" ? 3 : 2;
 
   for (let round = 0; round <= MAX_TOOL_ROUNDS; round += 1) {
     if (options.signal?.aborted) throw new Error("Chat request cancelled");
