@@ -2115,6 +2115,50 @@ export function IdeApp() {
     }
   }
 
+  // Clarifying questions: the Lead's spec message may end with machine-readable
+  // question blocks ([ВОПРОС id] ... [ТИП:один|много] [ВАРИАНТЫ] a | b [/ВОПРОС]).
+  // They are rendered as radios/checkboxes; the user's picks go back to the chat.
+  type ClarifyQuestion = { id: string; text: string; multi: boolean; options: string[] };
+  const clarifyByMessage = useMemo(() => {
+    const map = new Map<number | string, ClarifyQuestion[]>();
+    for (const msg of [...(data?.messages ?? [])].reverse()) {
+      if (msg.senderType !== "main" || map.has(msg.id)) continue;
+      const questions: ClarifyQuestion[] = [];
+      const re = /\[ВОПРОС\s+([^\]]+)\]([^[]*?)\[ТИП:(один|много)\]\s*\[ВАРИАНТЫ\]\s*([^[]*?)\[\/ВОПРОС\]/g;
+      let match: RegExpExecArray | null;
+      while ((match = re.exec(msg.content)) !== null) {
+        const options = match[4].split("|").map((o) => o.trim()).filter(Boolean);
+        if (match[2].trim() && options.length >= 2) {
+          questions.push({ id: match[1].trim(), text: match[2].trim(), multi: match[3] === "много", options });
+        }
+      }
+      if (questions.length > 0) map.set(msg.id, questions);
+    }
+    return map;
+  }, [data?.messages]);
+  const [clarifyPicks, setClarifyPicks] = useState<Record<string, string[]>>({});
+  const [clarifySent, setClarifySent] = useState<Set<number | string>>(new Set());
+
+  function toggleClarifyPick(messageId: number | string, questionId: string, option: string, multi: boolean) {
+    setClarifyPicks((prev) => {
+      const key = `${messageId}:${questionId}`;
+      const current = prev[key] ?? [];
+      if (multi) {
+        return { ...prev, [key]: current.includes(option) ? current.filter((o) => o !== option) : [...current, option] };
+      }
+      return { ...prev, [key]: [option] };
+    });
+  }
+
+  function sendClarifyAnswers(messageId: number | string, channel: ChatChannel, questions: ClarifyQuestion[]) {
+    const lines = questions.map((q) => {
+      const picks = clarifyPicks[`${messageId}:${q.id}`] ?? [];
+      return `${q.text} → ${picks.length > 0 ? picks.join(", ") : "(не выбрано)"}`;
+    });
+    void sendChat(channel, `Мои ответы на уточняющие вопросы:\n${lines.join("\n")}\n\nОформи итоговое ТЗ с учётом этих ответов.`);
+    setClarifySent((prev) => new Set(prev).add(messageId));
+  }
+
   async function toggleLocaltunnel(enabled: boolean) {
     localtunnelAutoStartRef.current = enabled;
     setLocaltunnelEnabledDraft(enabled);
@@ -3048,6 +3092,36 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                           {pushingToOrchestrator ? "…" : `🔨 ${locale === "ru" ? "В работу" : "To work"}`}
                         </button>
                       ) : null}
+                      {clarifyByMessage.get(msg.id) && !clarifySent.has(msg.id) ? (
+                        <div className="mt-2 rounded border border-[#007acc]/60 bg-[#0d1117] p-2">
+                          <p className="mb-1 text-[10px] font-semibold text-[#58a6ff]">{locale === "ru" ? "Уточняющие вопросы — выбери и отправь:" : "Clarifying questions — pick and send:"}</p>
+                          {clarifyByMessage.get(msg.id)!.map((q) => (
+                            <div key={q.id} className="mb-2">
+                              <p className="text-[11px] text-white">{q.text}</p>
+                              {q.options.map((option) => {
+                                const picked = (clarifyPicks[`${msg.id}:${q.id}`] ?? []).includes(option);
+                                return (
+                                  <button
+                                    key={option}
+                                    type="button"
+                                    onClick={() => toggleClarifyPick(msg.id, q.id, option, q.multi)}
+                                    className={`mr-1 mt-1 rounded border px-2 py-0.5 text-[10px] ${picked ? "border-[#3fb950] bg-[#23863633] text-white" : "border-[var(--border-default)] text-[var(--text-secondary)] hover:border-blue-400"}`}
+                                  >
+                                    {picked ? "☑" : "☐"} {option}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => sendClarifyAnswers(msg.id, "lead", clarifyByMessage.get(msg.id)!)}
+                            className="mt-1 rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white"
+                          >
+                            {locale === "ru" ? "Ответить" : "Answer"}
+                          </button>
+                        </div>
+                      ) : null}
                       {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
                     </article>
                   ))}
@@ -3139,6 +3213,36 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         >
                           {pushingToOrchestrator ? "…" : `🔨 ${locale === "ru" ? "В работу" : "To work"}`}
                         </button>
+                      ) : null}
+                      {clarifyByMessage.get(msg.id) && !clarifySent.has(msg.id) ? (
+                        <div className="mt-2 rounded border border-[#007acc]/60 bg-[#0d1117] p-2">
+                          <p className="mb-1 text-[10px] font-semibold text-[#58a6ff]">{locale === "ru" ? "Уточняющие вопросы — выбери и отправь:" : "Clarifying questions — pick and send:"}</p>
+                          {clarifyByMessage.get(msg.id)!.map((q) => (
+                            <div key={q.id} className="mb-2">
+                              <p className="text-[11px] text-white">{q.text}</p>
+                              {q.options.map((option) => {
+                                const picked = (clarifyPicks[`${msg.id}:${q.id}`] ?? []).includes(option);
+                                return (
+                                  <button
+                                    key={option}
+                                    type="button"
+                                    onClick={() => toggleClarifyPick(msg.id, q.id, option, q.multi)}
+                                    className={`mr-1 mt-1 rounded border px-2 py-0.5 text-[10px] ${picked ? "border-[#3fb950] bg-[#23863633] text-white" : "border-[var(--border-default)] text-[var(--text-secondary)] hover:border-blue-400"}`}
+                                  >
+                                    {picked ? "☑" : "☐"} {option}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            onClick={() => sendClarifyAnswers(msg.id, "group", clarifyByMessage.get(msg.id)!)}
+                            className="mt-1 rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white"
+                          >
+                            {locale === "ru" ? "Ответить" : "Answer"}
+                          </button>
+                        </div>
                       ) : null}
                       {msg.status === "error" && retryRequest?.optimisticIds.includes(msg.id) ? renderMessageActions(`retry-${msg.id}`, "", true, false) : null}
                     </article>

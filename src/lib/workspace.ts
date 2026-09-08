@@ -1494,12 +1494,19 @@ Response format: substance only — status, written code, found errors, concrete
 
   // TZ mode: when the user asks the Lead to formalize the discussion, the
   // reply becomes a fixed-up spec that can be pushed to the Orchestrator.
-  const isTzRequest = /оформи|техническое задание|\bтз\b|собери в тз|итоговое решение/i.test(userText);
+  // Clarifying-questions mode: when the task is NEW and ambiguous (no "оформи"),
+  // the Lead asks the user targeted multiple-choice questions rendered as
+  // checkboxes/radios in the UI.
+  const isTzRequest = /оформи|техническое задание|\bтз\b|собери в тз|итоговое решение|в работу|поехали|начинай/i.test(userText);
   const tzMode = agent.role === "main" && isTzRequest
     ? t(locale,
-        `\n\n=== РЕЖИМ ТЕХНИЧЕСКОГО ЗАДАНИЯ ===\nПользователь просит оформить итог обсуждения. Выдай СТРОГО в таком формате:\n[ТЕХЗАДАНИЕ]\nЦЕЛЬ: <одна фраза>\nЗАДАЧИ:\n- <конкретная задача 1 (файл/модуль)>\n- <задача 2>\nФАЙЛЫ: <список файлов для создания/изменения>\nКРИТЕРИИ: <как проверяем результат>\n[/ТЕХЗАДАНИЕ]\nБез приветствий и воды — только содержимое блока.`,
-        `\n\n=== SPEC MODE ===\nThe user asks to formalize the discussion. Reply STRICTLY in this format:\n[ТЕХЗАДАНИЕ]\nЦЕЛЬ: <one sentence>\nЗАДАЧИ:\n- <concrete task 1 (file/module)>\n- <task 2>\nФАЙЛЫ: <files to create/modify>\nКРИТЕРИИ: <how the result is verified>\n[/ТЕХЗАДАНИЕ]\nNo greetings, no filler — only the block content.`)
-    : "";
+        `\n\n=== РЕЖИМ ТЕХНИЧЕСКОГО ЗАДАНИЯ ===\nПользователь просит оформить итог обсуждения (или уже подтвердил выбор). Выдай СТРОГО в таком формате:\n[ТЕХЗАДАНИЕ]\nЦЕЛЬ: <одна фраза>\nЗАДАЧИ:\n- <конкретная задача 1 (файл/модуль)>\n- <задача 2>\nФАЙЛЫ: <список файлов для создания/изменения>\nКРИТЕРИИ: <как проверяем результат>\n[/ТЕХЗАДАНИЕ]\nЕсли в истории есть ответы пользователя на уточняющие вопросы (чек-боксы) — учти их в ЦЕЛИ/ЗАДАЧАХ. Без приветствий и воды — только содержимое блока.`,
+        `\n\n=== SPEC MODE ===\nThe user asks to formalize the discussion (or has confirmed their choices). Reply STRICTLY in this format:\n[ТЕХЗАДАНИЕ]\nЦЕЛЬ: <one sentence>\nЗАДАЧИ:\n- <concrete task 1 (file/module)>\n- <task 2>\nФАЙЛЫ: <files to create/modify>\nКРИТЕРИИ: <how the result is verified>\n[/ТЕХЗАДАНИЕ]\nIf the history contains user answers to clarifying questions (checkboxes), reflect them in ЦЕЛЬ/ЗАДАЧИ. No greetings, no filler — only the block content.`)
+    : agent.role === "main" && !isTzRequest && /сделай|напиши|приложени|задача|созда|разработ/i.test(userText)
+      ? t(locale,
+          `\n\n=== РЕЖИМ УТОЧНЕНИЙ (CLARIFY) ===\nЗадача новая и неоднозначная. Прежде чем финальное ТЗ — задай пользователю КЛЮЧЕВЫЕ уточняющие вопросы с готовыми вариантами ответа. СТРОГО в таком формате (в самом конце ответа, после краткого плана-идеи):\n[ВОПРОС q1] Для какой платформы? [ТИП:один] [ВАРИАНТЫ] Windows (exe) | Android (APK) | iOS | Web-браузер | Мультиплатформа (exe+APK+iOS) [/ВОПРОС]\n[ВОПРОС q2] Какой стиль интерфейса? [ТИП:один] [ВАРИАНТЫ] Минимализм | Тёмная тема | Царский стиль (золото+бархат) | Как у пользователя получится [/ВОПРОС]\nПравила: 2-4 вопроса максимум, каждый на отдельной строке, варианты через " | ". [ТИП:один] — один вариант, [ТИП:много] — можно выбрать несколько (чек-боксы). Только вопросы по СУТИ задачи (платформа, стиль, функции, данные), не про IDE.`,
+          `\n\n=== CLARIFY MODE ===\nThe task is new and ambiguous. Before the final spec, ask the user KEY clarifying questions with ready-made options. STRICTLY at the end of your reply (after a brief plan-idea), in this format:\n[ВОПРОС q1] Which platform? [ТИП:один] [ВАРИАНТЫ] Windows (exe) | Android (APK) | iOS | Web | Multi-platform [/ВОПРОС]\nRules: 2-4 questions max, one per line, options separated by " | ". [ТИП:один] — single choice, [ТИП:много] — checkboxes. Only task-substance questions (platform, style, features, data), never about the IDE.`)
+      : "";
 
   const reviewMode = isReview
     ? t(locale,
