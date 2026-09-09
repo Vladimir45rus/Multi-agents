@@ -24,6 +24,12 @@ export function useDisclaimerAccepted() {
   return { accepted, hasMounted, accept };
 }
 
+function openLegal(path: string) {
+  // In Electron, window.open spawns a child window — acceptable. In a browser,
+  // a regular new tab opens.
+  window.open(path, "_blank", "width=760,height=820");
+}
+
 export function DisclaimerModal({ onAccept }: { onAccept: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -36,52 +42,40 @@ export function DisclaimerModal({ onAccept }: { onAccept: () => void }) {
         }}
       >
         <h2 className="mb-3 text-lg font-bold" style={{ color: "var(--text-accent)" }}>
-          ⚠️ Multi-Agent Code Studio
+          Добро пожаловать в Multi-Agent Code Studio
         </h2>
-
-        <div className="space-y-3 text-sm" style={{ color: "var(--text-secondary)" }}>
+        <div className="mb-6 max-h-60 space-y-3 overflow-y-auto pr-2 text-sm" style={{ color: "var(--text-secondary)" }}>
           <p>
-            Multi-Agent Code Studio использует сторонние AI-сервисы
-            (OpenRouter, OpenAI и др.) через <strong>ВАШИ</strong> API-ключи.
-            Вы самостоятельно управляете ключами, расходами и несёте
-            ответственность за код, сгенерированный агентами.
+            Приложение является полностью локальным инструментом (лицензия MIT). Все ваши API-ключи и данные проектов хранятся только на вашем ПК.
           </p>
-
-          <p>
-            Агенты имеют доступ к файловой системе открытого проекта.
-            Не запускайте приложение на чувствительных данных без
-            предварительного резервного копирования.
-          </p>
-
-          <p>
-            Сгенерированный код может содержать ошибки, уязвимости
-            или неоптимальные решения. Всегда проверяйте результат.
-          </p>
-
-          <p>
-            Это опенсорс-проект. Исходный код доступен на{" "}
-            <a
-              href="https://github.com/Vladimir45rus/Multi-agents"
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ color: "var(--text-link)" }}
-              className="underline hover:opacity-80"
-            >
-              GitHub
-            </a>.
+          <p className="text-amber-400">
+            ⚠️ <strong>Обратите внимание:</strong> Код и запросы передаются выбранным вами AI-провайдерам. Всегда проверяйте сгенерированный код перед запуском.
           </p>
         </div>
-
-        <div className="mt-5 flex justify-end gap-3">
-          <button
-            type="button"
-            onClick={onAccept}
-            className="rounded px-5 py-2 text-sm font-medium text-white transition"
-            style={{ background: "var(--bg-status)" }}
+        <div className="mb-6 text-xs" style={{ color: "var(--text-secondary)" }}>
+          Продолжая, вы принимаете{" "}
+          <a
+            href="/terms"
+            onClick={(e) => { e.preventDefault(); openLegal("/terms"); }}
+            className="text-blue-400 underline"
           >
-            Ознакомлен, принимаю ✓
-          </button>
+            Пользовательское соглашение (EULA)
+          </a>{" "}
+          и{" "}
+          <a
+            href="/privacy"
+            onClick={(e) => { e.preventDefault(); openLegal("/privacy"); }}
+            className="text-blue-400 underline"
+          >
+            Политику конфиденциальности
+          </a>.
         </div>
+        <button
+          onClick={onAccept}
+          className="w-full rounded-lg bg-[#238636] py-2.5 font-semibold text-white transition hover:bg-[#2ea043]"
+        >
+          Я принимаю условия и согласен
+        </button>
       </div>
     </div>
   );

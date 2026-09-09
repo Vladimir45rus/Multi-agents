@@ -730,6 +730,15 @@ ipcMain.handle("clipboard:write-text", (_event, text) => {
   return true;
 });
 
+// Legal/donate links must open in the system browser, never inside the app.
+ipcMain.handle("shell:open-external", (_event, url) => {
+  if (typeof url === "string" && (url.startsWith("https://") || url.startsWith("http://"))) {
+    shell.openExternal(url);
+    return true;
+  }
+  return false;
+});
+
 ipcMain.handle("app:notify", (_event, { title, body }) => {
   if (!Notification.isSupported()) return;
   const notification = new Notification({

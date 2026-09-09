@@ -189,6 +189,7 @@ type DesktopBridge = {
   installUpdate?: () => Promise<void>;
   notify?: (opts: { title: string; body: string }) => Promise<void>;
   writeClipboard?: (text: string) => Promise<boolean>;
+  openExternal?: (url: string) => Promise<boolean>;
   openChatPopout?: (channel: "lead" | "group") => Promise<boolean>;
   isChatWindowOpen?: (channel: "lead" | "group") => Promise<boolean>;
   safeStorage?: {
@@ -4153,14 +4154,30 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <section className="rounded-lg border border-amber-500/30 bg-gradient-to-br from-amber-500/10 to-yellow-500/10 p-4">
                 <h3 className="mb-1 text-sm font-semibold text-amber-300">{t.supportDonateTitle}</h3>
                 <p className="mb-3 text-xs leading-relaxed text-[#c6ced8]">{t.supportDonateDesc}</p>
-                <a
-                  href="https://tbank.ru/cf/3TLJMeGjBSC"
-                  target="_blank"
-                  rel="noreferrer"
+                <button
+                  type="button"
+                  onClick={() => {
+                    const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
+                    const url = "https://tbank.ru/cf/3TLJMeGjBSC";
+                    if (bridge?.openExternal) void bridge.openExternal(url);
+                    else window.open(url, "_blank", "noreferrer");
+                  }}
                   className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-amber-400 to-yellow-400 px-4 py-2.5 text-sm font-bold text-black shadow-[0_0_18px_rgba(251,191,36,0.6)] transition hover:from-amber-300 hover:to-yellow-300 hover:shadow-[0_0_26px_rgba(251,191,36,0.9)]"
                 >
                   ❤️ {t.supportProjectBtn}
-                </a>
+                </button>
+                <p className="mt-2 text-[10px] leading-relaxed text-[var(--text-secondary)]">
+                  ℹ️ {locale === "ru"
+                    ? "Перевод является добровольным безвозмездным дарением (ст. 572 ГК РФ), не предоставляет встречных услуг и производится на стороне внешнего платежного сервиса."
+                    : "The transfer is a voluntary gratuitous donation (Art. 572 of the Civil Code RF), provides no counter-services and is processed by an external payment service."}{" "}
+                  <a
+                    href="/donate"
+                    onClick={(e) => { e.preventDefault(); window.open("/donate", "_blank", "width=760,height=820"); }}
+                    className="underline hover:text-amber-300"
+                  >
+                    {locale === "ru" ? "Условия поддержки" : "Donation terms"}
+                  </a>
+                </p>
               </section>
 
               <section className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-app)] p-4">
