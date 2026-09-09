@@ -1786,22 +1786,60 @@ async function* streamAgentReply(
       && /сделай|напиши|приложени|задача|созда|разработ|нужно|надо/i.test(userText)
       && !/^(привет|как дела|спасибо|ок\b|окей)/i.test(userText.trim());
     if (looksLikeTask) {
+      // Visibility fix: the briefing is posted AS the Lead (senderType "main")
+      // — the group chat UI filters out senderType "system", so a system-type
+      // briefing would never appear in the chat window.
       await pushMessage({
         chatChannel: "group",
-        senderType: "system",
-        agentName: "System",
+        senderType: "main",
+        agentName: agent.name,
         toChat: true,
+        metadata: { identity },
         content: t(locale,
           `📢 Задача от заказчика (через Главного):\n${userText.slice(0, 1_500)}\n\nКаждый — дайте вводные по своей роли (идея, структура, дизайн, риски). Главный соберёт консенсус и вернёт итог заказчику.`,
           `📢 Task from the customer (via the Lead):\n${userText.slice(0, 1_500)}\n\nEveryone — provide your role input (idea, structure, design, risks). The Lead will consolidate consensus and report back.`),
       });
       try {
+        // UX fix: the user sees team discussion progress in HIS chat too.
+        await pushMessage({
+          chatChannel: "lead",
+          senderType: "system",
+          agentName: "System",
+          toChat: true,
+          content: t(locale,
+            "📢 Бриф отправлен команде в общий чат — они обсуждают. Здесь появится итог, когда Главный соберёт консенсус.",
+            "📢 The briefing was sent to the team in the group chat — they are discussing. The summary will appear here once the Lead consolidates consensus."),
+        });
         for await (const event of runAgentRound("group", userText, locale, [], {
           signal: options.signal,
           projectContext: options.projectContext,
           discussionOnly: true,
         })) {
           void event; // consume: results persist to the group channel
+        }
+        // Consensus pickup: after the team round, the Lead summarizes the
+        // discussion and posts the result back to the user's chat.
+        const teamReplies = await db.select().from(chatMessages)
+          .where(eq(chatMessages.chatChannel, "group"))
+          .orderBy(desc(chatMessages.id))
+          .limit(10);
+        const teamSummary = teamReplies
+          .filter((m) => m.senderType === "advisor" || m.senderType === "main")
+          .slice(0, 5)
+          .reverse()
+          .map((m) => `— ${m.agentName ?? m.senderType}: ${m.content.slice(0, 300)}`)
+          .join("\n");
+        if (teamSummary) {
+          await pushMessage({
+            chatChannel: "lead",
+            senderType: "main",
+            agentName: agent.name,
+            toChat: true,
+            metadata: { identity },
+            content: t(locale,
+              `📋 Команда обсудила. Сводка мнений:\n${teamSummary}\n\nМогу оформить итоговое ТЗ — напишите «оформи ТЗ» (уточняющие вопросы добавлю при необходимости).`,
+              `📋 The team has discussed. Opinion summary:\n${teamSummary}\n\nI can finalize the spec — write "make the spec" (clarifying questions will be added if needed).`),
+          });
         }
       } catch { /* team round failures stay in the logs */ }
     }
