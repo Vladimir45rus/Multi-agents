@@ -903,6 +903,21 @@ export function IdeApp() {
     return () => clearTimeout(id);
   }, []);
 
+  // Stuck-state guard: chatRunning=true WITHOUT a live request ref is an
+  // impossible state (a finished or aborted stream always nulls the ref) —
+  // unlock the input automatically instead of freezing it forever.
+  const chatRunningRef = useRef(false);
+  useEffect(() => { chatRunningRef.current = chatRunning; }, [chatRunning]);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      if (chatRunningRef.current && !chatAbortRef.current) {
+        setChatRunning(false);
+        setBusy(false);
+      }
+    }, 3000);
+    return () => clearInterval(timer);
+  }, []);
+
   useEffect(() => {
     const close = (e: MouseEvent) => {
       if (contextMenu && !(e.target as HTMLElement).closest(".context-menu")) setContextMenu(null);
@@ -2081,6 +2096,14 @@ export function IdeApp() {
 
   async function clearHistory(channel: ChatChannel) {
     if (!window.confirm(locale === "ru" ? "Очистить историю этого чата?" : "Clear this chat history?")) return;
+    // Clearing history ends any running stream for this session — otherwise
+    // the input could stay locked while the old stream is still draining.
+    if (chatAbortRef.current) {
+      chatAbortRef.current.abort();
+      chatAbortRef.current = null;
+      setChatRunning(false);
+      setBusy(false);
+    }
     try {
       const response = await fetch(`/api/chat/history?channel=${channel}`, { method: "DELETE" });
       if (!response.ok) throw new Error("History clear failed");
