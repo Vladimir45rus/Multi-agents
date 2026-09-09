@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { MobileSettings } from "./settings";
-import { useVoiceInput } from "./voice-input";
+import { useVoiceInput } from "@/components/voice-input";
 import { PreviewModal } from "@/components/preview-modal";
 
 type MobileTab = "lead" | "group" | "state" | "settings";

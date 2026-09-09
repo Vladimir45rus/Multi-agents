@@ -6,6 +6,7 @@ import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
+import { useVoiceInput } from "@/components/voice-input";
 import { appendStreamDelta, finishStream, type ChatStreamState } from "@/lib/chat-state";
 import { sanitizeChatContent } from "@/lib/chat-display";
 import { PreviewModal } from "@/components/preview-modal";
@@ -561,6 +562,11 @@ export function IdeApp() {
   const [duplicateToLead, setDuplicateToLead] = useState(true);
   const [groupRoleFilter, setGroupRoleFilter] = useState<GroupRoleFilter>("all");
   const [terminalCommand, setTerminalCommand] = useState("");
+  // Voice input: dictation for both chat inputs (Web Speech API; in Electron
+  // it requires the window to have internet permissions — falls back silently
+  // when unsupported).
+  const voiceLead = useVoiceInput((text) => { if (text.trim()) setLeadMessage((prev) => prev ? `${prev} ${text}` : text); });
+  const voiceGroup = useVoiceInput((text) => { if (text.trim()) setGroupMessage((prev) => prev ? `${prev} ${text}` : text); });
   // Multi-terminal sessions: independent tabs with their own output state.
   const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([{ id: 1, name: "Терминал 1", lines: [] }]);
   const [activeTerminalTab, setActiveTerminalTab] = useState(1);
@@ -583,7 +589,9 @@ export function IdeApp() {
     explorer: false,
     editor: false,
     lead: false,
-    group: false,
+    // Layout fix: the group chat starts hidden behind an indicator button —
+    // the Lead chat gets the width, the screen stays readable.
+    group: true,
     terminal: false,
     logs: false,
   });
@@ -2804,6 +2812,14 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           {label}
         </button>
         <button type="button" onClick={() => toggleCollapse(name)} title={t.expand} className="text-xs" style={{ color: accent }}>▸</button>
+        {/* Unread indicator: a pulsing dot while new group messages arrive that
+            the user cannot see because the panel is collapsed. */}
+        {name === "group" && groupMessages.length > 0 ? (
+          <span
+            className="ml-1 h-2 w-2 animate-pulse rounded-full bg-emerald-400"
+            title={locale === "ru" ? "В общем чате есть сообщения" : "The group chat has messages"}
+          />
+        ) : null}
       </div>
     );
   }
@@ -3140,6 +3156,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   <div className="relative flex gap-2">
                     {renderMentionSuggestions("lead")}
                     <textarea data-chat-channel="lead" value={leadMessage} onChange={(e) => handleMentionInput("lead", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!chatRunning) e.currentTarget.form?.requestSubmit(); } }} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none" placeholder={chatRunning ? "Агенты отвечают — можно печатать следующий вопрос…" : undefined} />
+                    {voiceLead.supported ? (
+                      <button type="button" onClick={voiceLead.toggle} title={locale === "ru" ? (voiceLead.listening ? "Остановить диктовку" : "Голосовой ввод") : (voiceLead.listening ? "Stop dictation" : "Voice input")} className={`shrink-0 rounded border px-2 text-sm ${voiceLead.listening ? "animate-pulse border-red-500 text-red-400" : "border-[var(--border-default)] text-[var(--text-secondary)] hover:border-blue-400"}`}>🎤</button>
+                    ) : null}
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!leadMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>
@@ -3285,6 +3304,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   <div className="relative flex gap-2">
                     {renderMentionSuggestions("group")}
                     <textarea data-chat-channel="group" value={groupMessage} onChange={(e) => handleMentionInput("group", e.target.value, e.target.selectionStart ?? e.target.value.length)} onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); if (!chatRunning) e.currentTarget.form?.requestSubmit(); } }} rows={2} className="w-full resize-y rounded border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2 text-sm outline-none" placeholder={chatRunning ? "Агенты отвечают — можно печатать следующий вопрос…" : undefined} />
+                    {voiceGroup.supported ? (
+                      <button type="button" onClick={voiceGroup.toggle} title={locale === "ru" ? (voiceGroup.listening ? "Остановить диктовку" : "Голосовой ввод") : (voiceGroup.listening ? "Stop dictation" : "Voice input")} className={`shrink-0 rounded border px-2 text-sm ${voiceGroup.listening ? "animate-pulse border-red-500 text-red-400" : "border-[var(--border-default)] text-[var(--text-secondary)] hover:border-blue-400"}`}>🎤</button>
+                    ) : null}
                     <button className="rounded bg-[#0e639c] px-3 py-2 text-sm text-white disabled:opacity-60" type="submit" disabled={chatRunning || (!groupMessage.trim() && pendingAttachments.length === 0)}>{t.send}</button>
                     {chatRunning ? <button className="rounded bg-[#a12828] px-3 py-2 text-sm text-white" type="button" onClick={stopChat}>{t.stop}</button> : null}
                   </div>

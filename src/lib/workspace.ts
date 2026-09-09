@@ -1776,6 +1776,37 @@ async function* streamAgentReply(
     });
   }
 
+  // Dispatcher bridge: a task message sent to the Lead PERSONALLY (lead chat)
+  // is automatically re-broadcast into the group chat as a briefing, so the
+  // team discusses it while the user only talks to the Lead. The team round is
+  // consumed server-side: messages land in the group channel, and the user
+  // sees them via the snapshot poll.
+  if (agent.role === "main" && channel === "lead") {
+    const looksLikeTask = userText.length > 40
+      && /сделай|напиши|приложени|задача|созда|разработ|нужно|надо/i.test(userText)
+      && !/^(привет|как дела|спасибо|ок\b|окей)/i.test(userText.trim());
+    if (looksLikeTask) {
+      await pushMessage({
+        chatChannel: "group",
+        senderType: "system",
+        agentName: "System",
+        toChat: true,
+        content: t(locale,
+          `📢 Задача от заказчика (через Главного):\n${userText.slice(0, 1_500)}\n\nКаждый — дайте вводные по своей роли (идея, структура, дизайн, риски). Главный соберёт консенсус и вернёт итог заказчику.`,
+          `📢 Task from the customer (via the Lead):\n${userText.slice(0, 1_500)}\n\nEveryone — provide your role input (idea, structure, design, risks). The Lead will consolidate consensus and report back.`),
+      });
+      try {
+        for await (const event of runAgentRound("group", userText, locale, [], {
+          signal: options.signal,
+          projectContext: options.projectContext,
+          discussionOnly: true,
+        })) {
+          void event; // consume: results persist to the group channel
+        }
+      } catch { /* team round failures stay in the logs */ }
+    }
+  }
+
   yield { type: "agent_done", channel, identity, content: fullResponse, messageId: saved?.id };
 }
 
@@ -1974,7 +2005,7 @@ async function* runAgentRound(
   userText: string,
   activeLocale: UiLocale,
   attachments: ChatAttachment[],
-  options: { signal?: AbortSignal; projectContext?: ProjectContextInput; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean; beforeMessageId?: number },
+  options: { signal?: AbortSignal; projectContext?: ProjectContextInput; reviewOnly?: boolean; fixMode?: boolean; logOnly?: boolean; beforeMessageId?: number; discussionOnly?: boolean },
 ): AsyncGenerator<ChatStreamEvent> {
   const [mainAgent] = await db.select().from(agents).where(eq(agents.role, "main")).limit(1);
   if (!mainAgent) throw new Error(t(activeLocale, "Главный агент не назначен.", "No Lead agent is assigned."));
@@ -2007,20 +2038,24 @@ async function* runAgentRound(
     ? [mainAgent]
     : options.fixMode
       ? [mainAgent]
-      : options.reviewOnly
-        ? activeAgents.filter((a) => a.role !== "main")
-        : isAddressed
-          // Only explicitly addressed agents answer; everyone else stays silent.
-          ? activeAgents.filter((a) => mentionCandidates.some((m) => m.id === a.id))
-          // Reviewer/QA silence rule: checkers speak only when there is
-          // something to check — the user asked for a review, or the message
-          // is a feedback/fix request. During idea brainstorming they keep
-          // quiet (their turn comes after the work is done).
-          : [mainAgent, ...activeAgents.filter((a) =>
-              a.role !== "main"
-              && !(a.role === "reviewer" || a.role === "tester")
-              || (a.role === "reviewer" || a.role === "tester") && /провер|ревью|ошибк|баг|правк|исправ|review|check|bug|fix/i.test(userText),
-            )];
+      : options.discussionOnly
+        // Dispatcher team round: every advisor brainstorms, the Lead moderates
+        // (he already answered in the lead chat).
+        ? activeAgents.filter((a) => a.role !== "main" && a.role !== "observer")
+        : options.reviewOnly
+          ? activeAgents.filter((a) => a.role !== "main")
+          : isAddressed
+            // Only explicitly addressed agents answer; everyone else stays silent.
+            ? activeAgents.filter((a) => mentionCandidates.some((m) => m.id === a.id))
+            // Reviewer/QA silence rule: checkers speak only when there is
+            // something to check — the user asked for a review, or the message
+            // is a feedback/fix request. During idea brainstorming they keep
+            // quiet (their turn comes after the work is done).
+            : [mainAgent, ...activeAgents.filter((a) =>
+                a.role !== "main"
+                && !(a.role === "reviewer" || a.role === "tester")
+                || (a.role === "reviewer" || a.role === "tester") && /провер|ревью|ошибк|баг|правк|исправ|review|check|bug|fix/i.test(userText),
+              )];
 
   const uniqueAgents = agentRows.filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i);
   const isMultiAgent = uniqueAgents.length > 1;
