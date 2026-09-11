@@ -1366,14 +1366,24 @@ async function agentSystemPrompt(
     `\n\n=== YOUR TEAM ===\n${teamList}${offlineNote}\n\nYou are part of this team. Everyone sees the shared chat.`,
   );
 
-  // Coverage rule: when the team roster is incomplete (no designer, no
-  // architect...), the Lead closes the missing specialties himself.
-  const missingRoles = (["architect", "uiux", "reviewer", "tester", "security"] as const)
-    .filter((role) => !allAgents.some((a) => a.role === role));
+  // Coverage rule: the Lead closes specialties that are missing from the team
+  // OR currently offline (an agent that failed with a provider error). This is
+  // the failover the user asked for: "если кто-то отваливается — другой берёт
+  // его роль на себя".
+  const missingRoles = [
+    ...new Set([
+      ...(["architect", "uiux", "reviewer", "tester", "security"] as const)
+        .filter((role) => !allAgents.some((a) => a.role === role)),
+      // Roles of agents that are currently offline (failed recently).
+      ...allAgents
+        .filter((a) => offlineAgents.has(a.name) && a.role !== "main")
+        .map((a) => a.role),
+    ]),
+  ];
   const coverageRule = agent.role === "main" && missingRoles.length > 0
     ? t(locale,
-        `\n\n=== ЗАМЕЩЕНИЕ ===\nВ команде сейчас нет: ${missingRoles.map((role) => roleDisplay(role, "ru")).join(", ")}. Эти зоны ответственности закрываешь ТЫ: делай дизайн-решения, архитектурные оценки и проверки качества за отсутствующих специалистов — но так, чтобы было видно, что это твоя единая работа, а не выдуманные реплики других агентов.`,
-        `\n\n=== COVERAGE ===\nThe team currently lacks: ${missingRoles.map((role) => roleDisplay(role, "en")).join(", ")}. YOU close those areas: make design decisions, architectural assessments and quality checks for the missing specialists — as part of your own single work, not as invented quotes from other agents.`)
+        `\n\n=== ЗАМЕЩЕНИЕ (FAILOVER) ===\nВ команде сейчас нет или недоступны: ${missingRoles.map((role) => roleDisplay(role, "ru")).join(", ")}. Эти зоны ответственности закрываешь ТЫ: делай дизайн-решения, архитектурные оценки и проверки качества за отсутствующих или отвалившихся специалистов — но так, чтобы было видно, что это твоя единая работа, а не выдуманные реплики других агентов.`,
+        `\n\n=== COVERAGE (FAILOVER) ===\nThe team currently lacks or has offline: ${missingRoles.map((role) => roleDisplay(role, "en")).join(", ")}. YOU close those areas: make design decisions, architectural assessments and quality checks for the missing or fallen specialists — as part of your own single work, not as invented quotes from other agents.`)
     : "";
 
   const collaboration = isMultiAgent
