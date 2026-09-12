@@ -78,29 +78,40 @@ async function runDirectCommand(command: string, cwd: string, timeoutMs = 180_00
   }
 }
 
-// Hard pipeline: make sure the workspace can actually compile — write the
-// missing dev dependencies into package.json and run npm install once.
-const REQUIRED_DEV_DEPENDENCIES: Record<string, string> = {
-  typescript: "^5.5.0",
-  "@types/react": "^18.3.0",
-  "@types/react-dom": "^18.3.0",
-  vite: "^5.4.0",
-};
-
+// Hard pipeline: make sure the workspace can actually compile — write only the
+// missing dev dependencies the project genuinely needs (derived from its own
+// package.json / tooling), then run npm install once. We no longer inject a
+// fixed React 18 + Vite stack into unrelated projects (e.g. a Next.js app).
 async function ensureBuildDependencies(root: string): Promise<string | null> {
   try {
     const pkgPath = path.join(root, "package.json");
     if (!existsSync(pkgPath)) return null;
     const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-    pkg.devDependencies ??= {};
-    let changed = false;
-    for (const [name, version] of Object.entries(REQUIRED_DEV_DEPENDENCIES)) {
-      if (!pkg.dependencies?.[name] && !pkg.devDependencies[name]) {
-        pkg.devDependencies[name] = version;
-        changed = true;
-      }
+    if (!pkg.dependencies && !pkg.devDependencies) return null;
+
+    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+    const has = (name: string) => Boolean(deps[name]);
+    const missing = (name: string) => !has(name);
+
+    const missingDeps: Record<string, string> = {};
+    // TypeScript is required for `npx tsc --noEmit`.
+    if (missing("typescript")) missingDeps.typescript = "^5.5.0";
+    // React projects need matching @types (same major as the installed react).
+    if (has("react")) {
+      const reactMajor = (deps.react ?? "").match(/(\d+)/)?.[1] ?? "18";
+      if (missing("@types/react")) missingDeps["@types/react"] = `^${reactMajor}.0.0`;
+      if (missing("@types/react-dom")) missingDeps["@types/react-dom"] = `^${reactMajor}.0.0`;
     }
-    if (!changed) return null;
+    // Vite is only relevant when the project actually uses it.
+    const usesVite = has("vite") || existsSync(path.join(root, "vite.config.ts")) || existsSync(path.join(root, "vite.config.js"));
+    if (usesVite && missing("vite")) missingDeps.vite = "^5.4.0";
+
+    if (Object.keys(missingDeps).length === 0) return null;
+
+    pkg.devDependencies ??= {};
+    for (const [name, version] of Object.entries(missingDeps)) {
+      pkg.devDependencies[name] = version;
+    }
     await writeFile(pkgPath, `${JSON.stringify(pkg, null, 2)}\n`, "utf8");
     const install = await runDirectCommand("npm install", root, 300_000);
     return install.status === "success" ? null : `npm install failed: ${summarize(install.output)}`;

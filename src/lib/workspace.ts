@@ -1295,6 +1295,28 @@ function attachmentContext(locale: UiLocale, attachments: ChatAttachment[]) {
   return details.length > 0 ? `\\n\\n${t(locale, "Вложения:", "Attachments:")}\\n${details.join("\\n")}` : "";
 }
 
+// Failover support: an agent that recently failed (provider error or round
+// timeout) is "offline". The roster and the Lead's coverage rule use this to
+// keep a dead agent out of the conversation and let the Lead take over its role.
+// The 10-minute window lets a transient failure recover on its own.
+async function getOfflineAgentNames(): Promise<Set<string>> {
+  const offline = new Set<string>();
+  try {
+    const cutoff = Date.now() - 10 * 60_000;
+    const recentEvents = await db
+      .select({ source: systemEvents.source, level: systemEvents.level, createdAt: systemEvents.createdAt })
+      .from(systemEvents)
+      .orderBy(desc(systemEvents.id))
+      .limit(50);
+    for (const event of recentEvents) {
+      if (event.level === "error" && new Date(event.createdAt).getTime() >= cutoff) {
+        offline.add(event.source);
+      }
+    }
+  } catch { /* best-effort */ }
+  return offline;
+}
+
 async function agentSystemPrompt(
   locale: UiLocale,
   agent: typeof agents.$inferSelect,
@@ -1340,20 +1362,8 @@ async function agentSystemPrompt(
   // a live agent never reports for a dead one ("один умер — а все пишут, что
   // он тут"). The current agent is excluded (its own fallback is disclosed
   // separately via the honesty rules).
-  const offlineAgents = new Set<string>();
-  try {
-    const cutoff = Date.now() - 10 * 60_000;
-    const recentEvents = await db
-      .select({ source: systemEvents.source, level: systemEvents.level, createdAt: systemEvents.createdAt })
-      .from(systemEvents)
-      .orderBy(desc(systemEvents.id))
-      .limit(50);
-    for (const event of recentEvents) {
-      if (event.level === "error" && new Date(event.createdAt).getTime() >= cutoff && event.source !== agent.name) {
-        offlineAgents.add(event.source);
-      }
-    }
-  } catch { /* best-effort roster annotation */ }
+  const allOfflineAgents = await getOfflineAgentNames();
+  const offlineAgents = new Set([...allOfflineAgents].filter((name) => name !== agent.name));
   const offlineNote = offlineAgents.size > 0
     ? t(locale,
         `\n\n⚠️ СЕЙЧАС НЕДОСТУПНЫ (не ответили вовремя или упали с ошибкой провайдера): ${[...offlineAgents].join(", ")}. НЕ отвечай и НЕ докладывай за них — они не в строю.`,
@@ -1924,6 +1934,12 @@ const AUTO_CYCLE_MAX_MS = 10 * 60_000;
 
 // One background auto-cycle at a time; overlapping triggers are skipped.
 let autoCycleRunning = false;
+// Watchdog state: if a cycle is reported "running" far past its wall-clock cap
+// (e.g. the awaits never resolved or the cycle was orphaned), a new trigger is
+// allowed to abort the stale one and take over, so the flag can never stay
+// stuck `true` and silently disable auto-cycles forever.
+let autoCycleStartedAt = 0;
+let autoCycleController: AbortController | null = null;
 
 async function runAutoCycleBackground(options: {
   channel: ChatChannel;
@@ -1931,15 +1947,25 @@ async function runAutoCycleBackground(options: {
   userMessageId: number;
   projectContext?: ProjectContextInput;
 }) {
+  // Watchdog: a cycle flagged "running" well beyond its own time cap is treated
+  // as orphaned — abort it and let this trigger start fresh instead of being
+  // skipped forever.
   if (autoCycleRunning) {
-    await recordSystemEvent("info", "auto-cycle", t(options.locale, "Предыдущий автоцикл ещё выполняется — новый запуск пропущен.", "Previous auto-cycle is still running — new run skipped."));
-    return;
+    const stale = Date.now() - autoCycleStartedAt > AUTO_CYCLE_MAX_MS + 60_000;
+    if (stale) {
+      autoCycleController?.abort();
+      autoCycleRunning = false;
+    } else {
+      await recordSystemEvent("info", "auto-cycle", t(options.locale, "Предыдущий автоцикл ещё выполняется — новый запуск пропущен.", "Previous auto-cycle is still running — new run skipped."));
+      return;
+    }
   }
   autoCycleRunning = true;
-  const startedAt = Date.now();
+  autoCycleStartedAt = Date.now();
   // Detached cycle: not tied to the user's request signal, but still bounded
   // by the iteration and wall-clock caps below.
   const controller = new AbortController();
+  autoCycleController = controller;
   try {
     await recordSystemEvent("info", "auto-cycle", t(options.locale, "Автоцикл запущен в фоне; размышления и итог — в логах.", "Auto-cycle started in the background; reflections and the summary go to the logs."));
 
@@ -1960,7 +1986,7 @@ async function runAutoCycleBackground(options: {
 
     for (let iteration = 1; iteration <= AUTO_CYCLE_MAX_ITERATIONS; iteration += 1) {
       if (controller.signal.aborted) break;
-      if (Date.now() - startedAt > AUTO_CYCLE_MAX_MS) {
+      if (Date.now() - autoCycleStartedAt > AUTO_CYCLE_MAX_MS) {
         await recordSystemEvent("warning", "auto-cycle", t(options.locale, "[STATUS: MAX_ITERATIONS] Автоцикл остановлен по лимиту времени (10 минут).", "[STATUS: MAX_ITERATIONS] Auto-cycle stopped by the time limit (10 minutes)."));
         break;
       }
@@ -2045,6 +2071,7 @@ async function runAutoCycleBackground(options: {
     }
   } finally {
     autoCycleRunning = false;
+    autoCycleController = null;
   }
 }
 
@@ -2106,14 +2133,21 @@ async function* runAgentRound(
               )];
 
   const uniqueAgents = agentRows.filter((a, i, arr) => arr.findIndex((b) => b.id === a.id) === i);
-  const isMultiAgent = uniqueAgents.length > 1;
+
+  // Hang/failover fix: never summon an agent that already dropped this round
+  // (recorded as offline from a previous provider error or timeout). Re-calling
+  // it would just burn the full 5-minute per-agent timeout again and freeze the
+  // round; the Lead's coverage rule already takes over its role instead.
+  const offlineNames = await getOfflineAgentNames();
+  const runnableAgents = uniqueAgents.filter((a) => a.role === "main" || !offlineNames.has(a.name));
+  const isMultiAgent = runnableAgents.length > 1;
 
   // Hang fix: one slow/broken provider (e.g., a custom Ollama endpoint that
   // "thinks" for an hour) must not block the rest of the round. Each agent
   // gets its own wall-clock budget and its own abort signal.
   const AGENT_ROUND_TIMEOUT_MS = 300_000;
 
-  for (const [agentIndex, agent] of uniqueAgents.entries()) {
+  for (const [agentIndex, agent] of runnableAgents.entries()) {
     if (options.signal?.aborted) throw new Error("Chat request cancelled");
     // Rate-limit guard: stagger agent starts so provider bursts don't trip 429s.
     if (agentIndex > 0) await new Promise((resolve) => setTimeout(resolve, 1_500));
