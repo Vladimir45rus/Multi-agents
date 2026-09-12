@@ -1356,8 +1356,8 @@ async function agentSystemPrompt(
   } catch { /* best-effort roster annotation */ }
   const offlineNote = offlineAgents.size > 0
     ? t(locale,
-        `\n\n⚠️ СЕЙЧАС НЕДОСТУПНЫ (не отвечали из-за ошибок провайдера): ${[...offlineAgents].join(", ")}. НЕ отвечай и НЕ докладывай за них — они не в строю.`,
-        `\n\n⚠️ CURRENTLY OFFLINE (failed with provider errors): ${[...offlineAgents].join(", ")}. Do NOT answer or report on their behalf — they are out of commission.`)
+        `\n\n⚠️ СЕЙЧАС НЕДОСТУПНЫ (не ответили вовремя или упали с ошибкой провайдера): ${[...offlineAgents].join(", ")}. НЕ отвечай и НЕ докладывай за них — они не в строю.`,
+        `\n\n⚠️ CURRENTLY OFFLINE (timed out or failed with a provider error): ${[...offlineAgents].join(", ")}. Do NOT answer or report on their behalf — they are out of commission.`)
     : "";
 
   const teamRoster = t(
@@ -2146,9 +2146,14 @@ async function* runAgentRound(
         : agentFailureMessage(activeLocale, agent, error);
       try {
         // Availability fix: record with the agent name as source so the UI
-        // (widget/main) can mark failing agents with a red dot.
+        // (widget/main) can mark failing agents with a red dot. A timeout means
+        // the agent never responded and was dropped from the round — that is a
+        // real drop, so it is logged as "error" and the offline detector (which
+        // only counts "error") will mark it out of commission and let the Lead
+        // take over its role. Only hard provider errors and 429s stay "warning"
+        // (429 is transient throttling, not a permanent drop).
         await recordSystemEvent(
-          timedOut ? "warning" : error instanceof ProviderGatewayError && error.status === 429 ? "warning" : "error",
+          timedOut || !(error instanceof ProviderGatewayError && error.status === 429) ? "error" : "warning",
           agent.name,
           message,
           error instanceof Error ? error.stack ?? "" : "",
