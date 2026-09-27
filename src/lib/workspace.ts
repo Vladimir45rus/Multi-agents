@@ -61,6 +61,10 @@ export type ChatAttachment = {
 export type ChatMessageMetadata = {
   attachments?: ChatAttachment[];
   identity?: AgentIdentity;
+  // Set when a system notice is pushed with toChat: true — such messages are
+  // meant to be visible inside chat windows (all chat UIs filter out plain
+  // system messages).
+  systemVisible?: boolean;
 };
 
 export type ChatStreamEvent =
@@ -453,12 +457,17 @@ export async function pushMessage(payload: {
   }
 
   const displayContent = payload.senderType === "user" || payload.toChat ? payload.content : sanitizeChatContent(payload.content);
+  // toChat notices must survive the UI filters that hide plain system
+  // messages — mark them explicitly in metadata.
+  const storedMetadata = payload.toChat
+    ? { ...(payload.metadata ?? {}), systemVisible: true as const }
+    : (payload.metadata ?? {});
   const [inserted] = await db.insert(chatMessages).values({
     chatChannel: payload.chatChannel,
     senderType: payload.senderType,
     agentName: payload.agentName,
     content: displayContent,
-    metadata: payload.metadata ?? {},
+    metadata: storedMetadata,
   }).returning({ id: chatMessages.id });
   return { id: inserted.id };
 }

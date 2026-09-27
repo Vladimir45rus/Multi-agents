@@ -5,7 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { MobileSettings } from "./settings";
-import { useVoiceInput } from "@/components/voice-input";
+import { useVoiceInput, VoiceSettings, loadVoicePrefs, saveVoicePrefs, type VoicePrefs } from "@/components/voice-input";
 import { PreviewModal } from "@/components/preview-modal";
 
 type MobileTab = "lead" | "group" | "state" | "settings";
@@ -13,7 +13,7 @@ type MobileTab = "lead" | "group" | "state" | "settings";
 type ChatMsg = {
   id: number; chatChannel: "lead" | "group"; senderType: string;
   agentName?: string | null; content: string;
-  metadata: { identity?: AgentIdentity }; createdAt: string;
+  metadata: { identity?: AgentIdentity; systemVisible?: boolean }; createdAt: string;
 };
 type AgentInfo = { id: number; name: string; role: string; color: string; isActive: boolean; provider: string; model: string };
 type SystemEvent = { id: number; level: string; source: string; message: string; details?: string; createdAt: string };
@@ -62,10 +62,12 @@ export default function MobilePage() {
   const abortRef = useRef<AbortController | null>(null);
 
   // Voice input
+  const [voicePrefs, setVoicePrefs] = useState<VoicePrefs>(() => loadVoicePrefs());
+  const updateVoicePrefs = useCallback((next: VoicePrefs) => { setVoicePrefs(next); saveVoicePrefs(next); }, []);
   const voice = useVoiceInput((text) => {
     if (tab === "lead") setLeadMsg((prev) => prev + (prev ? " " : "") + text);
     else setGroupMsg((prev) => prev + (prev ? " " : "") + text);
-  });
+  }, voicePrefs);
 
   // Auth check: if token set but mismatch, block access
   useEffect(() => {
@@ -123,10 +125,10 @@ export default function MobilePage() {
     const all = data?.messages ?? [];
     if (tab === "lead") {
       const mainId = data?.agents?.find(a => a.role === "main")?.id ?? -1;
-      return all.filter(m => m.chatChannel === "lead" && m.senderType !== "system"
+      return all.filter(m => m.chatChannel === "lead" && (m.senderType !== "system" || m.metadata?.systemVisible)
         && (m.senderType !== "agent" || !m.metadata?.identity?.agentId || m.metadata.identity.agentId === mainId));
     }
-    return all.filter(m => m.chatChannel === "group" && m.senderType !== "system");
+    return all.filter(m => m.chatChannel === "group" && (m.senderType !== "system" || m.metadata?.systemVisible));
   }, [data, tab]);
 
   async function startPreview() {
@@ -324,11 +326,15 @@ export default function MobilePage() {
           style={{ flex: 1, padding: "10px 14px", borderRadius: 14, border: `1px solid ${vars("border-input")}`, background: vars("bg-input"), color: vars("text-primary"), fontSize: 14, outline: "none", resize: "vertical" }}
           placeholder="Сообщение..." disabled={sending} />
         {voice.supported ? (
-          <button type="button" onClick={voice.toggle}
+          <button type="button"
+            {...(voicePrefs.mode === "hold"
+              ? { onPointerDown: (e: React.PointerEvent) => { e.preventDefault(); voice.start(); }, onPointerUp: () => voice.stop(), onPointerLeave: () => voice.stop() }
+              : { onClick: voice.toggle })}
             style={{ background: voice.listening ? "#a12828" : vars("bg-input"), color: voice.listening ? "white" : vars("text-secondary"), border: `1px solid ${vars("border-input")}`, borderRadius: 20, padding: "10px 12px", fontSize: 18, cursor: "pointer", lineHeight: 1 }}>
             🎙️
           </button>
         ) : null}
+        {voice.supported ? <VoiceSettings prefs={voicePrefs} onChange={updateVoicePrefs} /> : null}
         <button type="submit" style={{ background: vars("bg-status"), color: "white", border: "none", borderRadius: 20, padding: "10px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer", opacity: sending ? 0.5 : 1 }} disabled={sending}>↑</button>
         {sending && <button type="button" onClick={() => { abortRef.current?.abort(); setSending(false); }} style={{ background: "#a12828", color: "white", border: "none", borderRadius: 20, padding: "10px 20px", fontWeight: 700, fontSize: 14, cursor: "pointer" }}>✕</button>}
       </form>}

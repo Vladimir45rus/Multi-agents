@@ -14,7 +14,7 @@ type PopoutMessage = {
   agentName: string | null;
   content: string;
   createdAt: string;
-  metadata?: { identity?: AgentIdentity };
+  metadata?: { identity?: AgentIdentity; systemVisible?: boolean };
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -54,7 +54,7 @@ export default function PopoutChatPage() {
         agents: Array<{ id: number; name: string; role: string; isActive: boolean; color: string }>;
       };
       setAgents(data.agents ?? []);
-      setMessages((data.messages ?? []).filter((m) => m.chatChannel === channel && m.senderType !== "system"));
+      setMessages((data.messages ?? []).filter((m) => m.chatChannel === channel && (m.senderType !== "system" || m.metadata?.systemVisible)));
     } catch { /* keep last snapshot */ }
   }, [channel]);
 

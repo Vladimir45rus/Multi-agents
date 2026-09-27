@@ -24,7 +24,7 @@ type WorkspaceMessage = {
   agentName: string | null;
   content: string;
   createdAt: string;
-  metadata?: { identity?: { role?: string } };
+  metadata?: { identity?: { role?: string }; systemVisible?: boolean };
 };
 
 type WorkspaceData = {
@@ -493,7 +493,7 @@ export default function OverlayPage() {
           gap: 4,
         }}
       >
-        {workspace?.messages?.slice(-12).filter((msg) => msg.senderType !== "system" && msg.chatChannel !== "lead").map((msg) => {
+        {workspace?.messages?.slice(-12).filter((msg) => (msg.senderType !== "system" || msg.metadata?.systemVisible) && msg.chatChannel !== "lead").map((msg) => {
           const isUser = msg.senderType === "user";
           const identity = msg.metadata?.identity;
           const role = identity?.role ?? "";
