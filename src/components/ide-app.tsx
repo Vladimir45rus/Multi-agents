@@ -553,6 +553,17 @@ const emptyNewAgent = (overrides: Partial<NewAgentDraft> = {}, existingColors: s
   };
 };
 
+// Audit H5: the background poll carries file metadata only (files=meta).
+// Bodies already known to the client are preserved, so open buffers survive.
+function mergeSnapshot(previous: WorkspaceData | null, next: WorkspaceData): WorkspaceData {
+  if (!previous) return next;
+  const contentByPath = new Map(previous.files.map((file) => [file.path, file.content]));
+  return {
+    ...next,
+    files: next.files.map((file) => ({ ...file, content: contentByPath.get(file.path) ?? file.content ?? "" })),
+  };
+}
+
 export function IdeApp() {
   const [locale, setLocale] = useState<UiLocale>("ru");
   const [data, setData] = useState<WorkspaceData | null>(null);
@@ -747,9 +758,13 @@ export function IdeApp() {
     const timer = setInterval(async () => {
       if (chatAbortRef.current || document.hidden) return;
       try {
-        const res = await fetch("/api/workspace", { cache: "no-store" });
-        if (res.ok) setData((await res.json()) as WorkspaceData);
-      } catch { /* offline — retry on next tick */ }
+        // Audit H5: metadata only - full file bodies made this poll ~0.5 MB.
+        const res = await fetch("/api/workspace?files=meta", { cache: "no-store" });
+        if (res.ok) {
+          const payload = (await res.json()) as WorkspaceData;
+          setData((previous) => mergeSnapshot(previous, payload));
+        }
+      } catch { /* offline - retry on next tick */ }
     }, 4000);
     return () => clearInterval(timer);
   }, []);
@@ -1113,7 +1128,13 @@ export function IdeApp() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: searchQuery, maxResults: 20 }),
       });
-      if (!res.ok) return;
+      if (!res.ok) {
+        // Audit H1: a failed search must be visible, not a silent empty list.
+        const payload = (await res.json().catch(() => null)) as { error?: string } | null;
+        setStatus(payload?.error ?? "Search failed");
+        setSearchResults([]);
+        return;
+      }
       const payload = (await res.json()) as { matches?: Array<{ path: string; line: number; text: string }> };
       setSearchResults((payload.matches ?? []).map((match) => ({ path: match.path, line: match.line, content: match.text })));
     } catch {
@@ -1391,14 +1412,9 @@ export function IdeApp() {
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
     setMobileTokenDraft(payload.settings.mobileAuthToken ?? "");
-    // S1 companion fix: mirror the mobile access token into a cookie so the
-    // desktop UI keeps working against every API route while the localtunnel
-    // is active (routes then require the token even for loopback-looking
-    // requests).
-    const mobileAccessToken = payload.settings.mobileAuthToken ?? "";
-    if (mobileAccessToken) {
-      document.cookie = `mobile_access_token=${encodeURIComponent(mobileAccessToken)}; path=/; max-age=31536000; samesite=strict`;
-    }
+    // Audit M2: the access token is no longer written into a JS-readable
+    // cookie. The server issues it as an HttpOnly cookie (/api/workspace,
+    // /api/localtunnel), so page scripts can never read it.
     setPreviewUrl(payload.settings.previewUrl ?? "");
     setPreviewCommandDraft(payload.settings.previewCommand ?? "npm run dev");
     setPreviewPortDraft(payload.settings.previewPort ?? 4173);
@@ -2156,6 +2172,30 @@ export function IdeApp() {
       setStatus(error instanceof Error ? error.message : "Orchestrator launch failed");
     } finally {
       setPushingToOrchestrator(false);
+    }
+  }
+
+  // Visual builder: the collected element edits become a real orchestrator task.
+  async function sendVisualBrief(brief: string) {
+    if (!brief.trim()) return;
+    try {
+      const response = await fetch("/api/orchestrate/stream", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ task: brief, locale, projectContext: { activeFilePath: selectedFile?.path, activeFileContent: editorText } }),
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Orchestrator launch failed");
+      }
+      const reader = response.body?.getReader();
+      void (async () => {
+        try { while (reader && !(await reader.read()).done) { /* drain */ } } catch { /* ignore */ }
+      })();
+      setOrchestratorOpen(true);
+      setStatus(locale === "ru" ? "🚀 Визуальные правки ушли в оркестратор" : "🚀 Visual edits sent to the orchestrator");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Orchestrator launch failed");
     }
   }
 
@@ -3847,7 +3887,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <input value={telegramChatIdDraft} onChange={(e) => setTelegramChatIdDraft(e.target.value)} placeholder="-100..." className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             </label>
             <button type="button" onClick={() => void testTelegram()} disabled={telegramTesting || !telegramChatIdDraft.trim()} className="rounded bg-[#229ed9] px-3 py-1 text-xs text-white disabled:opacity-50">{telegramTesting ? "..." : (locale === "ru" ? "Проверить связь" : "Test connection")}</button>
-            <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Режим: long polling. Сохраните настройки перед проверкой." : "Mode: long polling. Save settings before testing."}</p>
+            <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "1) @BotFather → /newbot → скопируйте токен. 2) Напишите боту /start — он пришлёт chat id. 3) Сохраните настройки и нажмите «Проверить связь». Команды с телефона: /status, /task <текст>, /stop, /log." : "1) @BotFather → /newbot → copy the token. 2) Send /start to the bot — it replies with your chat id. 3) Save settings and press Test connection. Phone commands: /status, /task <text>, /stop, /log."}</p>
           </section>
 
           <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
@@ -4243,7 +4283,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         </div>
       ) : null}
 
-      <PreviewModal open={previewOpen} url={previewUrl} loading={previewLoading} onClose={() => setPreviewOpen(false)} onReload={() => void reloadPreview()} onStart={() => void startPreview()} onFeedback={(value) => void sendPreviewFeedback(value)} />
+      <PreviewModal open={previewOpen} url={previewUrl} loading={previewLoading} locale={locale} onClose={() => setPreviewOpen(false)} onReload={() => void reloadPreview()} onStart={() => void startPreview()} onFeedback={(value) => void sendPreviewFeedback(value)} onSendToAgents={(brief) => void sendVisualBrief(brief)} />
 
       <OrchestratorPanel open={orchestratorOpen} onClose={() => setOrchestratorOpen(false)} locale={locale} activeFilePath={selectedFile?.path} activeFileContent={editorText} />
 

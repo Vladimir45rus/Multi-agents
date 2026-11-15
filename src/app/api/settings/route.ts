@@ -29,6 +29,11 @@ async function handleUpdate(request: Request) {
     removeGithubToken?: boolean;
     removeTelegramToken?: boolean;
   };
+  // Audit M15: rotating the remote-access token must stay a local decision —
+  // otherwise anyone holding the current token could lock the owner out.
+  if (body.mobileAuthToken !== undefined && !isLoopbackRequest(request)) {
+    return NextResponse.json({ error: "The mobile access token can only be changed from the host machine" }, { status: 403 });
+  }
   await updateWorkspaceSettings(body);
   if (body.telegramToken || body.telegramChatId) {
     void import("@/lib/telegram").then(({ ensureTelegramPolling }) => ensureTelegramPolling()).catch(() => undefined);

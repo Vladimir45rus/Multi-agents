@@ -10,6 +10,16 @@ const PACKAGE_MANAGER_FLAG_BLOCKLIST = /^(?:--package(?:=|$)|--call(?:=|$)|--exe
 
 const PACKAGE_MANAGERS = new Set(["npm", "npx", "pnpm", "yarn", "bun"]);
 
+// Audit H3: an allowlisted executable must not become a launcher for arbitrary
+// code. `python -m <anything>` could start pip/http.server/venv and escape the
+// whole policy, so module execution is limited to the test runners.
+const PYTHON_MODULE_ALLOWLIST = new Set(["pytest", "unittest", "py_compile", "compileall"]);
+
+// Audit H3: these flags either mutate git history or make git execute an
+// external program (diff driver / textconv / upload-pack).
+const GIT_BRANCH_MUTATION = /^(?:-d|-D|-m|-M|-f|--delete|--move|--force|--copy)/;
+const GIT_EXECUTION_FLAG = /^(?:--ext-diff|--textconv|--output|--exec|--upload-pack|--receive-pack|--config-env)/;
+
 const SCRIPT_NAME_PATTERN = /^[A-Za-z0-9@][A-Za-z0-9@:._/-]*$/;
 
 // H1 fix: lifecycle scripts fire automatically around other commands and are a
@@ -34,11 +44,16 @@ export const COMMAND_POLICIES: Record<string, CommandPolicy> = {
   node: { executable: process.platform === "win32" ? "node.exe" : "node", subcommands: new Set(["--version", "--help"]), allowRelativeScript: true },
 };
 
+// Audit low #1: `..` used to be rejected anywhere in the command, so legitimate
+// arguments such as `--grep=1..2` were impossible. Traversal is a path segment
+// (`../`, `..\`, a bare `..`), not an arbitrary substring.
+const PARENT_PATH_SEGMENT = /(?:^|[\s\\/])\.\.(?:[\s\\/]|$)|\.\.[\\/]/;
+
 export function tokenize(command: string) {
   const input = command.trim();
   if (!input) throw new Error("Command is required");
   if (input.length > 2_000) throw new Error("Command is too long");
-  if (input.includes("..")) throw new Error("Parent path '..' is not allowed");
+  if (PARENT_PATH_SEGMENT.test(input)) throw new Error("Parent path '..' is not allowed");
   if (/[;&|<>`\n\r]|\$\(|\$\{|\b(?:cmd|powershell|pwsh|bash|sh)\b/i.test(input)) {
     throw new Error("Shell operators and nested shells are not allowed");
   }
@@ -57,7 +72,7 @@ export function tokenize(command: string) {
 }
 
 export function assertSafeArgument(argument: string) {
-  if (argument.includes("..") || argument.includes("\0")) throw new Error("Unsafe path argument");
+  if (PARENT_PATH_SEGMENT.test(argument) || argument.includes("\0")) throw new Error("Unsafe path argument");
   if (/^[A-Za-z]:[\\/]/.test(argument) || argument.startsWith("/") || argument.startsWith("\\")) {
     throw new Error("Absolute paths are not allowed in terminal commands");
   }
@@ -91,7 +106,22 @@ export function parseCommand(command: string, options?: ParseCommandOptions) {
     }
   }
 
-  const subcommand = args[0] ?? "";
+  const subcommand = args[0] ?? "";  // Audit H3: python module execution is restricted to the test runners.
+  if (name === "python" && subcommand === "-m") {
+    const moduleName = args[1] ?? "";
+    if (!PYTHON_MODULE_ALLOWLIST.has(moduleName)) {
+      throw new Error(`Command is not allowed: python -m ${moduleName}`.trimEnd());
+    }
+  }
+
+  // Audit H3: no history rewriting and no external diff drivers for git.
+  if (name === "git") {
+    for (const argument of args) {
+      const unsafe = subcommand === "branch" ? GIT_BRANCH_MUTATION.test(argument) : GIT_EXECUTION_FLAG.test(argument);
+      if (unsafe) throw new Error(`Flag is not allowed for git: ${argument}`);
+    }
+  }
+
   const allowedRelativeScript = Boolean(
     policy.allowRelativeScript
       && !subcommand.startsWith(".")

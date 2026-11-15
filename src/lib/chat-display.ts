@@ -63,7 +63,10 @@ export function parseToolCallDisplay(text: string): { name: string } | null {
 export function isTechnicalErrorText(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed || trimmed.length > 400) return false;
-  return /^(HTTP \d{3}\b)|(ProviderGatewayError)|(Ошибка подключения к модели)|(fetch failed)|(ECONNRESET|ETIMEDOUT|ENOTFOUND)|(rate.?limit|quota exceeded|429)/i.test(trimmed);
+  // Audit low #6: only payloads that START like an error count. The old pattern
+  // matched "429"/"rate limit" anywhere, so a short but legitimate agent reply
+  // ("429 — это лимит, переключился на резерв") silently disappeared into logs.
+  return /^(?:HTTP \d{3}\b|ProviderGatewayError\b|Ошибка подключения к модели|Connection error for model|fetch failed\b|(?:ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN)\b|(?:Rate limit|Quota exceeded)\b)/i.test(trimmed);
 }
 
 /**

@@ -26,6 +26,12 @@ describe("tokenize", () => {
 
   it("rejects parent-path traversal", () => {
     expect(() => tokenize("npm run ../evil")).toThrow("Parent path '..' is not allowed");
+    expect(() => tokenize("npm run ..")).toThrow("Parent path '..' is not allowed");
+  });
+
+  // Audit low #1: `..` inside a regular argument is not a traversal.
+  it("allows '..' that is not a path segment", () => {
+    expect(tokenize("npm run test -- --grep=1..2")).toEqual(["npm", "run", "test", "--", "--grep=1..2"]);
   });
 
   it.each([";", "&&", "|", "`", "$(ls)", "${PATH}", "cmd /c", "powershell", "bash -c"])(
@@ -108,5 +114,33 @@ describe("parseCommand", () => {
     const parsed = parseCommand("npm.exe run test");
     expect(parsed.name).toBe("npm");
     expect(parsed.args).toEqual(["run", "test"]);
+  });
+
+  // Audit H3: `python -m <module>` used to launch any installed module.
+  it("rejects python module execution outside the test-runner allow-list", () => {
+    expect(() => parseCommand("python -m pip install left-pad")).toThrow(/python -m pip/);
+    expect(() => parseCommand("python -m http.server")).toThrow(/python -m http\.server/);
+  });
+
+  it("allows python module execution for the test runners", () => {
+    const parsed = parseCommand("python -m pytest -q");
+    expect(parsed.name).toBe("python");
+    expect(parsed.args).toEqual(["-m", "pytest", "-q"]);
+  });
+
+  // Audit H3: git must not execute external programs or rewrite branches.
+  it("rejects git flags that execute external programs", () => {
+    expect(() => parseCommand("git diff --ext-diff")).toThrow("Flag is not allowed for git");
+    expect(() => parseCommand("git show --output=../x")).toThrow(/Flag is not allowed for git|Parent path/);
+  });
+
+  it("rejects git branch mutations", () => {
+    expect(() => parseCommand("git branch -D main")).toThrow("Flag is not allowed for git");
+    expect(() => parseCommand("git branch -m other")).toThrow("Flag is not allowed for git");
+  });
+
+  it("keeps '..' inside a search pattern working", () => {
+    const parsed = parseCommand("git log --grep=1..2");
+    expect(parsed.args).toEqual(["log", "--grep=1..2"]);
   });
 });

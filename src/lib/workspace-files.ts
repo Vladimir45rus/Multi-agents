@@ -1,11 +1,12 @@
 import "server-only";
 
 import { createHash, randomUUID } from "node:crypto";
-import { readFile, readdir, realpath, stat, lstat, mkdir, writeFile, unlink, rename, rm } from "node:fs/promises";
+import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import os from "node:os";
 import { asc, desc, eq } from "drizzle-orm";
 import { db } from "@/db";
-import { sqlite } from "@/db";
+import { withSqliteTransaction } from "@/db";
 import { agents, projectFiles, workspaceFileHistory, workspaceSettings } from "@/db/schema";
 import { ensureWorkspaceBootstrap } from "@/lib/workspace";
 import { assertRelativePath, compact, resolveWithinRoot, toPosix } from "@/lib/workspace-paths";
@@ -14,7 +15,63 @@ const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_PATCH_BYTES = 8 * 1024 * 1024;
 const MAX_TREE_FILES = 10_000;
 const MAX_SEARCH_RESULTS = 200;
-const IGNORED_DIRECTORIES = new Set([".git", ".multi-agent-backups", "node_modules", ".next", "dist", "build", "coverage", ".cache"]);
+const IGNORED_DIRECTORIES = new Set([
+  ".git",
+  ".multi-agent-backups",
+  "node_modules",
+  ".next",
+  "dist",
+  "build",
+  "coverage",
+  ".cache",
+  // Audit H1: build artefacts and virtual environments contain binaries and
+  // generated files. Indexing them made project-wide search unusable because a
+  // single unreadable file aborted the whole scan.
+  "release",
+  "out",
+  "target",
+  "obj",
+  ".turbo",
+  ".venv",
+  "venv",
+  ".gradle",
+  ".idea",
+  // Agent/tooling scratch folders are not project sources.
+  ".zwork",
+]);
+// Audit H2: secret material must never be readable as project source. The check
+// is enforced on every read path, not only while building the tree.
+const IGNORED_FILE_PATTERNS = [
+  /^\.env/i,
+  /^\.npmrc$/i,
+  /^\.netrc$/i,
+  /^\.git-credentials$/i,
+  /^\.htpasswd$/i,
+  /^dev\.db$/i,
+  /^id_(?:rsa|dsa|ecdsa|ed25519)/i,
+  /^credentials$/i,
+  /\.(?:pem|key|p12|pfx|keystore|jks|ppk)$/i,
+];
+// Extension-less files are text only when they are well-known project metadata
+// (LICENSE, Dockerfile, ...). Everything else without an extension is treated as
+// binary — that is what a `chrome-sandbox`-style artefact requires.
+const NO_EXTENSION_TEXT_FILES = new Set([
+  ".editorconfig",
+  ".gitattributes",
+  ".gitignore",
+  "authors",
+  "changelog",
+  "contributing",
+  "dockerfile",
+  "gemfile",
+  "licence",
+  "license",
+  "makefile",
+  "notice",
+  "procfile",
+  "rakefile",
+  "readme",
+]);
 const VIRTUAL_DIRECTORY_PREFIX = ".multi-agent-virtual-dirs/";
 const TEXT_EXTENSIONS = new Set([
   "cjs", "css", "csv", "go", "html", "java", "js", "json", "jsx", "kt", "md", "mjs", "py", "rb", "rs", "sql", "ts", "tsx", "txt", "xml", "yaml", "yml",
@@ -52,14 +109,16 @@ function languageFromPath(filePath: string) {
 }
 
 function isIgnoredFile(filePath: string) {
-  const name = path.basename(filePath).toLowerCase();
-  return name.startsWith(".env") || name === "dev.db" || name.endsWith(".pem") || name.endsWith(".key") || name.endsWith(".p12");
+  const name = path.basename(filePath);
+  return IGNORED_FILE_PATTERNS.some((pattern) => pattern.test(name));
 }
 
 function isTextPath(filePath: string) {
   if (isIgnoredFile(filePath)) return false;
+  const name = path.basename(filePath).toLowerCase();
   const extension = path.extname(filePath).slice(1).toLowerCase();
-  return TEXT_EXTENSIONS.has(extension) || !extension;
+  if (!extension) return NO_EXTENSION_TEXT_FILES.has(name);
+  return TEXT_EXTENSIONS.has(extension);
 }
 
 async function getRootSettings(): Promise<RootSettings> {
@@ -97,6 +156,7 @@ async function safeAbsolutePath(root: string, relativePath: string) {
 }
 
 async function readTextState(root: string, relativePath: string): Promise<WorkspaceFileState> {
+  if (isIgnoredFile(relativePath)) throw new Error("Protected file: secrets, keys and database files are not readable as text");
   const { absolutePath } = await safeAbsolutePath(root, relativePath);
   try {
     const info = await stat(absolutePath);
@@ -214,7 +274,6 @@ export async function connectWorkspaceDirectory(directory: string) {
 
   await db.delete(projectFiles);
   const connectedTree = await scanTree(resolved);
-  await db.delete(projectFiles);
 
   let imported = 0;
   for (const file of connectedTree.files) {
@@ -273,6 +332,8 @@ export async function createWorkspaceEntry(actorAgentId: number, relativePath: s
 
 export async function renameWorkspaceEntry(actorAgentId: number, relativePath: string, nextRelativePath: string) {
   await assertMainWorkspaceActor(actorAgentId);
+  // Audit H2: renaming a protected file would turn it into readable source.
+  if (isIgnoredFile(relativePath) || isIgnoredFile(nextRelativePath)) throw new Error("Renaming protected files is not allowed");
   let root: string;
   try {
     root = await getWorkspaceRoot();
@@ -285,24 +346,15 @@ export async function renameWorkspaceEntry(actorAgentId: number, relativePath: s
     const affected = rows.filter((row) => row.path === sourcePath || row.path === sourceMarker || row.path.startsWith(`${sourcePath}/`));
     if (affected.length === 0) throw new Error("Workspace path not found");
     if (rows.some((row) => row.path === targetPath || row.path === `${VIRTUAL_DIRECTORY_PREFIX}${targetPath}` || row.path.startsWith(`${targetPath}/`))) throw new Error("Target path already exists");
-    // Fix: the per-row delete+insert rename loop runs inside one transaction,
-    // so a mid-loop failure cannot leave the unique-path index inconsistent.
-    sqlite.exec("BEGIN IMMEDIATE");
-    try {
+    // Fix: the per-row delete+insert rename loop runs inside one serialized
+    // transaction, so a mid-loop failure cannot leave the index inconsistent.
+    await withSqliteTransaction(async () => {
       for (const row of affected) {
         const nextPath = row.path === sourceMarker ? `${VIRTUAL_DIRECTORY_PREFIX}${targetPath}` : row.path === sourcePath ? targetPath : `${targetPath}/${row.path.slice(`${sourcePath}/`.length)}`;
         await db.delete(projectFiles).where(eq(projectFiles.path, row.path));
         await db.insert(projectFiles).values({ path: nextPath, language: row.language, content: row.content, updatedAt: new Date() });
       }
-      sqlite.exec("COMMIT");
-    } catch (error) {
-      try {
-        sqlite.exec("ROLLBACK");
-      } catch {
-        // No active transaction: nothing to roll back.
-      }
-      throw error;
-    }
+    });
     return { path: sourcePath, nextPath: targetPath };
   }
 
@@ -321,22 +373,13 @@ export async function renameWorkspaceEntry(actorAgentId: number, relativePath: s
   const prefix = `${source.relativePath}/`;
   const affected = indexedFiles.filter((file) => file.path === source.relativePath || file.path.startsWith(prefix));
   // Fix: same transactional guarantee for the physical-root rename loop.
-  sqlite.exec("BEGIN IMMEDIATE");
-  try {
+  await withSqliteTransaction(async () => {
     for (const file of affected) {
       const nextPath = file.path === source.relativePath ? target.relativePath : `${target.relativePath}/${file.path.slice(prefix.length)}`;
       await db.delete(projectFiles).where(eq(projectFiles.path, file.path));
       await db.insert(projectFiles).values({ path: nextPath, language: languageFromPath(nextPath), content: file.content, updatedAt: new Date() });
     }
-    sqlite.exec("COMMIT");
-  } catch (error) {
-    try {
-      sqlite.exec("ROLLBACK");
-    } catch {
-      // No active transaction: nothing to roll back.
-    }
-    throw error;
-  }
+  });
   return { path: source.relativePath, nextPath: target.relativePath };
 }
 
@@ -381,7 +424,7 @@ export async function deleteWorkspaceEntry(actorAgentId: number, relativePath: s
     for (const file of subFiles) await collectDeletable(file.path);
   }
   for (const entry of deletable) {
-    const backupPath = await writeBackup(root, entry.relativePath, entry.content);
+    const backupPath = await writeBackup(entry.content);
     await db.insert(workspaceFileHistory).values({
       filePath: entry.relativePath,
       previousContent: entry.content,
@@ -440,8 +483,15 @@ export async function searchWorkspaceFiles(query: string) {
   const matches: Array<{ path: string; line: number; text: string }> = [];
 
   for (const file of tree.files) {
-    if (matches.length >= MAX_SEARCH_RESULTS || !isTextPath(file.path) || file.size > MAX_FILE_BYTES) continue;
-    const state = await readTextState(root, file.path);
+    if (matches.length >= MAX_SEARCH_RESULTS) break;
+    if (!isTextPath(file.path) || file.size > MAX_FILE_BYTES) continue;
+    // Audit H1: one unreadable/binary file must never abort the whole search.
+    let state: WorkspaceFileState;
+    try {
+      state = await readTextState(root, file.path);
+    } catch {
+      continue;
+    }
     if (!state.exists) continue;
     state.content.split("\n").forEach((line, index) => {
       if (matches.length < MAX_SEARCH_RESULTS && line.toLowerCase().includes(needle.toLowerCase())) {
@@ -463,12 +513,14 @@ async function assertMainAgent(actorAgentId: number) {
   if (actor.role !== "main") throw new Error("Only the Main Agent can modify workspace files");
 }
 
-async function writeBackup(root: string, relativePath: string, content: string) {
-  const backupRelative = `.multi-agent-backups/${Date.now()}-${randomUUID()}.bak`;
-  const backupAbsolute = path.resolve(root, ...backupRelative.split("/"));
+async function writeBackup(content: string) {
+  // Audit low #3: backups used to land in the user's project
+  // (.multi-agent-backups/), polluting git status and every project scan. They
+  // now live next to the app's other state, outside any repository.
+  const backupAbsolute = path.join(os.homedir(), ".multi-agent-studio", "backups", `${Date.now()}-${randomUUID()}.bak`);
   await mkdir(path.dirname(backupAbsolute), { recursive: true });
   await writeFile(backupAbsolute, content, "utf8");
-  return backupRelative;
+  return backupAbsolute;
 }
 
 export async function applyWorkspacePatch(actorAgentId: number, patch: WorkspacePatchFile[]) {
@@ -500,7 +552,7 @@ export async function applyWorkspacePatch(actorAgentId: number, patch: Workspace
     for (const item of prepared) {
       const record: { item: (typeof prepared)[number]; historyId: number | null; wrote: boolean } = { item, historyId: null, wrote: false };
       journal.push(record);
-      const backupPath = item.previous.exists ? await writeBackup(root, item.relativePath, item.previous.content) : "";
+      const backupPath = item.previous.exists ? await writeBackup(item.previous.content) : "";
       if (item.operation === "delete") await unlink(item.absolutePath);
       else {
         await mkdir(path.dirname(item.absolutePath), { recursive: true });

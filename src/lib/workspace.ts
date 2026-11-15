@@ -2,10 +2,10 @@ import "server-only";
 
 import { execFile } from "node:child_process";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import pathModule from "node:path";
 import { promisify } from "node:util";
-import { db, runMigrations, sqlite } from "@/db";
+import { db, runMigrations, withSqliteTransaction } from "@/db";
 import {
   agents,
   analysisFindings,
@@ -28,6 +28,7 @@ import {
 } from "@/lib/provider-gateway";
 import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { encryptSecret } from "@/lib/secret-cipher";
+import { mergeAsync } from "@/lib/async-merge";
 import { resolveFallbackModels } from "@/lib/provider-models";
 import { getCustomProviderKey, listCustomProviders, resolveCustomAgentRequest } from "@/lib/custom-providers";
 import { isPureToolCallChunk, isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
@@ -490,6 +491,42 @@ async function getGitHubDefaultBranch(repo: string, token: string) {
   return payload.default_branch || "main";
 }
 
+// Audit H4: `git add -A` published whatever sat in the folder — including .env
+// files, private keys and the app's own backups of the user's sources.
+const REQUIRED_GITIGNORE_LINES = [
+  "node_modules/",
+  ".env",
+  ".env.*",
+  "*.pem",
+  "*.key",
+  "*.p12",
+  "*.pfx",
+  "dev.db",
+  "*.db",
+  ".multi-agent-backups/",
+  ".next/",
+  "dist/",
+  "build/",
+  "release/",
+  "coverage/",
+];
+
+async function ensureGitIgnore(root: string) {
+  const gitIgnorePath = pathModule.join(root, ".gitignore");
+  let current = "";
+  try {
+    current = await readFile(gitIgnorePath, "utf8");
+  } catch {
+    current = "";
+  }
+  const existing = new Set(current.split(/\r?\n/).map((line) => line.trim()));
+  const missing = REQUIRED_GITIGNORE_LINES.filter((line) => !existing.has(line));
+  if (missing.length === 0) return;
+  const separator = current && !current.endsWith("\n") ? "\n" : "";
+  const header = current ? "" : "# Created by Multi-Agent Code Studio: keep secrets out of git\n";
+  await writeFile(gitIgnorePath, `${current}${separator}${header}${missing.join("\n")}\n`, "utf8");
+}
+
 async function runGit(args: string[], cwd: string, env?: Record<string, string>) {
   const result = await execFileAsync("git", args, {
     cwd,
@@ -553,6 +590,8 @@ export async function pushWorkspaceToGitHub(
   if (remoteOutput.split(/\r?\n/).includes("origin")) await runGit(["remote", "set-url", "origin", remoteUrl], root);
   else await runGit(["remote", "add", "origin", remoteUrl], root);
 
+  // Audit H4: never publish secrets, build output or backup folders.
+  await ensureGitIgnore(root);
   await runGit(["add", "-A"], root);
   const changes = await runGit(["status", "--porcelain"], root);
   if (changes) {
@@ -693,7 +732,7 @@ export async function ensureWorkspaceBootstrap() {
   }
 }
 
-export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
+export async function getWorkspaceSnapshot(options?: { includeFileContent?: boolean }): Promise<WorkspaceSnapshot> {
   await ensureWorkspaceBootstrap();
 
   const settingsRow = await getWorkspaceSettingsRow();
@@ -702,7 +741,9 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   const fileRows = (await db.select().from(projectFiles).orderBy(asc(projectFiles.path)))
     .filter((row) => row.language !== "directory" && !row.path.startsWith(".multi-agent-virtual-dirs/"));
   const historyRows = await db.select().from(fileHistory).orderBy(desc(fileHistory.id)).limit(100);
-  const messageRows = await db.select().from(chatMessages).orderBy(asc(chatMessages.id));
+  // Audit H5: the snapshot is polled by the UI every few seconds, so the chat
+  // history must stay bounded — it used to grow without any limit.
+  const messageRows = (await db.select().from(chatMessages).orderBy(desc(chatMessages.id)).limit(400)).reverse();
   const terminalRows = await db.select().from(terminalEntries).orderBy(desc(terminalEntries.id)).limit(30);
   const systemEventRows = await db.select().from(systemEvents).orderBy(desc(systemEvents.id)).limit(100);
   const findingRows = await db.select().from(analysisFindings).orderBy(desc(analysisFindings.id)).limit(80);
@@ -735,7 +776,14 @@ export async function getWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
     },
     agents: agentRows.map(({ apiKey: agentApiKey, ...agent }) => ({ ...agent, apiKeyConfigured: Boolean(compact(agentApiKey)) })),
     customProviders: customProviderRows.map(({ apiKey: providerApiKey, ...provider }) => ({ ...provider, apiKeyConfigured: Boolean(compact(providerApiKey)) })),
-    files: fileRows.map((row) => ({ ...row, updatedAt: nowIso(row.updatedAt) })),
+    files: fileRows.map((row) => ({
+      ...row,
+      // Audit H5: the UI polls this snapshot every few seconds. Full file bodies
+      // made it hundreds of kilobytes; metadata-only responses are merged with
+      // the client's cached content.
+      content: options?.includeFileContent === false ? "" : row.content,
+      updatedAt: nowIso(row.updatedAt),
+    })),
     history: historyRows
       .reverse()
       .map((row) => ({ id: row.id, fileId: row.fileId, filePath: row.filePath, actorAgentId: row.actorAgentId, createdAt: nowIso(row.createdAt) })),
@@ -1053,22 +1101,14 @@ export async function assignMainCoder(agentId: number, locale?: string) {
   // Remember the outgoing Lead(s) so their persona texts can be re-skinned.
   const previousMainRows = await db.select().from(agents).where(eq(agents.role, "main"));
 
-  // Fix: demote/promote/settings run inside a single SQLite transaction so a
-  // crash between the steps can never leave the workspace without a Lead.
-  sqlite.exec("BEGIN IMMEDIATE");
-  try {
+  // Fix: demote/promote/settings run inside a single serialized SQLite
+  // transaction so a crash between the steps can never leave the workspace
+  // without a Lead.
+  await withSqliteTransaction(async () => {
     await db.update(agents).set({ role: "advisor" }).where(eq(agents.role, "main"));
     await db.update(agents).set({ role: "main" }).where(eq(agents.id, agentId));
     await db.update(workspaceSettings).set({ mainCoderAgentId: agentId, updatedAt: new Date() });
-    sqlite.exec("COMMIT");
-  } catch (error) {
-    try {
-      sqlite.exec("ROLLBACK");
-    } catch {
-      // No active transaction: nothing to roll back.
-    }
-    throw error;
-  }
+  });
 
   // Skin sync: the new Lead adopts the Lead Coder persona — description,
   // skill, system prompt and UI color — so no advisor texts bleed through.
@@ -1256,7 +1296,7 @@ function estimateMessageTokens(message: GatewayMessage) {
 }
 
 function summarizeChatMessages(messages: GatewayMessage[]) {
-  const lines = messages.map((message) => `${message.role}: ${compact(message.content).replace(/\\s+/g, " ").slice(0, 180)}`);
+  const lines = messages.map((message) => `${message.role}: ${compact(message.content).replace(/\s+/g, " ").slice(0, 180)}`);
   return { text: lines.join(" | ").slice(0, 2200), tokens: messages.reduce((total, message) => total + estimateMessageTokens(message), 0) };
 }
 
@@ -1301,15 +1341,16 @@ function attachmentContext(locale: UiLocale, attachments: ChatAttachment[]) {
     })
     .filter(Boolean);
 
-  return details.length > 0 ? `\\n\\n${t(locale, "Вложения:", "Attachments:")}\\n${details.join("\\n")}` : "";
+  return details.length > 0 ? `\n\n${t(locale, "Вложения:", "Attachments:")}\n${details.join("\n")}` : "";
 }
 
 // Failover support: an agent that recently failed (provider error or round
 // timeout) is "offline". The roster and the Lead's coverage rule use this to
 // keep a dead agent out of the conversation and let the Lead take over its role.
 // The 10-minute window lets a transient failure recover on its own.
-async function getOfflineAgentNames(): Promise<Set<string>> {
+async function getOfflineAgentNames(knownAgents: readonly string[] = []): Promise<Set<string>> {
   const offline = new Set<string>();
+  const allowed = new Set(knownAgents);
   try {
     const cutoff = Date.now() - 10 * 60_000;
     const recentEvents = await db
@@ -1318,9 +1359,13 @@ async function getOfflineAgentNames(): Promise<Set<string>> {
       .orderBy(desc(systemEvents.id))
       .limit(50);
     for (const event of recentEvents) {
-      if (event.level === "error" && new Date(event.createdAt).getTime() >= cutoff) {
-        offline.add(event.source);
-      }
+      if (event.level !== "error") continue;
+      if (new Date(event.createdAt).getTime() < cutoff) continue;
+      // Audit M12: only agent sources count. A failed terminal command or a
+      // GitHub push used to put "terminal"/"github" into the offline set, and
+      // an unrelated error could knock an agent out for ten minutes.
+      if (allowed.size > 0 && !allowed.has(event.source)) continue;
+      offline.add(event.source);
     }
   } catch { /* best-effort */ }
   return offline;
@@ -1371,7 +1416,7 @@ async function agentSystemPrompt(
   // a live agent never reports for a dead one ("один умер — а все пишут, что
   // он тут"). The current agent is excluded (its own fallback is disclosed
   // separately via the honesty rules).
-  const allOfflineAgents = await getOfflineAgentNames();
+  const allOfflineAgents = await getOfflineAgentNames(allAgents.map((a) => a.name));
   const offlineAgents = new Set([...allOfflineAgents].filter((name) => name !== agent.name));
   const offlineNote = offlineAgents.size > 0
     ? t(locale,
@@ -1573,6 +1618,14 @@ function roleDisplayName(role: string, fallback: string): string {
   if (role === "main") return "Главный агент";
   const ru = roleDisplay(role, "ru");
   return ru === role ? fallback : ru;
+}
+
+// Audit M10: one shared task-detection heuristic — the Lead dispatcher and the
+// AUTO review cycle must agree on what counts as a task.
+function looksLikeCodingTask(text: string) {
+  return text.length > 40
+    && /сделай|напиши|приложени|задача|созда|разработ|нужно|надо/i.test(text)
+    && !/^(привет|как дела|спасибо|ок\b|окей)/i.test(text.trim());
 }
 
 async function* streamAgentReply(
@@ -1811,9 +1864,7 @@ async function* streamAgentReply(
   // consumed server-side: messages land in the group channel, and the user
   // sees them via the snapshot poll.
   if (agent.role === "main" && channel === "lead") {
-    const looksLikeTask = userText.length > 40
-      && /сделай|напиши|приложени|задача|созда|разработ|нужно|надо/i.test(userText)
-      && !/^(привет|как дела|спасибо|ок\b|окей)/i.test(userText.trim());
+    const looksLikeTask = looksLikeCodingTask(userText);
     if (looksLikeTask) {
       // Visibility fix: the briefing is posted AS the Lead (senderType "main")
       // — the group chat UI filters out senderType "system", so a system-type
@@ -1926,12 +1977,20 @@ export async function* streamWorkspaceMessage(
     yield event;
   }
 
-  // Separation of concerns (execution contour): the chat NEVER starts the
-  // auto-cycle, file writes or console commands — even with AUTO enabled.
-  // Autonomous execution is triggered only by an explicit orchestrator task
-  // (the dedicated ТЗ/task launch). The AUTO toggle now merely permits the
-  // orchestrator pipeline to run unattended; it is consumed by
-  // /api/orchestrate/*, not by conversational messages.
+  // Separation of concerns (execution contour): the chat NEVER writes files or
+  // runs console commands — that stays with the orchestrator. Audit M10: the
+  // AUTO toggle now does what the UI promises — after the discussion round it
+  // starts the background review/fix cycle (logs only, bounded to 4 rounds and
+  // 10 minutes). Without AUTO the chat stays a pure meeting room.
+  const chatSettings = await getWorkspaceSettingsRow().catch(() => null);
+  if (chatSettings?.autoApprove && looksLikeCodingTask(userText) && !options?.signal?.aborted) {
+    void runAutoCycleBackground({
+      channel,
+      locale: activeLocale,
+      userMessageId,
+      projectContext: options?.projectContext,
+    }).catch(() => undefined);
+  }
 
   if (options?.signal?.aborted) throw new Error("Chat request cancelled");
   yield { type: "done", channel };
@@ -2147,7 +2206,7 @@ async function* runAgentRound(
   // (recorded as offline from a previous provider error or timeout). Re-calling
   // it would just burn the full 5-minute per-agent timeout again and freeze the
   // round; the Lead's coverage rule already takes over its role instead.
-  const offlineNames = await getOfflineAgentNames();
+  const offlineNames = await getOfflineAgentNames(activeAgents.map((a) => a.name));
   const runnableAgents = uniqueAgents.filter((a) => a.role === "main" || !offlineNames.has(a.name));
   const isMultiAgent = runnableAgents.length > 1;
 
@@ -2156,10 +2215,12 @@ async function* runAgentRound(
   // gets its own wall-clock budget and its own abort signal.
   const AGENT_ROUND_TIMEOUT_MS = 300_000;
 
-  for (const [agentIndex, agent] of runnableAgents.entries()) {
+  // Each agent gets its own abort signal, deadline and error card, so the
+  // streams can run concurrently. Advisors share the same history slice
+  // (beforeMessageId), so parallelism does not change what they can see.
+  async function* runOneAgent(agent: typeof agents.$inferSelect, startDelayMs: number): AsyncGenerator<ChatStreamEvent> {
+    if (startDelayMs > 0) await new Promise((resolve) => setTimeout(resolve, startDelayMs));
     if (options.signal?.aborted) throw new Error("Chat request cancelled");
-    // Rate-limit guard: stagger agent starts so provider bursts don't trip 429s.
-    if (agentIndex > 0) await new Promise((resolve) => setTimeout(resolve, 1_500));
 
     const agentController = new AbortController();
     const abortFromOuter = () => agentController.abort();
@@ -2203,7 +2264,7 @@ async function* runAgentRound(
         );
       } catch { /* best-effort */ }
       // Log routing fix: auto-cycle failures stay in the logs — no error cards in chat.
-      if (options.logOnly) continue;
+      if (options.logOnly) return;
       yield {
         type: "agent_error", channel,
         identity: createAgentIdentity({ agentId: agent.id, displayName: agent.name, role: agent.role, provider: agent.provider, model: agent.model }),
@@ -2216,6 +2277,21 @@ async function* runAgentRound(
       options.signal?.removeEventListener("abort", abortFromOuter);
       agentController.abort();
     }
+  }
+
+  // Meeting order: the team speaks first (in parallel), then the Lead
+  // consolidates — exactly what the Lead prompt promises. Before this change
+  // the Lead spoke first while his prompt claimed the advisors had answered.
+  const leadAgents = runnableAgents.filter((agent) => agent.role === "main");
+  const advisorAgents = runnableAgents.filter((agent) => agent.role !== "main");
+
+  if (advisorAgents.length > 1) {
+    yield* mergeAsync(advisorAgents.map((agent, index) => runOneAgent(agent, index * 800)), 3);
+  } else if (advisorAgents.length === 1) {
+    yield* runOneAgent(advisorAgents[0], 0);
+  }
+  for (const lead of leadAgents) {
+    yield* runOneAgent(lead, 0);
   }
 }
 

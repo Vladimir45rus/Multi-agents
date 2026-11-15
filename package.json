@@ -1,6 +1,6 @@
 {
   "name": "multi-agent-code-studio",
-  "version": "1.5.20",
+  "version": "1.6.0",
   "license": "MIT",
   "private": true,
   "main": "electron/main.cjs",

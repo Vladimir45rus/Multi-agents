@@ -70,3 +70,29 @@ export async function runMigrations() {
 }
 
 export { sqlite, sql };
+
+// Audit M9: several code paths open a manual BEGIN IMMEDIATE on the shared
+// connection. Two concurrent requests used to hit "cannot start a transaction
+// within a transaction" and could roll back each other's work. The queue keeps
+// those critical sections strictly sequential.
+let writeQueue: Promise<unknown> = Promise.resolve();
+
+export function withSqliteTransaction<T>(work: () => Promise<T>): Promise<T> {
+  const run = writeQueue.then(async () => {
+    sqlite.exec("BEGIN IMMEDIATE");
+    try {
+      const result = await work();
+      sqlite.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        sqlite.exec("ROLLBACK");
+      } catch {
+        // No active transaction: nothing to roll back.
+      }
+      throw error;
+    }
+  });
+  writeQueue = run.catch(() => undefined);
+  return run;
+}

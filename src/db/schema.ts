@@ -1,4 +1,4 @@
-import { index, integer, sqliteTable, text } from "drizzle-orm/sqlite-core";
+import { index, integer, real, sqliteTable, text } from "drizzle-orm/sqlite-core";
 import type { AgentIdentity } from "@/lib/agent-identity";
 
 export const workspaceSettings = sqliteTable("workspace_settings", {
@@ -170,3 +170,21 @@ export const orchestratorReports = sqliteTable("orchestrator_reports", {
   iterations: integer("iterations").notNull().default(0),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
 });
+
+// Visual builder: element-level edits captured inside the live preview. The
+// Lead agent reads the generated brief and turns it into real CSS/layout code.
+export const visualEdits = sqliteTable("visual_edits", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  selector: text("selector").notNull(),
+  label: text("label").notNull().default(""),
+  action: text("action").notNull().default("move"),
+  offsetX: real("offset_x").notNull().default(0),
+  offsetY: real("offset_y").notNull().default(0),
+  note: text("note").notNull().default(""),
+  pageUrl: text("page_url").notNull().default(""),
+  domPath: text("dom_path").notNull().default(""),
+  styles: text("styles").notNull().default(""),
+  createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
+}, (table) => [
+  index("visual_edits_created_at_idx").on(table.createdAt),
+]);

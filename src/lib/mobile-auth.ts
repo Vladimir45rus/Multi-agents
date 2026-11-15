@@ -1,6 +1,6 @@
 import "server-only";
 
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import { ensureWorkspaceBootstrap, getWorkspaceSettingsRow, updateWorkspaceSettings } from "@/lib/workspace";
 import { recordSystemEvent } from "@/lib/system-events";
 import { isTunnelActive } from "@/lib/tunnel-state";
@@ -15,6 +15,15 @@ function hostWithoutPort(host: string) {
   }
   const colon = trimmed.lastIndexOf(":");
   return (colon > -1 ? trimmed.slice(0, colon) : trimmed).toLowerCase();
+}
+
+// Audit M16: constant-time comparison — a plain === leaks the token prefix
+// through response timing on the tunnel.
+function tokensMatch(supplied: string, expected: string) {
+  const left = Buffer.from(supplied, "utf8");
+  const right = Buffer.from(expected, "utf8");
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
 }
 
 function cookieValue(request: Request, name: string) {
@@ -52,10 +61,15 @@ export async function mobileAccessError(request: Request) {
   }
 
   const suppliedToken = getMobileAccessToken(request);
-  if (suppliedToken && suppliedToken === configuredToken) return null;
+  if (suppliedToken && tokensMatch(suppliedToken, configuredToken)) return null;
 
   await recordSystemEvent("warning", "auth", "HTTP 401: Mobile access token is required").catch(() => undefined);
   return Response.json({ error: "Mobile access token is required" }, { status: 401 });
+}
+
+/** Audit M2: the desktop used to store this token in a JS-readable cookie. */
+export function mobileAccessCookie(token: string) {
+  return `mobile_access_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict`;
 }
 
 export async function ensureMobileAccessToken() {

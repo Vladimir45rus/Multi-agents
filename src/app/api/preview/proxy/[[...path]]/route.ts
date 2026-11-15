@@ -42,13 +42,19 @@ async function proxy(request: Request, pathParts: string[] = []) {
     const rewritten = html
       .replace(/(src|href|action)=(["'])\/(?!\/)/g, `$1=$2${proxyPrefix}`)
       .replace(/url\(\s*\/(?!\/)/g, `url(${proxyPrefix}`);
+    // Visual builder: every proxied page gets the element inspector, which
+    // listens for postMessage from the IDE (see /api/preview/inspect.js).
+    const inspector = '<script src="/api/preview/inspect.js" data-multi-agent-visual="1"></script>';
+    const withInspector = /<\/body>/i.test(rewritten)
+      ? rewritten.replace(/<\/body>/i, `${inspector}</body>`)
+      : `${rewritten}${inspector}`;
     const mobileToken = getMobileAccessToken(request);
-    if (mobileToken) headers.append("set-cookie", `mobile_access_token=${encodeURIComponent(mobileToken)}; Path=/; SameSite=Lax`);
-    return new NextResponse(rewritten, { status: response.status, headers });
+    if (mobileToken) headers.append("set-cookie", `mobile_access_token=${encodeURIComponent(mobileToken)}; Path=/; HttpOnly; SameSite=Lax`);
+    return new NextResponse(withInspector, { status: response.status, headers });
   }
 
   const mobileToken = getMobileAccessToken(request);
-  if (mobileToken) headers.append("set-cookie", `mobile_access_token=${encodeURIComponent(mobileToken)}; Path=/; SameSite=Lax`);
+  if (mobileToken) headers.append("set-cookie", `mobile_access_token=${encodeURIComponent(mobileToken)}; Path=/; HttpOnly; SameSite=Lax`);
   return new NextResponse(response.body, { status: response.status, headers });
 }
 

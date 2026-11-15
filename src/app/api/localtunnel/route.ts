@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getWorkspaceSettingsRow, updateWorkspaceSettings } from "@/lib/workspace";
-import { ensureMobileAccessToken } from "@/lib/mobile-auth";
+import { ensureMobileAccessToken, mobileAccessCookie } from "@/lib/mobile-auth";
 import { recordSystemEvent } from "@/lib/system-events";
 import { startLocalTunnel, type LocalTunnelHandle } from "@/lib/localtunnel";
 import { setTunnelActive } from "@/lib/tunnel-state";
@@ -52,10 +52,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, running: false, url: "" });
     }
 
-    await ensureMobileAccessToken();
+    const token = await ensureMobileAccessToken();
     const handle = await start();
     await updateWorkspaceSettings({ localtunnelEnabled: true, localtunnelUrl: handle.url });
-    return NextResponse.json({ ok: true, running: true, url: handle.url });
+    const response = NextResponse.json({ ok: true, running: true, url: handle.url });
+    // Audit M2: the desktop needs the token once the tunnel is live, and it must
+    // come from the server as an HttpOnly cookie — not from client-side JS.
+    response.headers.append("set-cookie", mobileAccessCookie(token));
+    return response;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Localtunnel error";
     await recordSystemEvent("error", "localtunnel", `Tunnel error: ${message}`);

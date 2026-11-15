@@ -77,5 +77,7 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: "/api/:path*",
+  // Audit M3: the `/mobile` token gate above only runs for matched paths, so the
+  // previous single `/api/:path*` matcher made it dead code.
+  matcher: ["/api/:path*", "/mobile"],
 };

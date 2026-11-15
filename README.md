@@ -41,6 +41,12 @@ Type in chat:
 - `/docs` — generate documentation
 - `@AgentName` — mention a specific agent
 
+### Visual builder (v1.6.0)
+- **Pick and move any element in the preview** — a dedicated mode renders the project through the IDE proxy, injects an inspector into the page and lets you click a button, card or heading and drag it where you want it
+- **Precision nudging** — arrow keys move the selected element by 1px (Shift = 10px), Escape leaves the mode
+- **Edits are saved** — every move is stored in the local database (selector, DOM path, offsets, note), so layout decisions survive a restart
+- **One click to the team** — “Send to agents” turns the collected edits into a structured brief and posts it into the group chat; the Lead agent turns the offsets into real CSS/layout code
+
 ### What's New in v1.5.20
 - **Independent agents with isolated contexts** — every agent keeps its own identity, provider/model pair and role-restricted toolset; advisors are limited to read-only inspection while only the Lead Agent can modify files
 - **Live streaming everywhere** — token-level SSE streaming in both chat windows and in the orchestrator panel, with resilient parsing of fragmented provider chunks and automatic fallback between models
@@ -66,8 +72,8 @@ This is an open-source project. Source code: [github.com/Vladimir45rus/Multi-age
 
 ## 🔧 Tech Stack
 
-- **Frontend**: Next.js 15, React 19, Tailwind CSS v4, Monaco Editor
-- **Backend**: Next.js API routes, Drizzle ORM, SQLite (better-sqlite3)
+- **Frontend**: Next.js 16, React 19, Tailwind CSS v4, Monaco Editor
+- **Backend**: Next.js API routes, Drizzle ORM, SQLite (node:sqlite)
 - **Desktop**: Electron
 - **AI**: OpenRouter, OpenAI, Anthropic, Google Gemini, Groq, Together AI
 
@@ -206,8 +212,8 @@ Multi-Agent Code Studio использует сторонние AI-сервис�
 
 ## 🔧 Технологии
 
-- **Фронтенд**: Next.js 15, React 19, Tailwind CSS v4, Monaco Editor
-- **Бэкенд**: Next.js API routes, Drizzle ORM, SQLite (better-sqlite3)
+- **Фронтенд**: Next.js 16, React 19, Tailwind CSS v4, Monaco Editor
+- **Бэкенд**: Next.js API routes, Drizzle ORM, SQLite (node:sqlite)
 - **Десктоп**: Electron
 - **AI**: OpenRouter, OpenAI, Anthropic, Google Gemini, Groq, Together AI
 

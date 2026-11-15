@@ -1,6 +1,7 @@
 import "server-only";
 
 import { spawn, execFile, type ChildProcess } from "node:child_process";
+import { connect } from "node:net";
 import { db } from "@/db";
 import { workspaceSettings } from "@/db/schema";
 import { getWorkspaceRoot } from "@/lib/workspace-files";
@@ -35,6 +36,27 @@ function killProcessTree(target: ChildProcess) {
 
 function appendOutput(chunk: Buffer | string) {
   output = `${output}${chunk.toString()}`.slice(-MAX_OUTPUT);
+}
+
+// Audit M8: a dev server needs a moment before it accepts connections; the URL
+// used to be published immediately and the proxy answered 502.
+function waitForPort(port: number, timeoutMs = 20_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  return new Promise((resolve) => {
+    const attempt = () => {
+      const socket = connect({ host: "127.0.0.1", port });
+      socket.once("connect", () => {
+        socket.destroy();
+        resolve(true);
+      });
+      socket.once("error", () => {
+        socket.destroy();
+        if (Date.now() >= deadline) resolve(false);
+        else setTimeout(attempt, 500);
+      });
+    };
+    attempt();
+  });
 }
 
 function looksFatal(text: string) {
@@ -74,7 +96,10 @@ export async function startPreview() {
       "HOME", "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "ComSpec", "COMSPEC", "LANG", "LC_ALL",
     ]);
     const safeEnv = Object.fromEntries(Object.entries(process.env).filter(([key]) => allowedEnvironmentKeys.has(key)));
-    child = spawn(parts.executable, parts.args, { cwd: root, env: { ...safeEnv, NODE_ENV: "development", BROWSER: "none", PORT: String(port) }, shell: false, windowsHide: true, detached: process.platform !== "win32" });
+    // Audit M8: keep a local reference so a late exit of THIS process can never
+    // null out a newer preview instance started right after it.
+    const spawned = spawn(parts.executable, parts.args, { cwd: root, env: { ...safeEnv, NODE_ENV: "development", BROWSER: "none", PORT: String(port) }, shell: false, windowsHide: true, detached: process.platform !== "win32" });
+    child = spawned;
     const onOutput = (chunk: Buffer | string) => {
       const text = chunk.toString();
       appendOutput(text);
@@ -83,16 +108,16 @@ export async function startPreview() {
         void reportPreviewFailure("Fatal preview error detected", output.slice(-10_000));
       }
     };
-    child.stdout?.on("data", onOutput);
-    child.stderr?.on("data", onOutput);
-    child.once("error", async (error) => {
+    spawned.stdout?.on("data", onOutput);
+    spawned.stderr?.on("data", onOutput);
+    spawned.once("error", async (error) => {
       appendOutput(error.message);
       if (!failureReported) {
         failureReported = true;
         await reportPreviewFailure(`Preview process error: ${error.message}`, output.slice(-10_000));
       }
     });
-    child.once("exit", async (code, signal) => {
+    spawned.once("exit", async (code, signal) => {
       const failed = !stopping && code !== 0 && code !== null;
       if (failed) {
         if (!failureReported) {
@@ -100,12 +125,23 @@ export async function startPreview() {
           await reportPreviewFailure(`Preview stopped (code=${code}, signal=${signal ?? "none"})`, output.slice(-10_000));
         }
       }
+      if (child !== spawned) return;
       child = null;
       await db.update(workspaceSettings).set({ previewUrl: "", updatedAt: new Date() });
     });
+    // Audit M8: publish the URL only when the dev server actually accepts
+    // connections — otherwise the proxy answered 502 for the first seconds.
+    const listening = await waitForPort(port);
+    if (child !== spawned) return getPreviewStatus();
     await db.update(workspaceSettings).set({ previewUrl: `http://127.0.0.1:${port}`, updatedAt: new Date() });
     starting = false;
-    await recordSystemEvent("success", "preview", `Preview started: http://127.0.0.1:${port}`);
+    await recordSystemEvent(
+      listening ? "success" : "warning",
+      "preview",
+      listening
+        ? `Preview started: http://127.0.0.1:${port}`
+        : `Preview process started, but port ${port} is not listening yet (check previewCommand/previewPort) — URLs below may be wrong`,
+    );
     return getPreviewStatus();
   } catch (error) {
     starting = false;

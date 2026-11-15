@@ -60,7 +60,9 @@ type PackageJson = {
 };
 
 const DEFAULT_MAX_ITERATIONS = 5;
-const MIN_MAX_ITERATIONS = 5;
+// Audit low #2: the floor used to be 5, so a quick one-shot task could not be
+// requested at all. The upper bound still protects against runaway loops.
+const MIN_MAX_ITERATIONS = 1;
 const MAX_MAX_ITERATIONS = 10;
 
 const execAsync = promisify(exec);
@@ -78,36 +80,52 @@ async function runDirectCommand(command: string, cwd: string, timeoutMs = 180_00
   }
 }
 
-// Hard pipeline: make sure the workspace can actually compile — write only the
-// missing dev dependencies the project genuinely needs (derived from its own
-// package.json / tooling), then run npm install once. We no longer inject a
-// fixed React 18 + Vite stack into unrelated projects (e.g. a Next.js app).
+// Dependency analysis for the verification pipeline (see Audit M4). Missing
+// dev dependencies are reported separately from installing them, so a
+// controlled run never rewrites the user's package.json silently.
+// Audit M4: the "what is missing" analysis is now shared, so the orchestrator
+// can report missing packages without rewriting the user's manifest.
+async function collectMissingBuildDependencies(root: string): Promise<Record<string, string>> {
+  const pkgPath = path.join(root, "package.json");
+  if (!existsSync(pkgPath)) return {};
+  const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
+  if (!pkg.dependencies && !pkg.devDependencies) return {};
+
+  const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+  const has = (name: string) => Boolean(deps[name]);
+  const missing = (name: string) => !has(name);
+
+  const missingDeps: Record<string, string> = {};
+  // TypeScript is required for `npx tsc --noEmit`.
+  if (missing("typescript")) missingDeps.typescript = "^5.5.0";
+  // React projects need matching @types (same major as the installed react).
+  if (has("react")) {
+    const reactMajor = (deps.react ?? "").match(/(\d+)/)?.[1] ?? "18";
+    if (missing("@types/react")) missingDeps["@types/react"] = `^${reactMajor}.0.0`;
+    if (missing("@types/react-dom")) missingDeps["@types/react-dom"] = `^${reactMajor}.0.0`;
+  }
+  // Vite is only relevant when the project actually uses it.
+  const usesVite = has("vite") || existsSync(path.join(root, "vite.config.ts")) || existsSync(path.join(root, "vite.config.js"));
+  if (usesVite && missing("vite")) missingDeps.vite = "^5.4.0";
+
+  return missingDeps;
+}
+
+async function findMissingBuildDependencies(root: string): Promise<string[]> {
+  try {
+    return Object.keys(await collectMissingBuildDependencies(root));
+  } catch {
+    return [];
+  }
+}
+
 async function ensureBuildDependencies(root: string): Promise<string | null> {
   try {
-    const pkgPath = path.join(root, "package.json");
-    if (!existsSync(pkgPath)) return null;
-    const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
-    if (!pkg.dependencies && !pkg.devDependencies) return null;
-
-    const deps = { ...pkg.dependencies, ...pkg.devDependencies };
-    const has = (name: string) => Boolean(deps[name]);
-    const missing = (name: string) => !has(name);
-
-    const missingDeps: Record<string, string> = {};
-    // TypeScript is required for `npx tsc --noEmit`.
-    if (missing("typescript")) missingDeps.typescript = "^5.5.0";
-    // React projects need matching @types (same major as the installed react).
-    if (has("react")) {
-      const reactMajor = (deps.react ?? "").match(/(\d+)/)?.[1] ?? "18";
-      if (missing("@types/react")) missingDeps["@types/react"] = `^${reactMajor}.0.0`;
-      if (missing("@types/react-dom")) missingDeps["@types/react-dom"] = `^${reactMajor}.0.0`;
-    }
-    // Vite is only relevant when the project actually uses it.
-    const usesVite = has("vite") || existsSync(path.join(root, "vite.config.ts")) || existsSync(path.join(root, "vite.config.js"));
-    if (usesVite && missing("vite")) missingDeps.vite = "^5.4.0";
-
+    const missingDeps = await collectMissingBuildDependencies(root);
     if (Object.keys(missingDeps).length === 0) return null;
 
+    const pkgPath = path.join(root, "package.json");
+    const pkg = JSON.parse(await readFile(pkgPath, "utf8")) as { dependencies?: Record<string, string>; devDependencies?: Record<string, string> };
     pkg.devDependencies ??= {};
     for (const [name, version] of Object.entries(missingDeps)) {
       pkg.devDependencies[name] = version;
@@ -123,7 +141,7 @@ async function ensureBuildDependencies(root: string): Promise<string | null> {
 // Hard pipeline: agents sometimes answer with fenced code blocks instead of
 // JSON patches. Parse ```lang path/to/file fences (or a nearby path hint) and
 // turn them into real write operations.
-function extractFencedPatches(text: string): WorkspacePatchFile[] {
+function extractFencedPatches(text: string, root?: string): WorkspacePatchFile[] {
   const patches: WorkspacePatchFile[] = [];
   const fenceRegex = /```[a-zA-Z0-9]*[ \t]*([^\n`]*)\n([\s\S]*?)```/g;
   let match: RegExpExecArray | null;
@@ -148,11 +166,21 @@ function extractFencedPatches(text: string): WorkspacePatchFile[] {
     if (!relPath) continue;
 
     const contextBefore = text.slice(Math.max(0, match.index - 200), match.index).toLowerCase();
-    const isNew = /созда|new file|create/.test(contextBefore);
+    // Audit M7: the operation must follow the real filesystem. Guessing "create"
+    // from the word "create" in prose made applyWorkspacePatch fail with
+    // "File already exists" and dropped the whole patch.
+    const isNew = root ? !existsSync(path.join(root, relPath)) : /созда|new file|create/.test(contextBefore);
     patches.push({ path: relPath, operation: isNew ? "create" : "modify", content: body });
     if (patches.length >= 12) break;
   }
   return patches;
+}
+
+// Remote control: short milestone pings to Telegram (no-op when it is not configured).
+function notifyTelegram(text: string) {
+  void import("@/lib/telegram")
+    .then(({ notifyTelegramEvent }) => notifyTelegramEvent(text))
+    .catch(() => undefined);
 }
 
 // UI sync: mirror orchestrator milestones into the group agents chat.
@@ -521,7 +549,7 @@ function advicePrompt(locale: Locale, task: string, plan: string, iteration: num
     locale,
     `Задача: ${task}\n\nПлан Главного:\n${plan || "(нет)"}\n${testNote ? `\n${testNote}` : ""}\n\nДай конкретную рекомендацию как ${roleLabel(locale, role)} (итерация ${iteration}).`,
     `Task: ${task}\n\nLead plan:\n${plan || "(none)"}\n${testNote ? `\n${testNote}` : ""}\n\nGive a concrete recommendation as ${roleLabel(locale, role)} (iteration ${iteration}).`,
-  );
+  ) + `\n\n${t(locale, "Последней строкой укажи ровно один маркер оценки: [STANCE: approve] — решение годится, [STANCE: change] — нужны правки, [STANCE: blocker] — есть блокирующая проблема.", "End the reply with exactly one verdict marker: [STANCE: approve] — the plan is fine, [STANCE: change] — changes are needed, [STANCE: blocker] — there is a blocking problem.")}`;
 }
 
 function consolidationPrompt(
@@ -579,6 +607,12 @@ function findAdvisor(rows: typeof agents.$inferSelect[], role: string) {
 }
 
 function classifyStance(text: string): AdviceStance {
+  // Audit M6: prefer the explicit verdict the advisor was asked for. Keyword
+  // heuristics turned "ошибок нет" / "no error" into blockers and produced
+  // phantom conflicts that cost extra rounds.
+  const explicit = /\[STANCE:\s*(approve|change|blocker)\s*\]/i.exec(text);
+  if (explicit) return explicit[1].toLowerCase() as AdviceStance;
+
   const lower = text.toLowerCase();
   const blockerRu = /(уязвим|критич|небезопасн|ошибк|нельзя|запрещ|утечк|инъекц|опасн|блокирую)/;
   const blockerEn = /(critical|vulnerab|insecure|error|must not|blocker|dangerous|injection|leak|exploit|do not|never)/;
@@ -588,6 +622,10 @@ function classifyStance(text: string): AdviceStance {
   if (blockerRu.test(lower) || blockerEn.test(lower)) return "blocker";
   if (approveRu.test(lower) || approveEn.test(lower)) return "approve";
   return "change";
+}
+
+function stripStanceMarker(text: string) {
+  return text.replace(/\[STANCE:\s*(?:approve|change|blocker)\s*\]/gi, "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function detectConflicts(locale: Locale, results: AdviceResult[]) {
@@ -746,12 +784,32 @@ async function runVerificationChecks(locale: Locale, signal?: AbortSignal): Prom
     root = null;
   }
 
-  // Hard pipeline: make sure the project can compile at all (typescript,
-  // @types, vite) before judging the code.
+  // Audit M4: dependency setup rewrites the user's package.json and runs
+  // `npm install`. That is acceptable only in fully autonomous mode, where the
+  // owner explicitly allowed unattended execution — otherwise the check reports
+  // what is missing and leaves the project untouched.
+  const settings = await getWorkspaceSettingsRow().catch(() => null);
+  const allowDependencySetup = Boolean(settings?.autoApprove);
   if (root) {
-    const dependencyError = await ensureBuildDependencies(root);
-    if (dependencyError) {
-      results.push({ name: "dependencies", command: "npm install", status: "failed", output: dependencyError });
+    if (allowDependencySetup) {
+      const dependencyError = await ensureBuildDependencies(root);
+      if (dependencyError) {
+        results.push({ name: "dependencies", command: "npm install", status: "failed", output: dependencyError });
+      }
+    } else {
+      const missing = await findMissingBuildDependencies(root);
+      if (missing.length > 0) {
+        results.push({
+          name: "dependencies",
+          command: "npm install",
+          status: "skipped",
+          output: t(
+            locale,
+            `Не хватает пакетов: ${missing.join(", ")}. Автоустановка отключена (нужен режим AUTO) — установите вручную, иначе проверки типов могут ложно падать.`,
+            `Missing packages: ${missing.join(", ")}. Automatic install is disabled (AUTO mode required) — install them manually or type checks may fail incorrectly.`,
+          ),
+        });
+      }
     }
   }
 
@@ -817,6 +875,7 @@ export async function* runOrchestrator(options: {
 
     yield { type: "task_started", taskId, task, maxIterations, mode };
     await mirrorToGroupChat(t(locale, `🚀 Оркестратор запустил задачу: ${task}`, `🚀 Orchestrator started the task: ${task}`));
+    notifyTelegram(`🚀 Старт задачи:\n${task.slice(0, 600)}`);
     yield { type: "step", step: "planning" };
     void saveActiveTaskState({ taskId, task, mode, iteration: 0, maxIterations, step: "planning", startedAt: taskStartedAt, lastSavedAt: new Date().toISOString() });
     yield {
@@ -851,6 +910,13 @@ export async function* runOrchestrator(options: {
 
     let lastCheckFailure = "";
     let lastPatches: WorkspacePatchFile[] = [];
+    // Audit M7: fenced patches need the real root to tell create from modify.
+    let patchRoot = "";
+    try {
+      patchRoot = await getWorkspaceRoot();
+    } catch {
+      patchRoot = "";
+    }
 
     for (let iteration = 1; iteration <= maxIterations; iteration += 1) {
       assertNotAborted(signal, locale);
@@ -871,7 +937,7 @@ export async function* runOrchestrator(options: {
           activeAdvisors.map(async (entry): Promise<AdviceResult> => {
             if (signal?.aborted) return { agent: entry.agent, role: entry.role, error: t(locale, "остановлено", "cancelled") };
             try {
-              const advice = await completeAgent(
+              const rawAdvice = await completeAgent(
                 entry.agent,
                 advisorSystemPrompt(locale, entry.agent, entry.role),
                 advicePrompt(locale, task, plan, iteration, lastCheckFailure, entry.role),
@@ -880,7 +946,9 @@ export async function* runOrchestrator(options: {
                 locale,
                 options.projectContext,
               );
-              return { agent: entry.agent, role: entry.role, advice, stance: classifyStance(advice) };
+              // Audit M6: the verdict marker is parsed first, then removed from
+              // the advice that lands in the chat and reports.
+              return { agent: entry.agent, role: entry.role, advice: stripStanceMarker(rawAdvice), stance: classifyStance(rawAdvice) };
             } catch (error) {
               return { agent: entry.agent, role: entry.role, error: error instanceof Error ? error.message : agentFailureMessage(locale, entry.agent, error) };
             }
@@ -938,7 +1006,7 @@ export async function* runOrchestrator(options: {
         const decisionInstruction = parsePatchInstruction(rawDecision);
         // Hard pipeline: fenced code blocks are a valid patch source when the
         // model skipped the strict JSON format.
-        const decisionFencedPatches = decisionInstruction.patches.length > 0 ? [] : extractFencedPatches(rawDecision);
+        const decisionFencedPatches = decisionInstruction.patches.length > 0 ? [] : extractFencedPatches(rawDecision, patchRoot || undefined);
         const decisionPatches = [...decisionInstruction.patches, ...decisionFencedPatches];
         // B3 fix: a truncated model response must surface as a generation
         // error instead of silently continuing with zero patches.
@@ -982,7 +1050,7 @@ export async function* runOrchestrator(options: {
         const fixInstruction = parsePatchInstruction(rawFix);
         // B3 fix: same truncation guard for the auto-fix branch, with the same
         // fenced-code fallback.
-        const fixFencedPatches = fixInstruction.patches.length > 0 ? [] : extractFencedPatches(rawFix);
+        const fixFencedPatches = fixInstruction.patches.length > 0 ? [] : extractFencedPatches(rawFix, patchRoot || undefined);
         const fixPatches = [...fixInstruction.patches, ...fixFencedPatches];
         if (fixPatches.length === 0 && looksLikeTruncatedJson(rawFix)) {
           const truncationMessage = t(locale, "Ошибка генерации: ответ модели обрезан (таймаут или лимит токенов). JSON-исправление неполно, патчи не применены.", "Generation error: the model response was truncated (timeout or token limit). The fix JSON is incomplete, no patches were applied.");
@@ -1098,6 +1166,9 @@ export async function* runOrchestrator(options: {
         await mirrorToGroupChat(applyResult.applied
           ? t(locale, `🔧 Патч применён: ${summarizePatches(locale, lastPatches)}`, `🔧 Patch applied: ${summarizePatches(locale, lastPatches)}`)
           : t(locale, "🔧 Изменений кода не требуется", "🔧 No code changes required"));
+        notifyTelegram(applyResult.applied
+          ? `🔧 Патч применён: ${summarizePatches(locale, lastPatches)}`
+          : "🔧 Изменений кода не требуется");
       } else {
         yield {
           type: "event",
@@ -1209,6 +1280,7 @@ export async function* runOrchestrator(options: {
         // Self-correction loop: the Lead receives the real stderr and a fix
         // order (bounded by the iteration budget, up to 5 by default).
         await mirrorToGroupChat(`❌ ${t(locale, "Проверки провалены — Главный агент получает stderr и команду исправить.", "Checks failed — the Lead agent receives stderr and a fix order.")}`);
+        notifyTelegram(`❌ Проверки не прошли (итерация ${iteration}):\n${lastCheckFailure.slice(0, 800)}`);
         continue;
       }
 
@@ -1251,27 +1323,34 @@ export async function* runOrchestrator(options: {
       };
 
       // Hard pipeline: RELEASE_READY is only allowed when every check really
-      // executed with exitCode 0 AND files were actually changed.
+      // executed with exitCode 0. Audit M5: "nothing to change" is a valid
+      // outcome, and the failure text must describe the real reason.
       const allChecksPassed = checkResults.length > 0 && checkResults.every((result) => result.status === "success");
-      const releaseStatus: ReleaseStatus = allChecksPassed && changedFiles.size > 0 ? "RELEASE_READY" : "FAILED";
+      const noChangesNeeded = changedFiles.size === 0;
+      const releaseStatus: ReleaseStatus = allChecksPassed ? "RELEASE_READY" : "FAILED";
+      const releaseSummary = releaseStatus === "RELEASE_READY"
+        ? noChangesNeeded
+          ? t(locale, "Проверки пройдены; изменения кода не требовались.", "Checks passed; no code changes were required.")
+          : t(locale, "Все проверки пройдены, проект готов к релизу.", "All checks passed; the project is ready for release.")
+        : t(locale, "Проверки не пройдены — смотрите вывод команд в отчёте.", "Checks did not pass — see the command output in the report.");
       const report = await finalizeReport({
         taskId,
         task,
         status: releaseStatus,
         changedFiles: [...changedFiles],
         checkResults: checkHistory,
-        summary: releaseStatus === "RELEASE_READY"
-          ? t(locale, "Все проверки пройдены, проект готов к релизу.", "All checks passed; the project is ready for release.")
-          : t(locale, "Нет подключённой рабочей папки — проверки и применение патчей недоступны.", "No workspace folder connected — checks and patch application are unavailable."),
+        summary: releaseSummary,
         iterations: iteration,
       });
       yield { type: "report", report };
       await mirrorToGroupChat(releaseStatus === "RELEASE_READY"
-        ? `✅ ${t(locale, "Все проверки пройдены (exitCode 0), проект готов к релизу.", "All checks passed (exitCode 0); the project is release-ready.")}`
-        : `⚠️ ${t(locale, "Рабочая папка не подключена — статус FAILED.", "No workspace folder connected — status FAILED.")}`);
-      void import("@/lib/telegram").then(({ ensureTelegramPolling, notifyTelegramRelease }) => {
+        ? `✅ ${releaseSummary}`
+        : `⚠️ ${releaseSummary}`);
+      void import("@/lib/telegram").then(({ ensureTelegramPolling, notifyTelegramEvent, notifyTelegramRelease }) => {
         ensureTelegramPolling();
-        return notifyTelegramRelease("RELEASE_READY", report.summary);
+        return releaseStatus === "RELEASE_READY"
+          ? notifyTelegramRelease("RELEASE_READY", report.summary)
+          : notifyTelegramEvent(`❌ ${report.summary}`);
       }).catch(() => undefined);
       yield { type: "task_completed", taskId, iterations: iteration, decision: lastDecision };
       return;
