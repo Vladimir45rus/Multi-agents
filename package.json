@@ -55,6 +55,7 @@
     "forceCodeSigning": false,
     "productName": "Multi-Agent Code Studio",
     "asar": true,
+    "icon": "build/icon.ico",
     "directories": {
       "output": "release"
     },
@@ -78,7 +79,17 @@
       "repo": "Multi-agents"
     },
     "mac": {
-      "x64ArchFiles": "**/*.{node,dylib}"
+      "x64ArchFiles": "**/*.{node,dylib}",
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "x64",
+            "arm64"
+          ]
+        }
+      ]
     },
     "win": {
       "target": [
@@ -90,6 +101,15 @@
         }
       ],
       "artifactName": "${productName}-${version}-setup.${ext}"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png",
+      "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
       "artifactName": "${productName}-${version}-setup.${ext}",

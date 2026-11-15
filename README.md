@@ -47,6 +47,11 @@ Type in chat:
 - **Failures go to the owner** — when typecheck/lint/tests fail, the file path from the log is matched to its owner and that agent receives the fix request; the Lead takes over when nobody owns the file
 - Off by default (Settings → Team mode), so Lead-only behaviour is unchanged
 
+### Remote control & packaging (v1.6.0)
+- **Telegram commands** — `/status`, `/task <text>`, `/stop`, `/log`, plus milestone pings (start, patch applied, checks failed, final report)
+- **Approve from the phone** — a pending patch/command confirmation appears as a banner with ✅ / 🔄 buttons in the mobile client, outside the State tab too
+- **Own icon and cross-platform targets** — `build/icon.ico` (16–256 px) ships with the Windows build, `build/icon.png` is used for Linux AppImage/deb, and a macOS dmg target is configured
+
 ### Visual builder (v1.6.0)
 - **Pick and move any element in the preview** — a dedicated mode renders the project through the IDE proxy, injects an inspector into the page and lets you click a button, card or heading and drag it where you want it
 - **Precision nudging** — arrow keys move the selected element by 1px (Shift = 10px), Escape leaves the mode

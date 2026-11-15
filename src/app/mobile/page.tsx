@@ -45,6 +45,7 @@ export default function MobilePage() {
   const [tokenDraft, setTokenDraft] = useState(urlToken);
   const [tab, setTab] = useState<MobileTab>("lead");
   const [activeTask, setActiveTask] = useState<ActiveTask | null>(null);
+  const [pendingConfirmations, setPendingConfirmations] = useState<Array<{ id: string; prompt: string; kind: string }>>([]);
   const [orchestratorEvents, setOrchestratorEvents] = useState<OrchestratorEvent[]>([]);
   const [systemEvents, setSystemEvents] = useState<SystemEvent[]>([]);
   const [data, setData] = useState<{ messages: ChatMsg[]; agents: AgentInfo[]; settings: { autoApprove: boolean; mobileAuthToken: string; previewUrl?: string } } | null>(null);
@@ -90,8 +91,9 @@ export default function MobilePage() {
         mobileFetch("/api/system-events?limit=5", { cache: "no-store" }),
       ]);
       if (stateResponse.ok) {
-        const payload = await stateResponse.json() as { activeTask?: ActiveTask | null };
+        const payload = await stateResponse.json() as { activeTask?: ActiveTask | null; pendingConfirmations?: Array<{ id: string; prompt: string; kind: string }> };
         setActiveTask(payload.activeTask ?? null);
+        setPendingConfirmations(payload.pendingConfirmations ?? []);
       }
       if (eventsResponse.ok) {
         const payload = await eventsResponse.json() as { events?: OrchestratorEvent[] };
@@ -217,6 +219,21 @@ export default function MobilePage() {
 
   if (tab === "settings") return <MobileSettings onBack={() => setTab("lead")} agents={data?.agents ?? []} accessToken={urlToken} />;
 
+  async function answerConfirmation(id: string, approved: boolean) {
+    try {
+      const response = await mobileFetch("/api/orchestrate/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirmationId: id, approved }),
+      });
+      if (!response.ok) throw new Error("Не удалось ответить");
+      setStatus(approved ? "Шаг подтверждён" : "Отправлено на доработку");
+      await refreshState();
+    } catch (error) {
+      setStatus(error instanceof Error ? `Ошибка: ${error.message}` : "Ошибка подтверждения");
+    }
+  }
+
   async function stopTask() {
     if (!activeTask) {
       setStatus("Активной задачи нет");
@@ -265,6 +282,20 @@ export default function MobilePage() {
       </header>
 
       <div style={{ flex: 1, overflowY: "auto", padding: "10px 8px", display: "flex", flexDirection: "column", gap: 2 }}>
+        {pendingConfirmations.length > 0 ? (
+          <section style={{ background: "#3a2d0f", border: "1px solid #d29922", borderRadius: 10, padding: 10, marginBottom: 8 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#f0c674", marginBottom: 6 }}>Требуется подтверждение</div>
+            {pendingConfirmations.map(item => (
+              <div key={item.id} style={{ marginBottom: 8 }}>
+                <div style={{ fontSize: 12, color: "#fff", whiteSpace: "pre-wrap", wordBreak: "break-word" }}>{item.prompt}</div>
+                <div style={{ display: "flex", gap: 8, marginTop: 6 }}>
+                  <button type="button" onClick={() => void answerConfirmation(item.id, true)} style={{ border: "none", borderRadius: 8, padding: "8px 12px", background: "#238636", color: "white", fontWeight: 700 }}>✅ Утвердить</button>
+                  <button type="button" onClick={() => void answerConfirmation(item.id, false)} style={{ border: "none", borderRadius: 8, padding: "8px 12px", background: "#a12828", color: "white", fontWeight: 700 }}>🔄 На доработку</button>
+                </div>
+              </div>
+            ))}
+          </section>
+        ) : null}
         {tab === "state" ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
             <section style={{ background: vars("bg-panel"), border: `1px solid ${vars("border-default")}`, borderRadius: 10, padding: 12 }}>

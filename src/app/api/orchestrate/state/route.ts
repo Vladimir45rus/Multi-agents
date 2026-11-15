@@ -1,5 +1,5 @@
 import { loadActiveTaskState, clearActiveTaskState, type ActiveTaskState } from "@/lib/orchestrator-state";
-import { hasRunningTask } from "@/lib/orchestrator";
+import { hasRunningTask, listPendingConfirmations } from "@/lib/orchestrator";
 import { db } from "@/db";
 import { agentEvents, orchestratorReports } from "@/db/schema";
 import { eq, desc } from "drizzle-orm";
@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     }
 
     if (!activeTask) {
-      return Response.json({ activeTask: null, recovery: null });
+      return Response.json({ activeTask: null, recovery: null, pendingConfirmations: listPendingConfirmations() });
     }
 
     // Fetch the last events for this task to provide recovery context.
@@ -43,6 +43,7 @@ export async function GET(request: Request) {
 
     return Response.json({
       activeTask,
+      pendingConfirmations: listPendingConfirmations(),
       recovery: {
         events: events.reverse().map((row) => ({
           id: row.id,

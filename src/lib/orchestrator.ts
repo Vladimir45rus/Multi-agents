@@ -195,7 +195,13 @@ async function mirrorToGroupChat(message: string) {
 const taskControllers = new Map<string, AbortController>();
 
 // Pending user confirmations (controlled mode), keyed by confirmation id.
-const pendingConfirmations = new Map<string, (approved: boolean) => void>();
+type PendingConfirmation = {
+  resolve: (approved: boolean) => void;
+  prompt: string;
+  kind: "patch" | "command";
+  createdAt: string;
+};
+const pendingConfirmations = new Map<string, PendingConfirmation>();
 
 const ADVISOR_INSTRUCTIONS: Record<OrchestratorRole, { ru: string; en: string }> = {
   architect: {
@@ -441,18 +447,28 @@ export function hasRunningTask(taskId: string) {
 }
 
 export function resolveConfirmation(confirmationId: string, approved: boolean) {
-  const resolver = pendingConfirmations.get(confirmationId);
-  if (!resolver) return false;
+  const entry = pendingConfirmations.get(confirmationId);
+  if (!entry) return false;
   pendingConfirmations.delete(confirmationId);
-  resolver(approved);
+  entry.resolve(approved);
   return true;
+}
+
+/** Pending approvals, so the mobile client can answer them without the stream. */
+export function listPendingConfirmations() {
+  return [...pendingConfirmations.entries()].map(([id, entry]) => ({
+    id,
+    prompt: entry.prompt,
+    kind: entry.kind,
+    createdAt: entry.createdAt,
+  }));
 }
 
 // Fix: manual confirmations must not wait forever — if the user (or Telegram)
 // never answers, the task resolves as "not approved" after this TTL.
 const CONFIRMATION_TIMEOUT_MS = 10 * 60_000;
 
-function waitForConfirmation(confirmationId: string, signal?: AbortSignal): Promise<boolean> {
+function waitForConfirmation(confirmationId: string, prompt: string, kind: "patch" | "command", signal?: AbortSignal): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     if (signal?.aborted) {
       reject(new OrchestratorCancelledError("cancelled"));
@@ -472,10 +488,15 @@ function waitForConfirmation(confirmationId: string, signal?: AbortSignal): Prom
     }, CONFIRMATION_TIMEOUT_MS);
 
     signal?.addEventListener("abort", onAbort, { once: true });
-    pendingConfirmations.set(confirmationId, (approved) => {
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", onAbort);
-      resolve(approved);
+    pendingConfirmations.set(confirmationId, {
+      resolve: (approved) => {
+        clearTimeout(timeout);
+        signal?.removeEventListener("abort", onAbort);
+        resolve(approved);
+      },
+      prompt,
+      kind,
+      createdAt: new Date().toISOString(),
     });
   });
 }
@@ -1281,7 +1302,7 @@ export async function* runOrchestrator(options: {
           ensureTelegramPolling();
           return notifyTelegramRelease("WAITING", patchPrompt, confirmationId);
         }).catch(() => undefined);
-        patchApproved = await waitForConfirmation(confirmationId, signal);
+        patchApproved = await waitForConfirmation(confirmationId, patchPrompt, "patch", signal);
       }
 
       if (patchApproved) {
@@ -1393,7 +1414,7 @@ export async function* runOrchestrator(options: {
           ensureTelegramPolling();
           return notifyTelegramRelease("WAITING", t(locale, "Выполнить команды проверок (typecheck/lint/tests) в терминале?", "Run the verification commands (typecheck/lint/tests) in the terminal?"), confirmationId);
         }).catch(() => undefined);
-        const approved = await waitForConfirmation(confirmationId, signal);
+        const approved = await waitForConfirmation(confirmationId, t(locale, "Выполнить команды проверок (typecheck/lint/tests) в терминале?", "Run the verification commands (typecheck/lint/tests) in the terminal?"), "command", signal);
         if (approved) {
           checkResults = await runVerificationChecks(locale, signal);
         } else {
