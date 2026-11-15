@@ -46,6 +46,10 @@ const ROLE_COLORS: Record<string, string> = {
   reviewer: "#f97316",
   tester: "#ef4444",
   uiux: "#ec4899",
+  security: "#f59e0b",
+  skeptic: "#e11d48",
+  advisor: "#06b6d4",
+  observer: "#64748b",
 };
 
 export type UiLocale = "ru" | "en";
@@ -93,6 +97,7 @@ type WorkspaceSnapshot = {
     githubAutoPush: boolean;
     autoApprove: boolean;
     teamMode: boolean;
+    decisionMode: string;
     mobileAuthToken: string;
     localtunnelEnabled: boolean;
     localtunnelUrl: string;
@@ -185,6 +190,11 @@ const ROLE_PROMPT_TEMPLATES: Record<string, { description: string; skill: string
   tester: { description: "QA: проверяет поведение и крайние случаи.", skill: "Тест-дизайн, регрессии, интеграционные и негативные сценарии.", systemPrompt: "Ты QA-инженер. Проверяй требования, крайние случаи и тестируемость; предлагай воспроизводимые проверки." },
   uiux: { description: "UI/UX: отвечает за удобство и визуальную целостность.", skill: "Адаптивная верстка, доступность, UX-потоки и дизайн-системы.", systemPrompt: "Ты UI/UX дизайнер. Анализируй интерфейс, responsive-поведение, доступность и ясность пользовательских сценариев." },
   security: { description: "Security: ищет уязвимости и утечки данных.", skill: "Моделирование угроз, валидация входных данных и безопасное хранение секретов.", systemPrompt: "Ты Security-аналитик. Ищи уязвимости, утечки секретов и опасные границы доверия; предлагай практичные исправления." },
+  skeptic: {
+    description: "Фома неверующий: обязан найти, что именно сломается.",
+    skill: "Критическое ревью, поиск контрпримеров, крайние данные, гонки, пустые состояния и отказоустойчивость.",
+    systemPrompt: "Ты Фома неверующий. Твоя работа — не соглашаться. На каждое предложение ищи конкретный сценарий, в котором оно ломается: пустые и огромные данные, гонки, права доступа, мобильный экран, офлайн, ошибки сети, повторные нажатия. Запрещено писать «согласен», «всё верно», «хорошее решение» без доказательств. Каждое возражение — с файлом, строкой или шагами воспроизведения. Если возражений нет, перечисли, ЧТО именно ты проверил и почему это безопасно. Заканчивай ответ строкой [STANCE: approve|change|blocker].",
+  },
   observer: { description: "Наблюдатель: следит за состоянием процесса и результатами.", skill: "Мониторинг прогресса, диагностика сбоев и контроль критериев готовности.", systemPrompt: "Ты Наблюдатель. Сверяй прогресс с задачей, фиксируй блокеры и критерии готовности." },
   auto: { description: "AUTO: автономно контролирует цикл выполнения.", skill: "Контроль прогресса, критериев готовности и безопасного завершения цикла.", systemPrompt: "Ты AUTO-агент. Контролируй автономный цикл, фиксируй блокеры и проверяй критерии RELEASE_READY." },
 };
@@ -763,6 +773,7 @@ export async function getWorkspaceSnapshot(options?: { includeFileContent?: bool
       githubAutoPush: settingsRow.githubAutoPush,
       autoApprove: Boolean(settingsRow.autoApprove),
       teamMode: Boolean(settingsRow.teamMode),
+      decisionMode: settingsRow.decisionMode === "vote" ? "vote" : "lead",
       mobileAuthToken: settingsRow.mobileAuthToken ?? "",
       localtunnelEnabled: Boolean(settingsRow.localtunnelEnabled),
       localtunnelUrl: settingsRow.localtunnelUrl ?? "",
@@ -847,6 +858,7 @@ export async function updateWorkspaceSettings(payload: {
   githubAutoPush?: boolean;
   autoApprove?: boolean;
   teamMode?: boolean;
+  decisionMode?: string;
   mobileAuthToken?: string;
   localtunnelEnabled?: boolean;
   localtunnelUrl?: string;
@@ -882,6 +894,7 @@ export async function updateWorkspaceSettings(payload: {
       githubAutoPush: payload.githubAutoPush === undefined ? current.githubAutoPush : Boolean(payload.githubAutoPush),
       autoApprove: payload.autoApprove === undefined ? current.autoApprove : Boolean(payload.autoApprove),
       teamMode: payload.teamMode === undefined ? current.teamMode : Boolean(payload.teamMode),
+      decisionMode: payload.decisionMode === undefined ? current.decisionMode : (payload.decisionMode === "vote" ? "vote" : "lead"),
       mobileAuthToken: payload.mobileAuthToken === undefined ? current.mobileAuthToken : compact(payload.mobileAuthToken),
       localtunnelEnabled: payload.localtunnelEnabled === undefined ? current.localtunnelEnabled : Boolean(payload.localtunnelEnabled),
       localtunnelUrl: payload.localtunnelUrl === undefined ? current.localtunnelUrl : compact(payload.localtunnelUrl),
@@ -1609,10 +1622,10 @@ Response format: substance only — status, written code, found errors, concrete
 
 function roleDisplay(role: string, lang: "ru" | "en"): string {
   if (lang === "ru") {
-    const map: Record<string, string> = { main: "Главный", advisor: "Советник", reviewer: "Ревьюер", tester: "Тестировщик", architect: "Архитектор", uiux: "UI/UX Дизайнер", security: "Секурити", observer: "Наблюдатель" };
+    const map: Record<string, string> = { main: "Главный", advisor: "Советник", reviewer: "Ревьюер", tester: "Тестировщик", architect: "Архитектор", uiux: "UI/UX Дизайнер", security: "Секурити", skeptic: "Фома неверующий", observer: "Наблюдатель" };
     return map[role] ?? role;
   }
-  const map: Record<string, string> = { main: "Lead", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", uiux: "UI/UX Designer", security: "Security", observer: "Observer" };
+  const map: Record<string, string> = { main: "Lead", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", uiux: "UI/UX Designer", security: "Security", skeptic: "Skeptic", observer: "Observer" };
   return map[role] ?? role;
 }
 

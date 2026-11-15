@@ -15,6 +15,7 @@ import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage }
 import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction, looksLikeTruncatedJson } from "@/lib/patch-parser";
 import { extractFilePaths, isPathInScope, mergeTeamPatches, pickOwner, SCOPE_RULES } from "@/lib/team-scopes";
+import { blockerLines, decisionAddressesBlockers, tallyVotes, type VoteInput } from "@/lib/decision";
 import { ensureWorkspaceBootstrap, getAgentProviderKey, getWorkspaceSettingsRow, pushMessage } from "@/lib/workspace";
 import { resolveFallbackModels } from "@/lib/provider-models";
 import { resolveCustomAgentRequest } from "@/lib/custom-providers";
@@ -220,6 +221,10 @@ const ADVISOR_INSTRUCTIONS: Record<OrchestratorRole, { ru: string; en: string }>
     ru: "Оценивай уязвимости, инъекции, секреты и контроль доступа.",
     en: "Evaluate vulnerabilities, injection, secrets and access control.",
   },
+  skeptic: {
+    ru: "Ты обязан найти, что сломается. Каждое возражение — с файлом, строкой или шагами воспроизведения. Согласие без доказательств запрещено.",
+    en: "You must find what breaks. Every objection needs a file, a line or reproduction steps. Agreement without evidence is forbidden.",
+  },
   advisor: {
     ru: "Дай аргументированную рекомендацию по задаче.",
     en: "Give a reasoned recommendation for the task.",
@@ -297,6 +302,7 @@ function roleLabel(locale: Locale, role: OrchestratorRole) {
     reviewer: t(locale, "Ревьюер", "Reviewer"),
     tester: t(locale, "Тестировщик", "Tester"),
     security: t(locale, "Секурити", "Security"),
+    skeptic: t(locale, "Фома неверующий", "Skeptic"),
     advisor: t(locale, "Советник", "Advisor"),
     observer: t(locale, "Наблюдатель", "Observer"),
     orchestrator: t(locale, "Оркестратор", "Orchestrator"),
@@ -614,7 +620,7 @@ function fixPrompt(locale: Locale, task: string, failureLog: string) {
 
 function toAdvisorRole(role: string): OrchestratorRole {
   const cleaned = compact(role).toLowerCase();
-  if (["architect", "reviewer", "tester", "security"].includes(cleaned)) return cleaned as OrchestratorRole;
+  if (["architect", "reviewer", "tester", "security", "skeptic"].includes(cleaned)) return cleaned as OrchestratorRole;
   return "advisor";
 }
 
@@ -985,7 +991,13 @@ export async function* runOrchestrator(options: {
     // iteration, and failures go back to the owner of the broken file.
     const orchestratorSettings = await getWorkspaceSettingsRow();
     const teamMode = Boolean(orchestratorSettings.teamMode);
-    const teamAdvisors = advisorRows.filter((agent) => compact(agent.role).toLowerCase() !== "observer");
+    // "vote" lets the team's verdicts outrank the Lead's opinion.
+    const decisionMode = orchestratorSettings.decisionMode === "vote" ? "vote" : "lead";
+    const teamAdvisors = advisorRows.filter((agent) => {
+      const role = compact(agent.role).toLowerCase();
+      // Observer watches, skeptic challenges — neither writes code.
+      return role !== "observer" && role !== "skeptic";
+    });
 
     yield { type: "task_started", taskId, task, maxIterations, mode };
     await mirrorToGroupChat(t(locale, `🚀 Оркестратор запустил задачу: ${task}`, `🚀 Orchestrator started the task: ${task}`));
@@ -1024,6 +1036,8 @@ export async function* runOrchestrator(options: {
 
     let lastCheckFailure = "";
     let lastPatches: WorkspacePatchFile[] = [];
+    // The skeptic audits the result once, after the checks went green.
+    let auditDone = false;
     // Audit M7: fenced patches need the real root to tell create from modify.
     let patchRoot = "";
     try {
@@ -1107,15 +1121,56 @@ export async function* runOrchestrator(options: {
         }
 
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "started" };
-        const rawDecision = await completeAgent(
+        const votes: VoteInput[] = adviceResults.map((result) => ({
+          agent: result.agent.name,
+          role: compact(result.agent.role).toLowerCase(),
+          stance: result.stance === "approve" || result.stance === "change" || result.stance === "blocker" ? result.stance : "unknown",
+          note: result.advice ?? "",
+        }));
+        const tally = tallyVotes(votes, locale);
+        const blockers = blockerLines(votes);
+        const voteBlock = decisionMode === "vote"
+          ? `\n\n=== ${t(locale, "ГОЛОСОВАНИЕ", "VOTING")} ===\n${tally.summary}\n${blockers.length > 0 ? `${t(locale, "Блокеры, на которые ты ОБЯЗАН ответить в решении (назови агента и файл):", "Blockers you MUST answer in the decision (name the agent and the file):")}\n${blockers.join("\n")}` : t(locale, "Блокеров нет.", "No blockers.")}`
+          : "";
+        let rawDecision = await completeAgent(
           mainAgent,
           mainSystemPrompt(locale, mainAgent),
-          consolidationPrompt(locale, task, plan, adviceResults, conflicts, lastCheckFailure),
+          consolidationPrompt(locale, task, plan, adviceResults, conflicts, lastCheckFailure) + voteBlock,
           signal,
           true,
           locale,
           options.projectContext,
         );
+        // Vote mode: a blocker cannot be silently ignored. One forced retry.
+        if (decisionMode === "vote" && tally.blocked) {
+          const firstDecision = parsePatchInstruction(rawDecision).decision || rawDecision;
+          if (!decisionAddressesBlockers(firstDecision, votes)) {
+            yield {
+              type: "event",
+              event: await recordEvent({
+                taskId,
+                type: "CONFLICT_DETECTED",
+                agent: "Orchestrator",
+                role: "orchestrator",
+                iteration,
+                arguments: blockers.join("\n"),
+                proposal: t(locale, "Голосование: Главный обязан ответить на блокеры", "Vote: the Lead must answer the blockers"),
+              }),
+            };
+            rawDecision = await completeAgent(
+              mainAgent,
+              mainSystemPrompt(locale, mainAgent),
+              consolidationPrompt(locale, task, plan, adviceResults, conflicts, lastCheckFailure)
+                + voteBlock
+                + `\n\n${t(locale, "Твой предыдущий ответ проигнорировал блокеры. Ответь на каждый: назови агента, файл и что именно исправлено или почему возражение отклонено.", "Your previous answer ignored the blockers. Answer each one: name the agent, the file and what exactly is fixed or why the objection is rejected.")}`
+                + `\n\n${PATCH_JSON_INSTRUCTION[locale]}`,
+              signal,
+              true,
+              locale,
+              options.projectContext,
+            );
+          }
+        }
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
         const decisionInstruction = parsePatchInstruction(rawDecision);
         // Hard pipeline: fenced code blocks are a valid patch source when the
@@ -1486,6 +1541,66 @@ export async function* runOrchestrator(options: {
         await mirrorToGroupChat(`⚠️ ${skippedMessage}`);
         yield { type: "task_completed", taskId, iterations: iteration, decision: lastDecision };
         return;
+      }
+
+      // Skeptic audit: green checks do not prove the behaviour is right. This is
+      // the last line of defence against "everyone agreed and shipped broken".
+      if (!auditDone) {
+        const skeptic = findAdvisor(advisorRows, "skeptic");
+        if (skeptic) {
+          auditDone = true;
+          yield { type: "agent_status", agent: skeptic.name, role: "skeptic", status: "started" };
+          let auditText = "";
+          try {
+            auditText = await completeAgent(
+              skeptic,
+              advisorSystemPrompt(locale, skeptic, "skeptic"),
+              t(
+                locale,
+                `Проверки прошли. Изменённые файлы: ${[...changedFiles].join(", ") || "(нет)"}.\nЗадача: ${task}\n\nТы Фома неверующий. Найди то, что проверки НЕ ловят: пустые состояния, гонки, потерю данных, мобильный экран, офлайн, повторные нажатия, неверные тексты. Если всё действительно надёжно — ответь [STANCE: approve] и перечисли, что именно проверил. Нашёл проблему — [STANCE: blocker] и конкретный список с файлами.`,
+                `Checks passed. Changed files: ${[...changedFiles].join(", ") || "(none)"}. Task: ${task}. You are the skeptic: find what the checks do NOT catch (empty states, races, data loss, mobile layout, offline, double clicks, wrong copy). If it is genuinely solid — reply [STANCE: approve] and list what you verified. Found a problem — [STANCE: blocker] with a concrete file list.`,
+              ),
+              signal,
+              false,
+              locale,
+              options.projectContext,
+            );
+          } catch {
+            auditText = "";
+          }
+          yield { type: "agent_status", agent: skeptic.name, role: "skeptic", status: "done" };
+          if (/\[STANCE:\s*blocker\s*\]/i.test(auditText)) {
+            lastCheckFailure = `${t(locale, "Аудит Фомы: проверки зелёные, но есть логические риски", "Skeptic audit: checks are green but logical risks remain")}:\n${auditText.slice(0, 4_000)}`;
+            yield {
+              type: "event",
+              event: await recordEvent({
+                taskId,
+                type: "TEST_FAILED",
+                agent: skeptic.name,
+                role: "skeptic",
+                agentId: skeptic.id,
+                iteration,
+                arguments: auditText.slice(0, 4_000),
+                status: "open",
+              }),
+            };
+            notifyTelegram(`🧐 Аудит Фомы нашёл риски (итерация ${iteration})`);
+            continue;
+          }
+          yield {
+            type: "event",
+            event: await recordEvent({
+              taskId,
+              type: "REVIEW_APPROVED",
+              agent: skeptic.name,
+              role: "skeptic",
+              agentId: skeptic.id,
+              iteration,
+              proposal: t(locale, "Аудит Фомы: возражений нет", "Skeptic audit: no objections"),
+              status: "resolved",
+            }),
+          };
+        }
       }
 
       yield { type: "step", step: "done" };

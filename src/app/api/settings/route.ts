@@ -15,6 +15,7 @@ async function handleUpdate(request: Request) {
     githubAutoPush?: boolean;
     autoApprove?: boolean;
     teamMode?: boolean;
+    decisionMode?: string;
     mobileAuthToken?: string;
     localtunnelEnabled?: boolean;
     localtunnelUrl?: string;

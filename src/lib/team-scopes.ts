@@ -25,6 +25,8 @@ export const SCOPE_RULES: Record<string, ScopeRule> = {
     suffixes: [".test.ts", ".test.tsx", ".test.js", ".spec.ts", ".spec.tsx", ".spec.js"],
   },
   security: { prefixes: ["src/proxy", "middleware", "src/lib/auth", "src/lib/security", "src/middleware"] },
+  // The skeptic never writes: it reviews every zone and challenges the others.
+  skeptic: { prefixes: ["src/", "app/", "lib/", "server/"] },
   reviewer: { prefixes: ["src/", "app/", "lib/"] },
 };
 

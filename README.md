@@ -41,6 +41,11 @@ Type in chat:
 - `/docs` — generate documentation
 - `@AgentName` — mention a specific agent
 
+### Verification & doubt (v1.6.0)
+- **“Фома неверующий” role** — a dedicated skeptic agent that is forbidden to agree without evidence: every objection needs a file, a line or reproduction steps, and it may not parrot the majority
+- **Two decision modes** (Settings → Decision): **Lead decides** (today's behaviour) or **team vote**, where verdicts are tallied, a single blocker forces the Lead to answer it explicitly with a forced retry, and the skeptic's blocker can never become an “everyone approves” majority
+- **Post-check audit** — when typecheck/lint/tests are green, the skeptic reviews the changed files for what the checks cannot see (empty states, races, mobile layout, offline); a blocker sends the task back for another fix round
+
 ### Team mode (v1.6.0)
 - **Every advisor owns a slice of the project** — UI/UX writes components and styles, the architect writes API and `src/lib`, the tester writes `*.test.ts`, security owns the auth surface
 - **The Lead still assembles** — its patches win on conflicts, everything is applied as one atomic set, and dropped edits (foreign zone or conflict) are reported as events

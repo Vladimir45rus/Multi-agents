@@ -19,6 +19,7 @@ export type OrchestratorRole =
   | "reviewer"
   | "tester"
   | "security"
+  | "skeptic"
   | "advisor"
   | "observer"
   | "orchestrator";

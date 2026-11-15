@@ -132,6 +132,7 @@ type WorkspaceData = {
     githubAutoPush: boolean;
     autoApprove: boolean;
     teamMode: boolean;
+    decisionMode: string;
     mobileAuthToken: string;
     localtunnelEnabled: boolean;
     localtunnelUrl: string;
@@ -202,12 +203,12 @@ type DesktopBridge = {
   wasRecoveredFromCrash?: () => Promise<boolean>;
 };
 
-const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "uiux", "security", "observer", "auto"];
+const roleOptions = ["main", "advisor", "reviewer", "tester", "architect", "uiux", "security", "skeptic", "observer", "auto"];
 
 // Role-change fix: switching the role selector re-skins the whole card — name,
 // description, skills and system prompt all follow the selected role.
-const ROLE_NAMES_RU: Record<string, string> = { main: "Главный агент", advisor: "Советник", reviewer: "Ревьюер", tester: "Тестировщик", architect: "Архитектор", uiux: "UI/UX Дизайнер", security: "Секурити", observer: "Наблюдатель", auto: "AUTO" };
-const ROLE_NAMES_EN: Record<string, string> = { main: "Lead agent", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", uiux: "UI/UX Designer", security: "Security", observer: "Observer", auto: "AUTO" };
+const ROLE_NAMES_RU: Record<string, string> = { main: "Главный агент", advisor: "Советник", reviewer: "Ревьюер", tester: "Тестировщик", architect: "Архитектор", uiux: "UI/UX Дизайнер", security: "Секурити", skeptic: "Фома неверующий", observer: "Наблюдатель", auto: "AUTO" };
+const ROLE_NAMES_EN: Record<string, string> = { main: "Lead agent", advisor: "Advisor", reviewer: "Reviewer", tester: "Tester", architect: "Architect", uiux: "UI/UX Designer", security: "Security", skeptic: "Skeptic", observer: "Observer", auto: "AUTO" };
 
 const ROLE_TEMPLATES: Record<string, { description: string; skill: string; systemPrompt: string }> = {
   main: { description: "Главный кодер: принимает решения и пишет рабочий код.", skill: "Fullstack-разработка, декомпозиция задач, тестирование и безопасные изменения.", systemPrompt: "Ты Главный агент IDE. Анализируй контекст проекта, вноси минимальные проверяемые изменения и запускай подходящие проверки." },
@@ -217,6 +218,7 @@ const ROLE_TEMPLATES: Record<string, { description: string; skill: string; syste
   architect: { description: "Архитектор: отвечает за структуру и границы системы.", skill: "Проектирование модулей, API, потоков данных и масштабируемости.", systemPrompt: "Ты Архитектор. Оценивай структуру проекта, зависимости и долгосрочные риски; предлагай простые устойчивые решения." },
   uiux: { description: "UI/UX: отвечает за удобство и визуальную целостность.", skill: "Адаптивная верстка, доступность, UX-потоки и дизайн-системы.", systemPrompt: "Ты UI/UX дизайнер. Анализируй интерфейс, responsive-поведение, доступность и ясность пользовательских сценариев." },
   security: { description: "Security: ищет уязвимости и утечки данных.", skill: "Моделирование угроз, валидация входных данных и безопасное хранение секретов.", systemPrompt: "Ты Security-аналитик. Ищи уязвимости, утечки секретов и опасные границы доверия; предлагай практичные исправления." },
+  skeptic: { description: "Фома неверующий: обязан найти, что именно сломается.", skill: "Критическое ревью, контрпримеры, крайние данные, гонки, пустые состояния и отказоустойчивость.", systemPrompt: "Ты Фома неверующий. Твоя работа — не соглашаться. Ищи конкретный сценарий, в котором предложение ломается: пустые и огромные данные, гонки, права, мобильный экран, офлайн, ошибки сети, повторные нажатия. Запрещено писать «согласен», «всё верно» без доказательств. Каждое возражение — с файлом, строкой или шагами воспроизведения. Заканчивай строкой [STANCE: approve|change|blocker]." },
   observer: { description: "Наблюдатель: следит за состоянием процесса и результатами.", skill: "Мониторинг прогресса, диагностика сбоев и контроль критериев готовности.", systemPrompt: "Ты Наблюдатель. Сверяй прогресс с задачей, фиксируй блокеры и критерии готовности." },
   auto: { description: "AUTO: автономно контролирует цикл выполнения.", skill: "Контроль прогресса, критериев готовности и безопасного завершения цикла.", systemPrompt: "Ты AUTO-агент. Контролируй автономный цикл, фиксируй блокеры и проверяй критерии RELEASE_READY." },
 };
@@ -229,6 +231,7 @@ const ROLE_COLORS: Record<string, string> = {
   uiux: "#ec4899",
   advisor: "#06b6d4",
   security: "#f59e0b",
+  skeptic: "#e11d48",
   observer: "#64748b",
 };
 
@@ -257,7 +260,8 @@ const ROLE_PRIORITY: Record<string, number> = {
   reviewer: 4,
   tester: 5,
   security: 6,
-  observer: 7,
+  skeptic: 7,
+  observer: 8,
 };
 
 function sortAgents(agents: Agent[]): Agent[] {
@@ -643,6 +647,7 @@ export function IdeApp() {
   const [githubAutoPushDraft, setGithubAutoPushDraft] = useState(false);
   const [autoApproveDraft, setAutoApproveDraft] = useState(false);
   const [teamModeDraft, setTeamModeDraft] = useState(false);
+  const [decisionModeDraft, setDecisionModeDraft] = useState("lead");
   const [mobileTokenDraft, setMobileTokenDraft] = useState("");
   const [localtunnelEnabledDraft, setLocaltunnelEnabledDraft] = useState(false);
   const [localtunnelUrl, setLocaltunnelUrl] = useState("");
@@ -872,6 +877,7 @@ export function IdeApp() {
       || githubAutoPushDraft !== saved.githubAutoPush
       || autoApproveDraft !== saved.autoApprove
       || teamModeDraft !== saved.teamMode
+      || decisionModeDraft !== saved.decisionMode
       || mobileTokenDraft !== (saved.mobileAuthToken ?? "")
       || localtunnelEnabledDraft !== Boolean(saved.localtunnelEnabled)
       || previewCommandDraft !== saved.previewCommand
@@ -881,7 +887,7 @@ export function IdeApp() {
       || telegramChatIdDraft !== saved.telegramChatId
       || fallbackModelsDraft !== saved.fallbackModels.join("\n")
       || Object.values(apiKeysToRemove).some(Boolean);
-  }, [apiKeysDraft, apiKeysToRemove, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, removeGithubToken, autoApproveDraft, teamModeDraft, mobileTokenDraft, localtunnelEnabledDraft, previewCommandDraft, previewPortDraft, telegramTokenDraft, removeTelegramToken, telegramChatIdDraft, fallbackModelsDraft]);
+  }, [apiKeysDraft, apiKeysToRemove, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, removeGithubToken, autoApproveDraft, teamModeDraft, decisionModeDraft, mobileTokenDraft, localtunnelEnabledDraft, previewCommandDraft, previewPortDraft, telegramTokenDraft, removeTelegramToken, telegramChatIdDraft, fallbackModelsDraft]);
 
   const newAgentDirty = useMemo(() => Boolean(
     newAgent.name.trim()
@@ -997,6 +1003,7 @@ export function IdeApp() {
       if (role === "architect") return "Архитектор";
       if (role === "uiux") return "UI/UX Дизайнер";
       if (role === "security") return "Секурити";
+      if (role === "skeptic") return "Фома неверующий";
       if (role === "observer") return "Наблюдатель";
       if (role === "auto") return "AUTO";
     }
@@ -1266,6 +1273,7 @@ export function IdeApp() {
         githubAutoPush: githubAutoPushDraft,
         autoApprove: autoApproveDraft,
         teamMode: teamModeDraft,
+        decisionMode: decisionModeDraft,
         localtunnelEnabled: localtunnelEnabledDraft,
         fallbackModels: fallbackModelsDraft.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean),
         previewCommand: previewCommandDraft,
@@ -1434,6 +1442,7 @@ export function IdeApp() {
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
     setTeamModeDraft(Boolean(payload.settings?.teamMode));
+    setDecisionModeDraft(payload.settings?.decisionMode === "vote" ? "vote" : "lead");
     setMobileTokenDraft(payload.settings.mobileAuthToken ?? "");
     // Audit M2: the access token is no longer written into a JS-readable
     // cookie. The server issues it as an HttpOnly cookie (/api/workspace,
@@ -1877,6 +1886,7 @@ export function IdeApp() {
           githubAutoPush: githubAutoPushDraft,
           autoApprove: autoApproveDraft,
           teamMode: teamModeDraft,
+          decisionMode: decisionModeDraft,
           mobileAuthToken: mobileTokenDraft,
           localtunnelEnabled: localtunnelEnabledDraft,
           localtunnelUrl,
@@ -3688,6 +3698,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <label className="mt-2 flex items-center gap-2 text-xs text-[#c6ced8]">
                 <input type="checkbox" checked={teamModeDraft} onChange={(e) => setTeamModeDraft(e.target.checked)} />
                 {locale === "ru" ? "Team mode — каждый агент пишет в своей зоне, Главный собирает" : "Team mode — each advisor writes in its own zone, the Lead assembles"}
+              </label>
+              <label className="mt-2 flex items-center gap-2 text-xs text-[#c6ced8]">
+                {locale === "ru" ? "Решение:" : "Decision:"}
+                <select value={decisionModeDraft} onChange={(e) => setDecisionModeDraft(e.target.value === "vote" ? "vote" : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs">
+                  <option value="lead">{locale === "ru" ? "решает Главный" : "the Lead decides"}</option>
+                  <option value="vote">{locale === "ru" ? "голосование команды (Фома может заблокировать)" : "team vote (the skeptic can block)"}</option>
+                </select>
               </label>
               <div className="mt-2">
                 <p className="text-xs text-[var(--text-secondary)]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>

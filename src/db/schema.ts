@@ -13,6 +13,8 @@ export const workspaceSettings = sqliteTable("workspace_settings", {
   autoApprove: integer("auto_approve", { mode: "boolean" }).notNull().default(false),
   // Team mode: advisors write inside their own scope, the Lead assembles.
   teamMode: integer("team_mode", { mode: "boolean" }).notNull().default(false),
+  // "lead" — the Lead decides alone; "vote" — team verdicts can block him.
+  decisionMode: text("decision_mode").notNull().default("lead"),
   mobileAuthToken: text("mobile_auth_token").notNull().default(""),
   localtunnelEnabled: integer("localtunnel_enabled", { mode: "boolean" }).notNull().default(false),
   localtunnelUrl: text("localtunnel_url").notNull().default(""),
