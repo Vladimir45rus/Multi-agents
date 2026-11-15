@@ -63,6 +63,7 @@ export function normalizeVisualEdit(input: VisualEditInput) {
 export type StyleHints = {
   widthPct?: number;
   heightPct?: number;
+  heightEm?: number;
   fontPct?: number;
   color?: string;
   background?: string;
@@ -71,7 +72,7 @@ export type StyleHints = {
   paddingPx?: number;
 };
 
-const STYLE_KEYS: Array<keyof StyleHints> = ["widthPct", "heightPct", "fontPct", "color", "background", "radius", "opacity", "paddingPx"];
+const STYLE_KEYS: Array<keyof StyleHints> = ["widthPct", "heightPct", "heightEm", "fontPct", "color", "background", "radius", "opacity", "paddingPx"];
 
 /** Parses the JSON style payload stored in visual_edits.styles. */
 export function parseStyleHints(styles: string | undefined): StyleHints {
@@ -98,6 +99,7 @@ export function describeStyles(styles: string | undefined, locale: "ru" | "en" =
   const ru = locale === "ru";
   if (hints.widthPct) parts.push(ru ? `ширина ${hints.widthPct}% родителя` : `width ${hints.widthPct}% of the parent`);
   if (hints.heightPct) parts.push(ru ? `высота ${hints.heightPct}% родителя` : `height ${hints.heightPct}% of the parent`);
+  if (hints.heightEm) parts.push(ru ? `высота ${hints.heightEm}em` : `height ${hints.heightEm}em`);
   if (hints.fontPct) parts.push(ru ? `шрифт ${hints.fontPct}%` : `font ${hints.fontPct}%`);
   if (hints.color) parts.push(ru ? `цвет текста ${hints.color}` : `text color ${hints.color}`);
   if (hints.background) parts.push(ru ? `фон ${hints.background}` : `background ${hints.background}`);
@@ -113,6 +115,7 @@ export function styleSuggestion(styles: string | undefined): string {
   const rules: string[] = [];
   if (hints.widthPct) rules.push(`width: ${hints.widthPct}%;`);
   if (hints.heightPct) rules.push(`height: ${hints.heightPct}%;`);
+  if (hints.heightEm) rules.push(`height: ${hints.heightEm}em;`);
   if (hints.fontPct) rules.push(`font-size: ${hints.fontPct}%;`);
   if (hints.color) rules.push(`color: ${hints.color};`);
   if (hints.background) rules.push(`background-color: ${hints.background};`);

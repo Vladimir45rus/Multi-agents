@@ -18,16 +18,26 @@ const INSPECTOR_SOURCE = `(function () {
   handle.setAttribute('data-ma-visual', 'handle');
   handle.style.cssText = 'position:fixed;z-index:2147483647;width:14px;height:14px;border-radius:4px;background:#ec4899;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:nwse-resize;display:none;';
 
+  var handleX = document.createElement('div');
+  handleX.setAttribute('data-ma-visual', 'handle-x');
+  handleX.style.cssText = 'position:fixed;z-index:2147483647;width:12px;height:22px;border-radius:4px;background:#4fc1ff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:ew-resize;display:none;';
+
+  var handleY = document.createElement('div');
+  handleY.setAttribute('data-ma-visual', 'handle-y');
+  handleY.style.cssText = 'position:fixed;z-index:2147483647;width:22px;height:12px;border-radius:4px;background:#4fc1ff;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.4);cursor:ns-resize;display:none;';
+
   var badge = document.createElement('div');
   badge.setAttribute('data-ma-visual', 'badge');
   badge.style.cssText = 'position:fixed;left:12px;bottom:12px;z-index:2147483647;padding:6px 10px;border-radius:6px;background:#0e639c;color:#fff;font:12px/1.4 system-ui,sans-serif;box-shadow:0 4px 14px rgba(0,0,0,.35);display:none;max-width:70%;';
-  badge.textContent = 'Конструктор: клик — выбор, тяните элемент, угловой маркер — размер, стрелки — подстройка, Esc — выход';
+  badge.textContent = 'Конструктор: клик — выбор, тяните элемент, синие маркеры — ширина/высота, розовый угол — оба, стрелки — подстройка, Esc — снять';
 
   function ensureMounted() {
     if (!document.body) { return; }
     if (!halo.isConnected) { document.body.appendChild(halo); }
     if (!frame.isConnected) { document.body.appendChild(frame); }
     if (!handle.isConnected) { document.body.appendChild(handle); }
+    if (!handleX.isConnected) { document.body.appendChild(handleX); }
+    if (!handleY.isConnected) { document.body.appendChild(handleY); }
     if (!badge.isConnected) { document.body.appendChild(badge); }
   }
   if (document.readyState === 'loading') {
@@ -109,6 +119,8 @@ const INSPECTOR_SOURCE = `(function () {
     if (!state.selected || !state.selected.isConnected) {
       frame.style.display = 'none';
       handle.style.display = 'none';
+      handleX.style.display = 'none';
+      handleY.style.display = 'none';
       return;
     }
     var rect = state.selected.getBoundingClientRect();
@@ -120,6 +132,12 @@ const INSPECTOR_SOURCE = `(function () {
     handle.style.display = 'block';
     handle.style.left = (rect.right - 9) + 'px';
     handle.style.top = (rect.bottom - 9) + 'px';
+    handleX.style.display = 'block';
+    handleX.style.left = (rect.right - 8) + 'px';
+    handleX.style.top = (rect.top + rect.height / 2 - 11) + 'px';
+    handleY.style.display = 'block';
+    handleY.style.left = (rect.left + rect.width / 2 - 11) + 'px';
+    handleY.style.top = (rect.bottom - 8) + 'px';
   }
 
   function paintHalo(element) {
@@ -150,7 +168,13 @@ const INSPECTOR_SOURCE = `(function () {
     state.styles[key] = styles;
     // Empty values reset the inline rule, so the project's own CSS returns.
     element.style.width = styles.widthPct ? styles.widthPct + '%' : '';
-    element.style.height = styles.heightPct ? styles.heightPct + '%' : '';
+    // Height is expressed in em: height: % is ignored unless the parent has a
+    // definite height, while em always works and scales with the font size.
+    if (styles.heightEm) { element.style.height = styles.heightEm + 'em'; }
+    else if (styles.heightPct) { element.style.height = styles.heightPct + '%'; }
+    else { element.style.height = ''; }
+    // Shrinking below the content only looks right when the overflow is clipped.
+    element.style.overflow = (element.scrollHeight > element.clientHeight + 1) ? 'hidden' : '';
     element.style.fontSize = styles.fontPct ? styles.fontPct + '%' : '';
     element.style.color = styles.color || '';
     element.style.backgroundColor = styles.background || '';
@@ -172,7 +196,7 @@ const INSPECTOR_SOURCE = `(function () {
     ensureMounted();
     badge.style.display = state.enabled ? 'block' : 'none';
     halo.style.display = 'none';
-    if (!state.enabled) { frame.style.display = 'none'; handle.style.display = 'none'; state.selected = null; }
+    if (!state.enabled) { frame.style.display = 'none'; handle.style.display = 'none'; handleX.style.display = 'none'; handleY.style.display = 'none'; state.selected = null; }
     document.documentElement.style.cursor = state.enabled ? 'crosshair' : '';
   }
 
@@ -189,6 +213,8 @@ const INSPECTOR_SOURCE = `(function () {
     badge.style.display = state.enabled ? 'block' : 'none';
     frame.style.display = 'none';
     handle.style.display = 'none';
+    handleX.style.display = 'none';
+    handleY.style.display = 'none';
     halo.style.display = 'none';
     post({ type: 'clear' });
   }
@@ -204,11 +230,17 @@ const INSPECTOR_SOURCE = `(function () {
     if (!state.enabled) { return; }
     ensureMounted();
     if (state.resize) {
-      var parentSize = state.resize.parent;
-      var nextWidthPct = Math.max(2, Math.round(((state.resize.startWidth + (event.clientX - state.resize.startX)) / parentSize.width) * 1000) / 10);
-      var nextHeightPct = Math.max(2, Math.round(((state.resize.startHeight + (event.clientY - state.resize.startY)) / parentSize.height) * 1000) / 10);
-      var styles = Object.assign({}, state.styles[state.resize.key] || {}, { widthPct: nextWidthPct, heightPct: nextHeightPct });
-      applyStyles(state.resize.element, styles);
+      var r = state.resize;
+      var styles = Object.assign({}, state.styles[r.key] || {});
+      if (r.axis !== 'y') {
+        var widthPct = Math.round(((r.startWidth + (event.clientX - r.startX)) / r.parent.width) * 1000) / 10;
+        styles.widthPct = Math.max(2, Math.min(100, widthPct));
+      }
+      if (r.axis !== 'x') {
+        var targetPx = Math.max(8, r.startHeight + (event.clientY - r.startY));
+        styles.heightEm = Math.max(0.5, Math.round((targetPx / r.fontSize) * 100) / 100);
+      }
+      applyStyles(r.element, styles);
       paint();
       return;
     }
@@ -230,20 +262,32 @@ const INSPECTOR_SOURCE = `(function () {
     if (!state.enabled) { return; }
 
     var handleHit = handle.contains(event.target) || (Math.abs(event.clientX - (state.selected ? state.selected.getBoundingClientRect().right : -999)) < 12 && Math.abs(event.clientY - (state.selected ? state.selected.getBoundingClientRect().bottom : -999)) < 12);
-    if (state.selected && handleHit) {
-      event.preventDefault();
-      event.stopPropagation();
-      var rect = state.selected.getBoundingClientRect();
-      state.resize = {
-        element: state.selected,
-        key: cssPath(state.selected),
-        startX: event.clientX,
-        startY: event.clientY,
-        startWidth: rect.width,
-        startHeight: rect.height,
-        parent: parentBox(state.selected)
-      };
-      return;
+    if (state.selected) {
+      var rectNow = state.selected.getBoundingClientRect();
+      var axis = null;
+      if (handle.contains(event.target) || (Math.abs(event.clientX - rectNow.right) < 12 && Math.abs(event.clientY - rectNow.bottom) < 12)) {
+        axis = 'both';
+      } else if (handleX.contains(event.target) || (Math.abs(event.clientX - rectNow.right) < 10 && Math.abs(event.clientY - (rectNow.top + rectNow.height / 2)) < 12)) {
+        axis = 'x';
+      } else if (handleY.contains(event.target) || (Math.abs(event.clientX - (rectNow.left + rectNow.width / 2)) < 12 && Math.abs(event.clientY - rectNow.bottom) < 10)) {
+        axis = 'y';
+      }
+      if (axis) {
+        event.preventDefault();
+        event.stopPropagation();
+        state.resize = {
+          element: state.selected,
+          key: cssPath(state.selected),
+          axis: axis,
+          startX: event.clientX,
+          startY: event.clientY,
+          startWidth: rectNow.width,
+          startHeight: rectNow.height,
+          fontSize: parseFloat(getComputedStyle(state.selected).fontSize) || 16,
+          parent: parentBox(state.selected)
+        };
+        return;
+      }
     }
 
     var element = targetFromEvent(event);

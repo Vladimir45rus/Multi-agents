@@ -114,4 +114,10 @@ describe("style hints", () => {
     expect(styleSuggestion(JSON.stringify({ paddingPx: 12, fontPct: 90 }))).toBe("font-size: 90%; padding: 12px;");
     expect(styleSuggestion("")).toBe("");
   });
+
+  it("supports em-based height so vertical resizing survives auto-height parents", () => {
+    const styles = JSON.stringify({ heightEm: 8.5, widthPct: 40 });
+    expect(describeStyles(styles)).toEqual(["ширина 40% родителя", "высота 8.5em"]);
+    expect(styleSuggestion(styles)).toBe("width: 40%; height: 8.5em;");
+  });
 });

@@ -18,7 +18,7 @@ type VisualEdit = {
 
 type StyleHints = {
   widthPct?: number;
-  heightPct?: number;
+  heightEm?: number;
   fontPct?: number;
   color?: string;
   background?: string;
@@ -70,7 +70,7 @@ function describeOffset(edit: VisualEdit, locale: "ru" | "en") {
 function styleSummary(styles: StyleHints) {
   const parts: string[] = [];
   if (styles.widthPct) parts.push(`W ${styles.widthPct}%`);
-  if (styles.heightPct) parts.push(`H ${styles.heightPct}%`);
+  if (styles.heightEm) parts.push(`H ${styles.heightEm}em`);
   if (styles.fontPct) parts.push(`font ${styles.fontPct}%`);
   if (styles.radius !== undefined) parts.push(`r ${styles.radius}px`);
   if (styles.opacity !== undefined) parts.push(`α ${styles.opacity}`);
@@ -338,8 +338,8 @@ export function PreviewModal({ open, url, loading = false, locale = "ru", onClos
             <aside className="flex w-[300px] shrink-0 flex-col border-l border-[#3a3d41] bg-[#1e1e1e]">
               <div className="border-b border-[#3a3d41] p-2 text-[10px] leading-snug text-[#9da3b2]">
                 {ru
-                  ? "Кликните элемент. Тяните — перемещение, угловой маркер — размер. Стрелки — 1px, Shift — 10px. Esc снимает выделение."
-                  : "Click an element. Drag to move, corner handle to resize. Arrows nudge 1px, Shift 10px. Esc deselects."}
+                  ? "Кликните элемент. Тяните — перемещение, синие маркеры — ширина и высота по отдельности, розовый угол — оба сразу. Стрелки — 1px, Shift — 10px. Esc снимает выделение."
+                  : "Click an element. Drag to move, blue handles resize width/height separately, the pink corner resizes both. Arrows nudge 1px, Shift 10px. Esc deselects."}
               </div>
 
               {selected ? (
@@ -359,13 +359,14 @@ export function PreviewModal({ open, url, loading = false, locale = "ru", onClos
                       />
                     </label>
                     <label className={labelClass}>
-                      {ru ? "Высота, %" : "Height, %"}
+                      {ru ? "Высота, em" : "Height, em"}
                       <input
-                        type="number" min={2} max={100} step={1}
+                        type="number" min={0.5} max={60} step={0.5}
                         className={inputClass}
-                        value={selected.styles.heightPct ?? ""}
+                        value={selected.styles.heightEm ?? ""}
                         placeholder="auto"
-                        onChange={(event) => updateStyle({ heightPct: event.target.value === "" ? undefined : Number(event.target.value) })}
+                        title={ru ? "1 em ≈ текущий размер шрифта — высота масштабируется вместе с ним" : "1 em ≈ current font size — the height scales with it"}
+                        onChange={(event) => updateStyle({ heightEm: event.target.value === "" ? undefined : Number(event.target.value) })}
                       />
                     </label>
                     <label className={labelClass}>
