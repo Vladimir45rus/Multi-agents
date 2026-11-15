@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildVisualBrief, describeOffset, normalizeVisualEdit, type VisualEdit } from "@/lib/visual-brief";
+import { buildVisualBrief, describeOffset, describeStyles, normalizeVisualEdit, parseStyleHints, styleSuggestion, type VisualEdit } from "@/lib/visual-brief";
 
 const baseEdit: VisualEdit = {
   id: 1,
@@ -82,5 +82,36 @@ describe("buildVisualBrief", () => {
     expect(brief).toContain("[VISUAL EDITS FROM THE PREVIEW BUILDER]");
     expect(brief).toContain("move by 40 px right and 12 px up");
     expect(brief).toContain("[/VISUAL EDITS]");
+  });
+
+  it("describes size, colors and emits a CSS suggestion", () => {
+    const styled: VisualEdit = {
+      ...baseEdit,
+      styles: JSON.stringify({ widthPct: 60, fontPct: 120, color: "#ffffff", background: "#0e639c", radius: 8, opacity: 0.9 }),
+    };
+    const brief = buildVisualBrief([styled]);
+    expect(brief).toContain("ширина 60% родителя");
+    expect(brief).toContain("шрифт 120%");
+    expect(brief).toContain("фон #0e639c");
+    expect(brief).toContain("CSS: width: 60%; font-size: 120%; color: #ffffff; background-color: #0e639c; border-radius: 8px; opacity: 0.9;");
+  });
+});
+
+describe("style hints", () => {
+  it("parses only known keys", () => {
+    expect(parseStyleHints('{"widthPct":60,"evil":true}')).toEqual({ widthPct: 60 });
+    expect(parseStyleHints("not json")).toEqual({});
+    expect(parseStyleHints(undefined)).toEqual({});
+  });
+
+  it("describes styles in both languages", () => {
+    const styles = JSON.stringify({ widthPct: 50, radius: 4, opacity: 0.5 });
+    expect(describeStyles(styles)).toEqual(["ширина 50% родителя", "радиус 4px", "прозрачность 0.5"]);
+    expect(describeStyles(styles, "en")).toEqual(["width 50% of the parent", "radius 4px", "opacity 0.5"]);
+  });
+
+  it("builds a paste-ready CSS string", () => {
+    expect(styleSuggestion(JSON.stringify({ paddingPx: 12, fontPct: 90 }))).toBe("font-size: 90%; padding: 12px;");
+    expect(styleSuggestion("")).toBe("");
   });
 });

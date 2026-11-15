@@ -60,6 +60,68 @@ export function normalizeVisualEdit(input: VisualEditInput) {
   };
 }
 
+export type StyleHints = {
+  widthPct?: number;
+  heightPct?: number;
+  fontPct?: number;
+  color?: string;
+  background?: string;
+  radius?: number;
+  opacity?: number;
+  paddingPx?: number;
+};
+
+const STYLE_KEYS: Array<keyof StyleHints> = ["widthPct", "heightPct", "fontPct", "color", "background", "radius", "opacity", "paddingPx"];
+
+/** Parses the JSON style payload stored in visual_edits.styles. */
+export function parseStyleHints(styles: string | undefined): StyleHints {
+  if (!styles) return {};
+  try {
+    const parsed = JSON.parse(styles) as StyleHints;
+    if (!parsed || typeof parsed !== "object") return {};
+    const clean: StyleHints = {};
+    const target = clean as Record<string, unknown>;
+    for (const key of STYLE_KEYS) {
+      const value = parsed[key];
+      if (value !== undefined && value !== null) target[key] = value;
+    }
+    return clean;
+  } catch {
+    return {};
+  }
+}
+
+/** Human-readable style deltas. Percentages are used on purpose: they scale. */
+export function describeStyles(styles: string | undefined, locale: "ru" | "en" = "ru"): string[] {
+  const hints = parseStyleHints(styles);
+  const parts: string[] = [];
+  const ru = locale === "ru";
+  if (hints.widthPct) parts.push(ru ? `ширина ${hints.widthPct}% родителя` : `width ${hints.widthPct}% of the parent`);
+  if (hints.heightPct) parts.push(ru ? `высота ${hints.heightPct}% родителя` : `height ${hints.heightPct}% of the parent`);
+  if (hints.fontPct) parts.push(ru ? `шрифт ${hints.fontPct}%` : `font ${hints.fontPct}%`);
+  if (hints.color) parts.push(ru ? `цвет текста ${hints.color}` : `text color ${hints.color}`);
+  if (hints.background) parts.push(ru ? `фон ${hints.background}` : `background ${hints.background}`);
+  if (hints.radius !== undefined) parts.push(ru ? `радиус ${hints.radius}px` : `radius ${hints.radius}px`);
+  if (hints.opacity !== undefined) parts.push(ru ? `прозрачность ${hints.opacity}` : `opacity ${hints.opacity}`);
+  if (hints.paddingPx !== undefined) parts.push(ru ? `внутренний отступ ${hints.paddingPx}px` : `padding ${hints.paddingPx}px`);
+  return parts;
+}
+
+/** CSS the agent can paste (or adapt) when the project uses classic CSS. */
+export function styleSuggestion(styles: string | undefined): string {
+  const hints = parseStyleHints(styles);
+  const rules: string[] = [];
+  if (hints.widthPct) rules.push(`width: ${hints.widthPct}%;`);
+  if (hints.heightPct) rules.push(`height: ${hints.heightPct}%;`);
+  if (hints.fontPct) rules.push(`font-size: ${hints.fontPct}%;`);
+  if (hints.color) rules.push(`color: ${hints.color};`);
+  if (hints.background) rules.push(`background-color: ${hints.background};`);
+  if (hints.radius !== undefined) rules.push(`border-radius: ${hints.radius}px;`);
+  if (hints.opacity !== undefined) rules.push(`opacity: ${hints.opacity};`);
+  if (hints.paddingPx !== undefined) rules.push(`padding: ${hints.paddingPx}px;`);
+  return rules.join(" ");
+}
+
 /** Human-readable movement, e.g. "сдвинуть на 40 px вправо и 12 px вверх". */
 export function describeOffset(offsetX: number, offsetY: number, locale: "ru" | "en" = "ru") {
   const parts: string[] = [];
@@ -99,10 +161,14 @@ export function buildVisualBrief(edits: VisualEdit[], locale: "ru" | "en" = "ru"
     else if (edit.action === "resize") details.push(locale === "ru" ? "изменить размер" : "resize the element");
     else details.push(locale === "ru" ? "изменить стили" : "change styles");
     if (edit.note) details.push(locale === "ru" ? `комментарий: ${edit.note}` : `note: ${edit.note}`);
+    const styleParts = describeStyles(edit.styles, locale);
+    if (styleParts.length) details.push(styleParts.join(", "));
     if (edit.styles) details.push(locale === "ru" ? `стили: ${edit.styles}` : `styles: ${edit.styles}`);
+    const css = styleSuggestion(edit.styles);
     return [
       `${index + 1}. ${title} — ${details.join("; ")}.`,
       `   ${locale === "ru" ? "Селектор" : "Selector"}: ${edit.selector}`,
+      css ? `   CSS: ${css}` : "",
       edit.domPath ? `   ${locale === "ru" ? "Путь в DOM" : "DOM path"}: ${edit.domPath}` : "",
     ].filter(Boolean).join("\n");
   });
