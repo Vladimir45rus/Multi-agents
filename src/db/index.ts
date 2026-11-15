@@ -36,15 +36,22 @@ export const db = drizzle(
       return { rows: [] };
     }
 
+    // Audit low #4: map rows by the statement's own column order and refuse
+    // ambiguous results. A JOIN with two same-named columns used to be silently
+    // collapsed by Object.values(), shifting every following value.
+    const columnNames = statement.columns().map((column) => column.name);
+    if (new Set(columnNames).size !== columnNames.length) {
+      throw new Error("Query returns duplicate column names; alias them with `as` so rows can be mapped safely");
+    }
+    const toRow = (row: Record<string, unknown>) => columnNames.map((name) => row[name]);
+
     if (method === "get") {
-      const row = statement.get(...params);
-      return { rows: row ? [Object.values(row)] : [] };
+      const row = statement.get(...params) as Record<string, unknown> | undefined;
+      return { rows: row ? [toRow(row)] : [] };
     }
 
-    const rows = statement.all(...params);
-    return {
-      rows: rows.map((row) => Object.values(row)),
-    };
+    const rows = statement.all(...params) as Array<Record<string, unknown>>;
+    return { rows: rows.map(toRow) };
   },
   { schema },
 );

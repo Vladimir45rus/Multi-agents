@@ -10,72 +10,13 @@ import { withSqliteTransaction } from "@/db";
 import { agents, projectFiles, workspaceFileHistory, workspaceSettings } from "@/db/schema";
 import { ensureWorkspaceBootstrap } from "@/lib/workspace";
 import { assertRelativePath, compact, resolveWithinRoot, toPosix } from "@/lib/workspace-paths";
+import { IGNORED_DIRECTORIES, isIgnoredFile, isTextPath } from "@/lib/workspace-file-policy";
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_PATCH_BYTES = 8 * 1024 * 1024;
 const MAX_TREE_FILES = 10_000;
 const MAX_SEARCH_RESULTS = 200;
-const IGNORED_DIRECTORIES = new Set([
-  ".git",
-  ".multi-agent-backups",
-  "node_modules",
-  ".next",
-  "dist",
-  "build",
-  "coverage",
-  ".cache",
-  // Audit H1: build artefacts and virtual environments contain binaries and
-  // generated files. Indexing them made project-wide search unusable because a
-  // single unreadable file aborted the whole scan.
-  "release",
-  "out",
-  "target",
-  "obj",
-  ".turbo",
-  ".venv",
-  "venv",
-  ".gradle",
-  ".idea",
-  // Agent/tooling scratch folders are not project sources.
-  ".zwork",
-]);
-// Audit H2: secret material must never be readable as project source. The check
-// is enforced on every read path, not only while building the tree.
-const IGNORED_FILE_PATTERNS = [
-  /^\.env/i,
-  /^\.npmrc$/i,
-  /^\.netrc$/i,
-  /^\.git-credentials$/i,
-  /^\.htpasswd$/i,
-  /^dev\.db$/i,
-  /^id_(?:rsa|dsa|ecdsa|ed25519)/i,
-  /^credentials$/i,
-  /\.(?:pem|key|p12|pfx|keystore|jks|ppk)$/i,
-];
-// Extension-less files are text only when they are well-known project metadata
-// (LICENSE, Dockerfile, ...). Everything else without an extension is treated as
-// binary — that is what a `chrome-sandbox`-style artefact requires.
-const NO_EXTENSION_TEXT_FILES = new Set([
-  ".editorconfig",
-  ".gitattributes",
-  ".gitignore",
-  "authors",
-  "changelog",
-  "contributing",
-  "dockerfile",
-  "gemfile",
-  "licence",
-  "license",
-  "makefile",
-  "notice",
-  "procfile",
-  "rakefile",
-  "readme",
-]);
 const VIRTUAL_DIRECTORY_PREFIX = ".multi-agent-virtual-dirs/";
-const TEXT_EXTENSIONS = new Set([
-  "cjs", "css", "csv", "go", "html", "java", "js", "json", "jsx", "kt", "md", "mjs", "py", "rb", "rs", "sql", "ts", "tsx", "txt", "xml", "yaml", "yml",
-]);
 
 type RootSettings = { projectRoot: string };
 
@@ -106,19 +47,6 @@ function languageFromPath(filePath: string) {
   const extension = path.extname(filePath).slice(1).toLowerCase();
   if (["ts", "tsx", "js", "jsx", "mjs", "cjs", "json"].includes(extension)) return extension;
   return extension || "plaintext";
-}
-
-function isIgnoredFile(filePath: string) {
-  const name = path.basename(filePath);
-  return IGNORED_FILE_PATTERNS.some((pattern) => pattern.test(name));
-}
-
-function isTextPath(filePath: string) {
-  if (isIgnoredFile(filePath)) return false;
-  const name = path.basename(filePath).toLowerCase();
-  const extension = path.extname(filePath).slice(1).toLowerCase();
-  if (!extension) return NO_EXTENSION_TEXT_FILES.has(name);
-  return TEXT_EXTENSIONS.has(extension);
 }
 
 async function getRootSettings(): Promise<RootSettings> {
@@ -513,13 +441,38 @@ async function assertMainAgent(actorAgentId: number) {
   if (actor.role !== "main") throw new Error("Only the Main Agent can modify workspace files");
 }
 
+const MAX_BACKUPS = 300;
+
+// Backups live outside the project, so nobody prunes them by hand. Keep the
+// newest few hundred and drop the rest (best-effort, never blocks a patch).
+async function pruneBackups(directory: string) {
+  try {
+    const entries = await readdir(directory, { withFileTypes: true });
+    const files = entries.filter((entry) => entry.isFile());
+    if (files.length <= MAX_BACKUPS) return;
+    const stats = await Promise.all(files.map(async (entry) => {
+      const full = path.join(directory, entry.name);
+      const info = await stat(full);
+      return { full, mtime: info.mtimeMs };
+    }));
+    stats.sort((left, right) => left.mtime - right.mtime);
+    for (const item of stats.slice(0, stats.length - MAX_BACKUPS)) {
+      await unlink(item.full).catch(() => undefined);
+    }
+  } catch {
+    // Cleanup is best-effort: a failure must never fail the write.
+  }
+}
+
 async function writeBackup(content: string) {
   // Audit low #3: backups used to land in the user's project
   // (.multi-agent-backups/), polluting git status and every project scan. They
   // now live next to the app's other state, outside any repository.
-  const backupAbsolute = path.join(os.homedir(), ".multi-agent-studio", "backups", `${Date.now()}-${randomUUID()}.bak`);
-  await mkdir(path.dirname(backupAbsolute), { recursive: true });
+  const directory = path.join(os.homedir(), ".multi-agent-studio", "backups");
+  const backupAbsolute = path.join(directory, `${Date.now()}-${randomUUID()}.bak`);
+  await mkdir(directory, { recursive: true });
   await writeFile(backupAbsolute, content, "utf8");
+  await pruneBackups(directory);
   return backupAbsolute;
 }
 

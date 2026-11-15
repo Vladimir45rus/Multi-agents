@@ -2,12 +2,13 @@ import { getWorkspaceSnapshot, saveFileContent } from "@/lib/workspace";
 import { applyWorkspacePatch, getWorkspaceRoot } from "@/lib/workspace-files";
 import { recordApiError } from "@/lib/api-errors";
 import { mobileAccessError } from "@/lib/mobile-auth";
+import { writeAccessError } from "@/lib/studio-session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function PUT(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const accessError = await mobileAccessError(request);
+  const accessError = await writeAccessError(request);
   if (accessError) return accessError;
   try {
     const { id } = await params;

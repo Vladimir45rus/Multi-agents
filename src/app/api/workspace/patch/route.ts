@@ -1,10 +1,14 @@
 import { applyWorkspacePatch, type WorkspacePatchFile } from "@/lib/workspace-files";
 import { recordApiError } from "@/lib/api-errors";
+import { writeAccessError } from "@/lib/studio-session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: Request) {
+  // Audit M14: file writes require the studio session, not just an actor id.
+  const accessError = await writeAccessError(request);
+  if (accessError) return accessError;
   try {
     const body = (await request.json()) as { actorAgentId?: number; patch?: WorkspacePatchFile[] };
     if (!body.actorAgentId || !Number.isInteger(body.actorAgentId)) {

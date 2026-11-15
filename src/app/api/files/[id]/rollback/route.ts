@@ -2,12 +2,13 @@ import { getWorkspaceSnapshot, rollbackFileContent } from "@/lib/workspace";
 import { getWorkspaceRoot, rollbackWorkspaceFile } from "@/lib/workspace-files";
 import { recordApiError } from "@/lib/api-errors";
 import { mobileAccessError } from "@/lib/mobile-auth";
+import { writeAccessError } from "@/lib/studio-session";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 
 export async function POST(request: Request, { params }: { params: Promise<{ id: string }> }) {
-  const accessError = await mobileAccessError(request);
+  const accessError = await writeAccessError(request);
   if (accessError) return accessError;
   try {
     const { id } = await params;

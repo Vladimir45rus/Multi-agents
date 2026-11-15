@@ -700,6 +700,24 @@ export function IdeApp() {
   const [reportText, setReportText] = useState("");
   const chatAbortRef = useRef<AbortController | null>(null);
 
+  // Audit M14: a per-process session secret proves the write comes from this
+  // UI. It is fetched once over loopback and sent with every mutating call.
+  const studioSessionRef = useRef<string>("");
+  async function studioHeaders(): Promise<Record<string, string>> {
+    if (!studioSessionRef.current) {
+      try {
+        const response = await fetch("/api/session", { cache: "no-store" });
+        if (response.ok) {
+          const payload = (await response.json()) as { token?: string };
+          studioSessionRef.current = payload.token ?? "";
+        }
+      } catch {
+        /* the mutation below will answer with a clear 403 */
+      }
+    }
+    return studioSessionRef.current ? { "x-studio-session": studioSessionRef.current } : {};
+  }
+
   // Listen for auto-updater events from Electron main process.
   useEffect(() => {
     const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
@@ -1679,7 +1697,7 @@ export function IdeApp() {
     try {
       const response = await fetch("/api/workspace/entry", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await studioHeaders()) },
         body: JSON.stringify({ actorAgentId: mainAgent.id, path, kind: createEntryDraft.kind }),
       });
       const payload = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -1720,7 +1738,7 @@ export function IdeApp() {
     try {
       const response = await fetch("/api/workspace/entry", {
         method: "PATCH",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await studioHeaders()) },
         body: JSON.stringify({ actorAgentId: mainAgent.id, path: filePath, nextPath: nextPath.trim() }),
       });
       if (!response.ok) {
@@ -1746,7 +1764,7 @@ export function IdeApp() {
     try {
       const response = await fetch("/api/workspace/entry", {
         method: "DELETE",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await studioHeaders()) },
         body: JSON.stringify({ actorAgentId: mainAgent.id, path: filePath }),
       });
       if (!response.ok) {
@@ -2047,7 +2065,7 @@ export function IdeApp() {
     try {
       const res = await fetch(`/api/files/${selectedFile.id}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await studioHeaders()) },
         body: JSON.stringify({ content: editorText, actorAgentId: mainAgent.id, locale }),
       });
       if (!res.ok) {
@@ -2070,7 +2088,7 @@ export function IdeApp() {
     try {
       const res = await fetch(`/api/files/${selectedFile.id}/rollback`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...(await studioHeaders()) },
         body: JSON.stringify({ actorAgentId: mainAgent.id, locale }),
       });
       if (!res.ok) {
