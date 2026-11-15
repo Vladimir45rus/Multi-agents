@@ -692,6 +692,16 @@ export function IdeApp() {
   const [workspaceRootDraft, setWorkspaceRootDraft] = useState("");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
+  const [recentProjects, setRecentProjects] = useState<string[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem("ma-recent-projects");
+      const parsed = raw ? JSON.parse(raw) : [];
+      return Array.isArray(parsed) ? parsed.filter((item) => typeof item === "string").slice(0, 5) : [];
+    } catch {
+      return [];
+    }
+  });
   const [attachmentLink, setAttachmentLink] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [optimisticMessages, setOptimisticMessages] = useState<WorkspaceMessage[]>([]);
@@ -851,7 +861,7 @@ export function IdeApp() {
         className="flex h-7 w-7 items-center justify-center rounded text-xs hover:bg-white/10"
         style={{ color: "var(--text-secondary)" }}
       >
-        {collapsed ? "▸" : "◂"}
+        {collapsed ? "»" : "«"}
       </button>
     );
   };
@@ -1827,7 +1837,13 @@ export function IdeApp() {
       });
       const payload = (await res.json().catch(() => null)) as { error?: string; root?: string; imported?: number } | null;
       if (!res.ok) throw new Error(payload?.error ?? "Failed to connect folder");
-      setWorkspaceRootDraft(payload?.root ?? directory);
+      const connectedRoot = payload?.root ?? directory;
+      setWorkspaceRootDraft(connectedRoot);
+      setRecentProjects((previous) => {
+        const next = [connectedRoot, ...previous.filter((item) => item !== connectedRoot)].slice(0, 5);
+        try { window.localStorage.setItem("ma-recent-projects", JSON.stringify(next)); } catch { /* ignore */ }
+        return next;
+      });
       setStatus(`${t.folderConnected}: ${payload?.imported ?? 0} files`);
       setOpenTabs([]);
       setSelectedFileId(null);
@@ -3049,6 +3065,16 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   <p className="mb-2 truncate text-[10px] text-[var(--text-secondary)]" title={workspaceRootDraft || data?.settings.projectRoot}>
                     {workspaceRootDraft || data?.settings.projectRoot || (locale === "ru" ? "Папка не выбрана" : "No folder selected")}
                   </p>
+                  {recentProjects.length > 0 ? (
+                    <div className="mb-1">
+                      <p className="mb-1 text-[9px] uppercase tracking-wide text-[var(--text-secondary)]">{locale === "ru" ? "Недавние" : "Recent"}</p>
+                      {recentProjects.map((projectPath) => (
+                        <button key={projectPath} type="button" onClick={() => { setProjectMenuOpen(false); void connectWorkspaceFolder(projectPath); }} className="mb-0.5 w-full truncate rounded px-1 py-1 text-left text-[10px] hover:bg-[var(--bg-hover)]" title={projectPath}>
+                          {projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath}
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
                   <button type="button" onClick={() => { setProjectMenuOpen(false); void pickWorkspaceFolder(); }} className="mb-1 w-full rounded bg-[#0e639c] px-2 py-2 text-left text-xs text-white">
                     📂 {locale === "ru" ? "Открыть папку проекта…" : "Open project folder…"}
                   </button>
@@ -3148,10 +3174,18 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     </div>
                   ) : null}
                   {workspaceTree.length === 0 ? (
-                    <div className="px-2 py-3 text-[10px] leading-relaxed text-[var(--text-secondary)]">
-                      {locale === "ru"
-                        ? "Папка пуста или проект не подключён. Подключи папку: Настройки → Рабочая папка."
-                        : "The folder is empty or no project is connected. Connect one: Settings → Workspace folder."}
+                    <div className="flex flex-col gap-2 px-2 py-3">
+                      <p className="text-[10px] leading-relaxed text-[var(--text-secondary)]">
+                        {workspaceTreeRoot
+                          ? (locale === "ru" ? "Папка пуста — создайте первый файл." : "The folder is empty — create the first file.")
+                          : (locale === "ru" ? "Проект не подключён. Откройте папку или создайте новый проект." : "No project connected. Open a folder or create a new project.")}
+                      </p>
+                      {!workspaceTreeRoot ? (
+                        <>
+                          <button type="button" onClick={() => void pickWorkspaceFolder()} className="w-full rounded bg-[#0e639c] px-2 py-2 text-[11px] font-semibold text-white">📂 {locale === "ru" ? "Открыть папку проекта" : "Open project folder"}</button>
+                          <button type="button" onClick={() => setTemplateOpen(true)} className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-2 text-[11px]">✨ {locale === "ru" ? "Новый проект из пресета" : "New project from preset"}</button>
+                        </>
+                      ) : null}
                     </div>
                   ) : workspaceTree.map((node) => renderWorkspaceTreeNode(node, 0))}
                 </div>
@@ -3504,10 +3538,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         ) : null}
                       </div>
                     ))}
-                    <button type="button" onClick={addTerminalTab} title={locale === "ru" ? "Новый терминал" : "New terminal"} className="shrink-0 rounded px-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">+</button>
+                    <button type="button" onClick={addTerminalTab} title={locale === "ru" ? "Новая вкладка терминала" : "New terminal tab"} aria-label={locale === "ru" ? "Новая вкладка терминала" : "New terminal tab"} className="shrink-0 rounded px-1.5 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">＋</button>
                   </div>
                   <div className="flex items-center gap-0.5">
-                    <button type="button" onClick={() => void clearTerminal()} disabled={busy} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-0.5 text-[10px] text-slate-300 hover:border-blue-400 disabled:opacity-50">clear</button>
+                    <button type="button" onClick={() => void clearTerminal()} disabled={busy} title={locale === "ru" ? "Очистить историю терминала" : "Clear terminal history"} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-0.5 text-[10px] text-slate-300 hover:border-blue-400 disabled:opacity-50">🧹 {locale === "ru" ? "Очистить" : "Clear"}</button>
                     {renderCollapseButton("terminal")}
                     {renderExpandButton("terminal")}
                   </div>

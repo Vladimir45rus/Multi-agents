@@ -326,12 +326,23 @@ body > div {
   right: 0;
   bottom: 0;
   z-index: 50;
-  width: 420px;
+  width: 540px;
   height: 100%;
   background: #0f172a;
   border-left: 1px solid #1e293b;
   box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.75);
   animation: settings-drawer-in 0.2s ease-out both;
+}
+
+/* UX fix: section titles stay visible while the long settings list scrolls. */
+.settings-drawer section > h3,
+.settings-drawer section > p:first-child {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: inherit;
+  padding-top: 2px;
+  padding-bottom: 2px;
 }
 
 @keyframes settings-drawer-in {
