@@ -14,6 +14,7 @@ import { completeProviderResponse, providerRequestFromAgent, type GatewayMessage
 import { executeToolCall, getToolDefinitions, parseToolCall, toolResultMessage } from "@/lib/agent-tools";
 import { getProviderPreset } from "@/lib/providers";
 import { parsePatchInstruction, looksLikeTruncatedJson } from "@/lib/patch-parser";
+import { extractFilePaths, isPathInScope, mergeTeamPatches, pickOwner, SCOPE_RULES } from "@/lib/team-scopes";
 import { ensureWorkspaceBootstrap, getAgentProviderKey, getWorkspaceSettingsRow, pushMessage } from "@/lib/workspace";
 import { resolveFallbackModels } from "@/lib/provider-models";
 import { resolveCustomAgentRequest } from "@/lib/custom-providers";
@@ -712,6 +713,92 @@ async function completeAgent(
   }
 }
 
+function scopeDescription(role: string) {
+  const rule = SCOPE_RULES[role];
+  if (!rule) return "";
+  const parts = [...rule.prefixes];
+  if (rule.suffixes?.length) parts.push(...rule.suffixes.map((suffix) => `*${suffix}`));
+  return parts.join(", ");
+}
+
+/** Team mode: every advisor writes only inside its own zone. */
+async function collectTeamPatches(options: {
+  advisors: Array<typeof agents.$inferSelect>;
+  task: string;
+  leadDecision: string;
+  signal?: AbortSignal;
+  locale: Locale;
+  projectContext?: ProjectContextInput;
+}): Promise<Array<{ agent: string; role: string; patches: WorkspacePatchFile[]; rejected: string[] }>> {
+  return Promise.all(options.advisors.map(async (agent) => {
+    const scopeRole = compact(agent.role).toLowerCase();
+    const scopes = scopeDescription(scopeRole);
+    if (!scopes) return { agent: agent.name, role: scopeRole, patches: [], rejected: [] };
+    try {
+      const raw = await completeAgent(
+        agent,
+        advisorSystemPrompt(options.locale, agent, toAdvisorRole(scopeRole)),
+        t(
+          options.locale,
+          `Задача: ${options.task}\n\nРешение Главного:\n${options.leadDecision}\n\nТы отвечаешь ТОЛЬКО за зоны: ${scopes}. Верни патчи для своей зоны; если менять нечего — "patches": [].`,
+          `Task: ${options.task}\n\nLead decision:\n${options.leadDecision}\n\nYou own ONLY these zones: ${scopes}. Return patches for your zone; if nothing is needed — "patches": [].`,
+        ) + `\n\n${PATCH_JSON_INSTRUCTION[options.locale]}`,
+        options.signal,
+        true,
+        options.locale,
+        options.projectContext,
+      );
+      const parsed = parsePatchInstruction(raw);
+      const patches = parsed.patches.filter((patch) => isPathInScope(scopeRole, patch.path));
+      const rejected = parsed.patches.filter((patch) => !isPathInScope(scopeRole, patch.path)).map((patch) => patch.path);
+      return { agent: agent.name, role: scopeRole, patches, rejected };
+    } catch {
+      return { agent: agent.name, role: scopeRole, patches: [], rejected: [] };
+    }
+  }));
+}
+
+/** Team mode: the failure goes back to the agent that owns the broken file. */
+async function requestOwnerFix(options: {
+  advisors: Array<typeof agents.$inferSelect>;
+  mainAgent: typeof agents.$inferSelect;
+  failureLog: string;
+  task: string;
+  signal?: AbortSignal;
+  locale: Locale;
+  projectContext?: ProjectContextInput;
+}): Promise<{ patches: WorkspacePatchFile[]; owner: string } | null> {
+  const failingPaths = extractFilePaths(options.failureLog);
+  if (failingPaths.length === 0) return null;
+
+  const team = [
+    { name: options.mainAgent.name, role: "main" },
+    ...options.advisors.map((agent) => ({ name: agent.name, role: compact(agent.role).toLowerCase() })),
+  ];
+  const owner = pickOwner(team, failingPaths[0]);
+  if (!owner || owner.role === "main") return null;
+
+  const agentRow = options.advisors.find((agent) => agent.name === owner.name);
+  if (!agentRow) return null;
+
+  try {
+    const raw = await completeAgent(
+      agentRow,
+      advisorSystemPrompt(options.locale, agentRow, toAdvisorRole(owner.role)),
+      fixPrompt(options.locale, options.task, options.failureLog)
+        + `\n\n${t(options.locale, `Ты владелец зоны ${scopeDescription(owner.role)}. Правь только файлы из своей зоны.`, `You own ${scopeDescription(owner.role)}. Touch only files from your zone.`)}`,
+      options.signal,
+      true,
+      options.locale,
+      options.projectContext,
+    );
+    const patches = parsePatchInstruction(raw).patches.filter((patch) => isPathInScope(owner.role, patch.path));
+    return patches.length > 0 ? { patches, owner: owner.name } : null;
+  } catch {
+    return null;
+  }
+}
+
 function summarizePatches(locale: Locale, patches: WorkspacePatchFile[]) {
   if (patches.length === 0) return t(locale, "Изменений кода не требуется.", "No code changes required.");
   return patches.map((patch) => `${patch.operation} ${patch.path}`).join(", ");
@@ -873,6 +960,12 @@ export async function* runOrchestrator(options: {
       .where(and(eq(agents.isActive, true), ne(agents.role, "main")))
       .orderBy(asc(agents.id));
 
+    // Team mode: advisors produce patches for their own zones in the first
+    // iteration, and failures go back to the owner of the broken file.
+    const orchestratorSettings = await getWorkspaceSettingsRow();
+    const teamMode = Boolean(orchestratorSettings.teamMode);
+    const teamAdvisors = advisorRows.filter((agent) => compact(agent.role).toLowerCase() !== "observer");
+
     yield { type: "task_started", taskId, task, maxIterations, mode };
     await mirrorToGroupChat(t(locale, `🚀 Оркестратор запустил задачу: ${task}`, `🚀 Orchestrator started the task: ${task}`));
     notifyTelegram(`🚀 Старт задачи:\n${task.slice(0, 600)}`);
@@ -1027,6 +1120,56 @@ export async function* runOrchestrator(options: {
         }
         lastDecision = decisionInstruction.decision || rawDecision.trim();
         lastPatches = decisionPatches;
+
+        // Team mode: the team writes inside its zones, the Lead's own patches
+        // win on conflicts, and everything is applied as one atomic set.
+        if (teamMode) {
+          const teamGroups = await collectTeamPatches({
+            advisors: teamAdvisors,
+            task,
+            leadDecision: lastDecision,
+            signal,
+            locale,
+            projectContext: options.projectContext,
+          });
+          const merged = mergeTeamPatches([
+            { agent: mainAgent.name, patches: lastPatches },
+            ...teamGroups.map((group) => ({ agent: group.agent, patches: group.patches })),
+          ]);
+          const rejected = teamGroups.flatMap((group) => group.rejected.map((filePath) => `${group.agent}: ${filePath}`));
+          const produced = teamGroups.filter((group) => group.patches.length > 0);
+          if (produced.length > 0) {
+            lastPatches = merged.patches;
+            yield {
+              type: "event",
+              event: await recordEvent({
+                taskId,
+                type: "ADVICE_POSTED",
+                agent: "Team",
+                role: "orchestrator",
+                iteration,
+                arguments: produced
+                  .map((group) => `${group.agent} (${group.role}): ${group.patches.map((patch) => `${patch.operation} ${patch.path}`).join(", ")}`)
+                  .join("\n"),
+                proposal: t(locale, `Команда подготовила ${merged.patches.length} файл(ов)`, `The team prepared ${merged.patches.length} file(s)`),
+              }),
+            };
+          }
+          if (merged.conflicts.length > 0 || rejected.length > 0) {
+            yield {
+              type: "event",
+              event: await recordEvent({
+                taskId,
+                type: "CONFLICT_DETECTED",
+                agent: "Orchestrator",
+                role: "orchestrator",
+                iteration,
+                arguments: [...merged.conflicts, ...rejected].join("\n"),
+                proposal: t(locale, "Часть правок отброшена: чужая зона или конфликт", "Some edits were dropped: foreign zone or conflict"),
+              }),
+            };
+          }
+        }
         yield {
           type: "event",
           event: await recordEvent({
@@ -1044,8 +1187,28 @@ export async function* runOrchestrator(options: {
       } else {
         yield { type: "step", step: "fix" };
 
+        // Team mode: the owner of the failing file fixes it first; the Lead takes
+        // over only when nobody owns the file or the owner produced nothing.
+        let teamFix: { patches: WorkspacePatchFile[]; owner: string } | null = null;
+        if (teamMode && lastCheckFailure) {
+          teamFix = await requestOwnerFix({
+            advisors: teamAdvisors,
+            mainAgent,
+            failureLog: lastCheckFailure,
+            task,
+            signal,
+            locale,
+            projectContext: options.projectContext,
+          });
+        }
+
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "started" };
-        const rawFix = await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), fixPrompt(locale, task, lastCheckFailure), signal, true, locale, options.projectContext);
+        const rawFix = teamFix
+          ? JSON.stringify({
+              decision: t(locale, `Исправление от владельца зоны: ${teamFix.owner}`, `Fix by the zone owner: ${teamFix.owner}`),
+              patches: teamFix.patches,
+            })
+          : await completeAgent(mainAgent, mainSystemPrompt(locale, mainAgent), fixPrompt(locale, task, lastCheckFailure), signal, true, locale, options.projectContext);
         yield { type: "agent_status", agent: mainAgent.name, role: "main", status: "done" };
         const fixInstruction = parsePatchInstruction(rawFix);
         // B3 fix: same truncation guard for the auto-fix branch, with the same

@@ -131,6 +131,7 @@ type WorkspaceData = {
     githubRepo: string;
     githubAutoPush: boolean;
     autoApprove: boolean;
+    teamMode: boolean;
     mobileAuthToken: string;
     localtunnelEnabled: boolean;
     localtunnelUrl: string;
@@ -641,6 +642,7 @@ export function IdeApp() {
   const [githubRepoDraft, setGithubRepoDraft] = useState("");
   const [githubAutoPushDraft, setGithubAutoPushDraft] = useState(false);
   const [autoApproveDraft, setAutoApproveDraft] = useState(false);
+  const [teamModeDraft, setTeamModeDraft] = useState(false);
   const [mobileTokenDraft, setMobileTokenDraft] = useState("");
   const [localtunnelEnabledDraft, setLocaltunnelEnabledDraft] = useState(false);
   const [localtunnelUrl, setLocaltunnelUrl] = useState("");
@@ -869,6 +871,7 @@ export function IdeApp() {
       || githubRepoDraft !== saved.githubRepo
       || githubAutoPushDraft !== saved.githubAutoPush
       || autoApproveDraft !== saved.autoApprove
+      || teamModeDraft !== saved.teamMode
       || mobileTokenDraft !== (saved.mobileAuthToken ?? "")
       || localtunnelEnabledDraft !== Boolean(saved.localtunnelEnabled)
       || previewCommandDraft !== saved.previewCommand
@@ -878,7 +881,7 @@ export function IdeApp() {
       || telegramChatIdDraft !== saved.telegramChatId
       || fallbackModelsDraft !== saved.fallbackModels.join("\n")
       || Object.values(apiKeysToRemove).some(Boolean);
-  }, [apiKeysDraft, apiKeysToRemove, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, removeGithubToken, autoApproveDraft, mobileTokenDraft, localtunnelEnabledDraft, previewCommandDraft, previewPortDraft, telegramTokenDraft, removeTelegramToken, telegramChatIdDraft, fallbackModelsDraft]);
+  }, [apiKeysDraft, apiKeysToRemove, data?.settings, githubAutoPushDraft, githubRepoDraft, githubTokenDraft, removeGithubToken, autoApproveDraft, teamModeDraft, mobileTokenDraft, localtunnelEnabledDraft, previewCommandDraft, previewPortDraft, telegramTokenDraft, removeTelegramToken, telegramChatIdDraft, fallbackModelsDraft]);
 
   const newAgentDirty = useMemo(() => Boolean(
     newAgent.name.trim()
@@ -1262,6 +1265,7 @@ export function IdeApp() {
         githubRepo: githubRepoDraft || settings.githubRepo,
         githubAutoPush: githubAutoPushDraft,
         autoApprove: autoApproveDraft,
+        teamMode: teamModeDraft,
         localtunnelEnabled: localtunnelEnabledDraft,
         fallbackModels: fallbackModelsDraft.split(/\r?\n|,/).map((value) => value.trim()).filter(Boolean),
         previewCommand: previewCommandDraft,
@@ -1429,6 +1433,7 @@ export function IdeApp() {
     setGithubRepoDraft(payload.settings?.githubRepo ?? "");
     setGithubAutoPushDraft(Boolean(payload.settings.githubAutoPush));
     setAutoApproveDraft(Boolean(payload.settings.autoApprove));
+    setTeamModeDraft(Boolean(payload.settings?.teamMode));
     setMobileTokenDraft(payload.settings.mobileAuthToken ?? "");
     // Audit M2: the access token is no longer written into a JS-readable
     // cookie. The server issues it as an HttpOnly cookie (/api/workspace,
@@ -1871,6 +1876,7 @@ export function IdeApp() {
           githubRepo: githubRepoDraft,
           githubAutoPush: githubAutoPushDraft,
           autoApprove: autoApproveDraft,
+          teamMode: teamModeDraft,
           mobileAuthToken: mobileTokenDraft,
           localtunnelEnabled: localtunnelEnabledDraft,
           localtunnelUrl,
@@ -3678,6 +3684,10 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   onChange={(e) => setAutoApproveDraft(e.target.checked)}
                 />
                 {locale === "ru" ? "Авто-утверждение (автономный цикл)" : "Auto-Approve (autonomous cycle)"}
+              </label>
+              <label className="mt-2 flex items-center gap-2 text-xs text-[#c6ced8]">
+                <input type="checkbox" checked={teamModeDraft} onChange={(e) => setTeamModeDraft(e.target.checked)} />
+                {locale === "ru" ? "Team mode — каждый агент пишет в своей зоне, Главный собирает" : "Team mode — each advisor writes in its own zone, the Lead assembles"}
               </label>
               <div className="mt-2">
                 <p className="text-xs text-[var(--text-secondary)]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>

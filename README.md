@@ -41,6 +41,12 @@ Type in chat:
 - `/docs` — generate documentation
 - `@AgentName` — mention a specific agent
 
+### Team mode (v1.6.0)
+- **Every advisor owns a slice of the project** — UI/UX writes components and styles, the architect writes API and `src/lib`, the tester writes `*.test.ts`, security owns the auth surface
+- **The Lead still assembles** — its patches win on conflicts, everything is applied as one atomic set, and dropped edits (foreign zone or conflict) are reported as events
+- **Failures go to the owner** — when typecheck/lint/tests fail, the file path from the log is matched to its owner and that agent receives the fix request; the Lead takes over when nobody owns the file
+- Off by default (Settings → Team mode), so Lead-only behaviour is unchanged
+
 ### Visual builder (v1.6.0)
 - **Pick and move any element in the preview** — a dedicated mode renders the project through the IDE proxy, injects an inspector into the page and lets you click a button, card or heading and drag it where you want it
 - **Precision nudging** — arrow keys move the selected element by 1px (Shift = 10px), Escape leaves the mode

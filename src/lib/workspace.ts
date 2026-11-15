@@ -92,6 +92,7 @@ type WorkspaceSnapshot = {
     githubRepo: string;
     githubAutoPush: boolean;
     autoApprove: boolean;
+    teamMode: boolean;
     mobileAuthToken: string;
     localtunnelEnabled: boolean;
     localtunnelUrl: string;
@@ -761,6 +762,7 @@ export async function getWorkspaceSnapshot(options?: { includeFileContent?: bool
       githubRepo: settingsRow.githubRepo,
       githubAutoPush: settingsRow.githubAutoPush,
       autoApprove: Boolean(settingsRow.autoApprove),
+      teamMode: Boolean(settingsRow.teamMode),
       mobileAuthToken: settingsRow.mobileAuthToken ?? "",
       localtunnelEnabled: Boolean(settingsRow.localtunnelEnabled),
       localtunnelUrl: settingsRow.localtunnelUrl ?? "",
@@ -844,6 +846,7 @@ export async function updateWorkspaceSettings(payload: {
   githubRepo?: string;
   githubAutoPush?: boolean;
   autoApprove?: boolean;
+  teamMode?: boolean;
   mobileAuthToken?: string;
   localtunnelEnabled?: boolean;
   localtunnelUrl?: string;
@@ -878,6 +881,7 @@ export async function updateWorkspaceSettings(payload: {
       githubRepo,
       githubAutoPush: payload.githubAutoPush === undefined ? current.githubAutoPush : Boolean(payload.githubAutoPush),
       autoApprove: payload.autoApprove === undefined ? current.autoApprove : Boolean(payload.autoApprove),
+      teamMode: payload.teamMode === undefined ? current.teamMode : Boolean(payload.teamMode),
       mobileAuthToken: payload.mobileAuthToken === undefined ? current.mobileAuthToken : compact(payload.mobileAuthToken),
       localtunnelEnabled: payload.localtunnelEnabled === undefined ? current.localtunnelEnabled : Boolean(payload.localtunnelEnabled),
       localtunnelUrl: payload.localtunnelUrl === undefined ? current.localtunnelUrl : compact(payload.localtunnelUrl),
