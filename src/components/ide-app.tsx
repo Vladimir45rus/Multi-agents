@@ -690,6 +690,8 @@ export function IdeApp() {
 
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [workspaceRootDraft, setWorkspaceRootDraft] = useState("");
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [newProjectName, setNewProjectName] = useState("");
   const [attachmentLink, setAttachmentLink] = useState("");
   const [pendingAttachments, setPendingAttachments] = useState<ChatAttachment[]>([]);
   const [optimisticMessages, setOptimisticMessages] = useState<WorkspaceMessage[]>([]);
@@ -2556,6 +2558,31 @@ export function IdeApp() {
     }
   }
 
+  async function createProjectFolder() {
+    const parent = workspaceRootDraft.trim();
+    const name = newProjectName.trim();
+    if (!parent || !name) return;
+    setBusy(true);
+    try {
+      const response = await fetch("/api/workspace/create-folder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(await studioHeaders()) },
+        body: JSON.stringify({ directory: parent, name }),
+      });
+      const payload = (await response.json().catch(() => null)) as { directory?: string; error?: string } | null;
+      if (!response.ok || !payload?.directory) throw new Error(payload?.error ?? "Не удалось создать папку");
+      setWorkspaceRootDraft(payload.directory);
+      await connectWorkspaceFolder(payload.directory);
+      setNewProjectName("");
+      setStatus(locale === "ru" ? `Проект создан: ${payload.directory}` : `Project created: ${payload.directory}`);
+      setTemplateOpen(false);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "create failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function generateTemplate() {
     const directory = workspaceRootDraft.trim();
     if (!directory) {
@@ -3006,6 +3033,35 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           ))}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setProjectMenuOpen((value) => !value)}
+              className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400"
+              title={locale === "ru" ? "Открыть папку проекта или создать новый" : "Open a project folder or create a new one"}
+            >
+              📂 {locale === "ru" ? "Проект" : "Project"}
+            </button>
+            {projectMenuOpen ? (
+              <>
+                <button type="button" aria-label="close" onClick={() => setProjectMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
+                <div className="absolute right-0 z-50 mt-1 w-72 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2 shadow-2xl">
+                  <p className="mb-2 truncate text-[10px] text-[var(--text-secondary)]" title={workspaceRootDraft || data?.settings.projectRoot}>
+                    {workspaceRootDraft || data?.settings.projectRoot || (locale === "ru" ? "Папка не выбрана" : "No folder selected")}
+                  </p>
+                  <button type="button" onClick={() => { setProjectMenuOpen(false); void pickWorkspaceFolder(); }} className="mb-1 w-full rounded bg-[#0e639c] px-2 py-2 text-left text-xs text-white">
+                    📂 {locale === "ru" ? "Открыть папку проекта…" : "Open project folder…"}
+                  </button>
+                  <button type="button" onClick={() => { setProjectMenuOpen(false); setTemplateOpen(true); }} className="mb-1 w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs">
+                    ✨ {locale === "ru" ? "Новый проект из пресета…" : "New project from preset…"}
+                  </button>
+                  <button type="button" onClick={() => { setProjectMenuOpen(false); setSettingsOpen(true); }} className="w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs">
+                    ⚙️ {locale === "ru" ? "Путь вручную в настройках" : "Set the path manually"}
+                  </button>
+                </div>
+              </>
+            ) : null}
+          </div>
           <button type="button" onClick={() => setPreviewOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400" title={locale === "ru" ? "Предпросмотр проекта" : "Project preview"}>
             👁️ {locale === "ru" ? "Предпросмотр" : "Preview"}
           </button>
@@ -4254,7 +4310,17 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 </button>
               ))}
             </div>
-            <p className="mt-3 text-[10px] text-[var(--text-secondary)]">{workspaceRootDraft || (locale === "ru" ? "Папка проекта не подключена" : "Project folder is not connected")}</p>
+            <div className="mt-3 flex items-center justify-between gap-2">
+              <p className="min-w-0 flex-1 truncate text-[10px] text-[var(--text-secondary)]" title={workspaceRootDraft}>{workspaceRootDraft || (locale === "ru" ? "Папка проекта не подключена" : "Project folder is not connected")}</p>
+              <button type="button" onClick={() => void pickWorkspaceFolder()} disabled={busy} className="shrink-0 rounded bg-[#3a3d41] px-2 py-1 text-[10px] disabled:opacity-60">📂 {locale === "ru" ? "Выбрать папку" : "Choose folder"}</button>
+            </div>
+            <div className="mt-3 rounded border border-[var(--border-default)] p-2">
+              <p className="text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "…или создайте новую папку проекта внутри выбранной" : "…or create a new project folder inside the selected one"}</p>
+              <div className="mt-1 flex gap-2">
+                <input value={newProjectName} onChange={(e) => setNewProjectName(e.target.value)} placeholder="my-new-app" className="min-w-0 flex-1 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
+                <button type="button" onClick={() => void createProjectFolder()} disabled={busy || !newProjectName.trim() || !workspaceRootDraft.trim()} className="rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white disabled:opacity-50">{locale === "ru" ? "Создать" : "Create"}</button>
+              </div>
+            </div>
             <button type="button" onClick={() => void generateTemplate()} disabled={busy || !workspaceRootDraft.trim()} className="mt-3 w-full rounded bg-[#0e639c] px-3 py-2 text-xs text-white disabled:opacity-50">{locale === "ru" ? "Создать структуру проекта" : "Generate project structure"}</button>
           </section>
         </div>
