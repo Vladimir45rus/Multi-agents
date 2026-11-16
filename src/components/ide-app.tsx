@@ -4,6 +4,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallba
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { BrandMark } from "@/components/brand-mark";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { useVoiceInput, VoiceSettings, loadVoicePrefs, saveVoicePrefs, type VoicePrefs } from "@/components/voice-input";
@@ -3032,7 +3033,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       )}
             <header className="app-header flex items-center gap-2 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
         <div className="flex shrink-0 items-center gap-2">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg text-[13px] font-black text-[#06101f]" style={{ background: "linear-gradient(135deg,#4fc1ff,#a78bfa)" }}>M</span>
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center" title="Multi-Agent Code Studio">
+            <BrandMark className="h-7 w-7" />
+          </span>
           <span className="hidden text-[13px] font-bold sm:block">Multi-Agent Code Studio</span>
         </div>
 
