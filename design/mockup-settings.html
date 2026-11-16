@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>Настройки — макет</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 900px; width: 1440px; overflow: hidden;
+    font-family: "Segoe UI", system-ui, sans-serif; background: #0b1020; color: #e5edf7; }
+
+  /* dimmed app behind the modal */
+  .backdrop { position: absolute; inset: 0; background:
+      radial-gradient(1200px 600px at 30% 10%, #131f36 0%, #0b1020 60%);
+      opacity: .55; }
+  .ghost-ui { position: absolute; inset: 0; opacity: .25; padding: 20px; display: flex; gap: 12px; }
+  .ghost-ui div { flex: 1; border: 1px solid #23324a; border-radius: 10px; }
+
+  .window { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    width: 1120px; height: 720px; display: grid; grid-template-columns: 250px 1fr;
+    border: 1px solid #26364f; border-radius: 14px; overflow: hidden;
+    background: #0f1626; box-shadow: 0 40px 80px -20px rgba(0,0,0,.85); }
+
+  /* left nav */
+  .nav { background: #0c1322; border-right: 1px solid #1f2a3c; display: flex; flex-direction: column; }
+  .nav-head { padding: 16px 16px 10px; font-size: 13px; font-weight: 700; letter-spacing: .02em; }
+  .nav-head small { display: block; margin-top: 3px; font-weight: 400; font-size: 10px; color: #7f93b0; }
+  .tabs { padding: 6px; display: flex; flex-direction: column; gap: 2px; }
+  .tab { display: flex; align-items: center; gap: 9px; padding: 9px 10px; border-radius: 8px;
+    font-size: 12px; color: #a9bcd6; cursor: pointer; border: 1px solid transparent; }
+  .tab:hover { background: #131d31; }
+  .tab.on { background: #1b2c4a; border-color: #2a3a55; color: #fff; font-weight: 600; }
+  .tab .ico { width: 18px; text-align: center; }
+  .tab .badge { margin-left: auto; font-size: 9px; padding: 1px 6px; border-radius: 999px; background: #0f2a22; color: #6ee7b7; border: 1px solid #1f6f52; }
+  .nav-foot { margin-top: auto; padding: 12px; font-size: 10px; color: #6b809c; line-height: 1.5; }
+
+  /* content */
+  .content { display: flex; flex-direction: column; min-height: 0; }
+  .head { display: flex; align-items: center; justify-content: space-between; padding: 14px 18px;
+    border-bottom: 1px solid #1f2a3c; background: #111a2e; }
+  .head h1 { margin: 0; font-size: 14px; }
+  .head p { margin: 3px 0 0; font-size: 11px; color: #7f93b0; }
+  .body { flex: 1; overflow: hidden; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .card { border: 1px solid #1f2a3c; border-radius: 11px; background: #101a2c; padding: 12px 14px; }
+  .card h2 { margin: 0 0 10px; font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: #9fb3d1; }
+  .field { display: grid; grid-template-columns: 150px 1fr auto; gap: 10px; align-items: center; padding: 7px 0;
+    border-top: 1px solid #17233a; }
+  .field:first-of-type { border-top: 0; }
+  .field .label { font-size: 12px; }
+  .field .label small { display: block; font-size: 10px; color: #6b809c; }
+  .input { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid #26364f; background: #0b1322; font-size: 12px; color: #9fb3d1; }
+  .input .dots { letter-spacing: 2px; color: #4b6488; }
+  .ok { font-size: 10px; color: #6ee7b7; border: 1px solid #1f6f52; background: #0f2a22; padding: 2px 7px; border-radius: 999px; }
+  .miss { font-size: 10px; color: #fca5a5; border: 1px solid #7f1d1d; background: #2a0f12; padding: 2px 7px; border-radius: 999px; }
+  .btn { padding: 7px 11px; border-radius: 8px; border: 1px solid #2a3a55; background: #131d31;
+    color: #dbe7f7; font-size: 11.5px; cursor: pointer; }
+  .btn.primary { background: #1d4ed8; border-color: #2563eb; color: #fff; font-weight: 600; }
+  .btn.ghost { background: transparent; }
+  .row { display: flex; gap: 10px; align-items: center; }
+  .toggle { width: 38px; height: 21px; border-radius: 999px; background: #1d4ed8; position: relative; }
+  .toggle::after { content: ""; position: absolute; right: 3px; top: 3px; width: 15px; height: 15px; border-radius: 50%; background: #fff; }
+  .toggle.off { background: #26364f; }
+  .toggle.off::after { right: auto; left: 3px; }
+  .hint { font-size: 10.5px; color: #6b809c; }
+  .foot { display: flex; align-items: center; gap: 10px; padding: 12px 18px; border-top: 1px solid #1f2a3c; background: #111a2e; }
+  .foot .dirty { color: #fbbf24; font-size: 11px; }
+  .foot .spacer { flex: 1; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  .chip { font-size: 10.5px; padding: 4px 9px; border-radius: 999px; border: 1px solid #2a3a55; color: #9fb3d1; }
+  .chip.on { border-color: #1f6f52; background: #0f2a22; color: #6ee7b7; }
+  .chip.warn { border-color: #7c5a1a; background: #1e1808; color: #fcd34d; }
+</style>
+</head>
+<body>
+<div class="backdrop"></div>
+<div class="ghost-ui"><div></div><div></div><div></div><div></div></div>
+
+<div class="window">
+  <aside class="nav">
+    <div class="nav-head">Настройки<small>Multi-Agent Code Studio 1.6.0</small></div>
+    <div class="tabs">
+      <div class="tab on"><span class="ico">🔑</span> Модели и ключи <span class="badge">2</span></div>
+      <div class="tab"><span class="ico">📁</span> Проект</div>
+      <div class="tab"><span class="ico">🤖</span> Агенты</div>
+      <div class="tab"><span class="ico">🌐</span> Сеть и доступ</div>
+      <div class="tab"><span class="ico">🧩</span> Поведение</div>
+      <div class="tab"><span class="ico">ℹ️</span> О программе</div>
+    </div>
+    <div class="nav-foot">Ключи хранятся локально и шифруются. Наружу уходят только запросы к выбранным провайдерам.</div>
+  </aside>
+
+  <section class="content">
+    <div class="head">
+      <div>
+        <h1>Модели и ключи</h1>
+        <p>Ключи провайдеров, резервные модели и проверка связи</p>
+      </div>
+      <button class="btn ghost">Проверить всё</button>
+    </div>
+
+    <div class="body">
+      <div class="card">
+        <h2>Провайдеры</h2>
+        <div class="field">
+          <div class="label">OpenRouter <small>основной</small></div>
+          <div class="input"><span class="dots">••••••••••••••••••</span> <span style="margin-left:auto; font-size:10px; color:#6ee7b7;">ключ сохранён</span></div>
+          <div class="row"><span class="ok">работает</span><button class="btn">Заменить</button></div>
+        </div>
+        <div class="field">
+          <div class="label">OpenAI</div>
+          <div class="input"><span class="dots">••••••••</span> <span style="margin-left:auto; font-size:10px; color:#6ee7b7;">ключ сохранён</span></div>
+          <div class="row"><span class="ok">работает</span><button class="btn">Заменить</button></div>
+        </div>
+        <div class="field">
+          <div class="label">Anthropic</div>
+          <div class="input"><span style="color:#6b809c;">Вставьте ключ…</span></div>
+          <div class="row"><span class="miss">не настроен</span><button class="btn primary">Сохранить</button></div>
+        </div>
+        <div class="field">
+          <div class="label">Свои провайдеры <small>любой OpenAI-совместимый</small></div>
+          <div class="input"><span style="color:#6b809c;">baseUrl + ключ + список моделей</span></div>
+          <div class="row"><button class="btn">＋ Добавить</button></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Резервные модели (fallback)</h2>
+        <div class="chips">
+          <span class="chip">openai/gpt-4o-mini</span>
+          <span class="chip">anthropic/claude-3.5-haiku</span>
+          <span class="chip">google/gemini-2.0-flash</span>
+          <span class="chip warn">＋ добавить</span>
+        </div>
+        <p class="hint" style="margin:8px 0 0;">Используются при 403, 404, 429, 5xx и таймауте — пайплайн не встаёт.</p>
+      </div>
+
+      <div class="card">
+        <h2>Поведение пайплайна</h2>
+        <div class="field">
+          <div class="label">AUTO-режим <small>без подтверждений</small></div>
+          <div class="hint">Оркестратор применяет патчи и запускает проверки сам</div>
+          <div class="toggle"></div>
+        </div>
+        <div class="field">
+          <div class="label">Team mode <small>агенты пишут в своих зонах</small></div>
+          <div class="hint">UI/UX — компоненты, архитектор — api/lib, тестер — тесты</div>
+          <div class="toggle"></div>
+        </div>
+        <div class="field">
+          <div class="label">Решение <small>кто финально решает</small></div>
+          <div class="chips">
+            <span class="chip">решает Главный</span>
+            <span class="chip on">голосование команды</span>
+            <span class="chip">Фома может блокировать</span>
+          </div>
+          <div></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">
+      <span class="dirty">● Есть несохранённые изменения</span>
+      <span class="spacer"></span>
+      <button class="btn ghost">Отмена</button>
+      <button class="btn primary">Сохранить</button>
+    </div>
+  </section>
+</div>
+</body>
+</html>

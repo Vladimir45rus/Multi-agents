@@ -691,6 +691,7 @@ export function IdeApp() {
   const [importFiles, setImportFiles] = useState<File[]>([]);
   const [workspaceRootDraft, setWorkspaceRootDraft] = useState("");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
+  const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [newProjectName, setNewProjectName] = useState("");
   const [recentProjects, setRecentProjects] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
@@ -2930,6 +2931,11 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       ));
   }
 
+  const activeProjectName =
+    (workspaceTreeRoot ? workspaceTreeRoot.split(/[\\/]/).filter(Boolean).pop() : "")
+    || data?.settings.workspaceName
+    || (locale === "ru" ? "Проект" : "Project");
+
   // --- Collapsed panel strip ---
 
   function collapsedStrip(name: PanelName, label: string, vertical = true) {
@@ -3024,105 +3030,91 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </button>
         </div>
       )}
-      <header className="app-header flex items-center justify-between gap-4 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border border-amber-500/30 bg-amber-500/10 text-lg">👑</span>
-          <div className="min-w-0">
-            <div className="truncate text-sm font-bold text-amber-300">Multi-Agent Code Studio</div>
-            <div className="truncate text-[9px] tracking-[0.08em] text-slate-500">AUTONOMOUS AI DEVELOPMENT COMPLEX</div>
-          </div>
+            <header className="app-header flex items-center gap-2 border-b px-3" style={{ borderColor: "var(--border-default)", background: "var(--bg-panel)" }}>
+        <div className="flex shrink-0 items-center gap-2">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg text-[13px] font-black text-[#06101f]" style={{ background: "linear-gradient(135deg,#4fc1ff,#a78bfa)" }}>M</span>
+          <span className="hidden text-[13px] font-bold sm:block">Multi-Agent Code Studio</span>
         </div>
-        <div className="hidden min-w-0 items-center gap-2 xl:flex">
-          <span className={`rounded-full border px-3 py-1 text-[10px] ${busy ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"}`}>
-            {busy ? "🟡 Выполняется" : "🟢 Статус: Ожидание"}
-          </span>
-          {[
-            ["Ключей", Object.values(data?.settings.apiKeysConfigured ?? {}).filter(Boolean).length],
-            ["Агентов", data?.agents.length ?? 0],
-            ["Сообщений", data?.messages.length ?? 0],
-            ["Файлов", data?.files.length ?? 0],
-          ].map(([label, value]) => (
-            <span key={label} className="min-w-[58px] rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-center">
-              <strong className="block text-xs text-slate-100">{value}</strong>
-              <small className="block text-[9px] text-slate-500">{label}</small>
-            </span>
-          ))}
-        </div>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setProjectMenuOpen((value) => !value)}
-              className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400"
-              title={locale === "ru" ? "Открыть папку проекта или создать новый" : "Open a project folder or create a new one"}
-            >
-              📂 {locale === "ru" ? "Проект" : "Project"}
-            </button>
-            {projectMenuOpen ? (
-              <>
-                <button type="button" aria-label="close" onClick={() => setProjectMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
-                <div className="absolute right-0 z-50 mt-1 w-72 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2 shadow-2xl">
-                  <p className="mb-2 truncate text-[10px] text-[var(--text-secondary)]" title={workspaceRootDraft || data?.settings.projectRoot}>
-                    {workspaceRootDraft || data?.settings.projectRoot || (locale === "ru" ? "Папка не выбрана" : "No folder selected")}
-                  </p>
-                  {recentProjects.length > 0 ? (
-                    <div className="mb-1">
-                      <p className="mb-1 text-[9px] uppercase tracking-wide text-[var(--text-secondary)]">{locale === "ru" ? "Недавние" : "Recent"}</p>
-                      {recentProjects.map((projectPath) => (
-                        <button key={projectPath} type="button" onClick={() => { setProjectMenuOpen(false); void connectWorkspaceFolder(projectPath); }} className="mb-0.5 w-full truncate rounded px-1 py-1 text-left text-[10px] hover:bg-[var(--bg-hover)]" title={projectPath}>
-                          {projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath}
-                        </button>
-                      ))}
-                    </div>
-                  ) : null}
-                  <button type="button" onClick={() => { setProjectMenuOpen(false); void pickWorkspaceFolder(); }} className="mb-1 w-full rounded bg-[#0e639c] px-2 py-2 text-left text-xs text-white">
-                    📂 {locale === "ru" ? "Открыть папку проекта…" : "Open project folder…"}
-                  </button>
-                  <button type="button" onClick={() => { setProjectMenuOpen(false); setTemplateOpen(true); }} className="mb-1 w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs">
-                    ✨ {locale === "ru" ? "Новый проект из пресета…" : "New project from preset…"}
-                  </button>
-                  <button type="button" onClick={() => { setProjectMenuOpen(false); setSettingsOpen(true); }} className="w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs">
-                    ⚙️ {locale === "ru" ? "Путь вручную в настройках" : "Set the path manually"}
-                  </button>
-                </div>
-              </>
-            ) : null}
-          </div>
-          <button type="button" onClick={() => setPreviewOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400" title={locale === "ru" ? "Предпросмотр проекта" : "Project preview"}>
-            👁️ {locale === "ru" ? "Предпросмотр" : "Preview"}
-          </button>
-          <button type="button" onClick={() => void pushToGithub()} className="rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-500 disabled:opacity-50" disabled={busy}>
-            {t.pushGithub}
-          </button>
+
+        <div className="relative shrink-0">
           <button
             type="button"
-            onClick={() => setSupportOpen(true)}
-            className="rounded-md bg-amber-500 px-3 py-1 text-xs font-semibold text-black shadow-lg shadow-amber-500/20 transition hover:bg-amber-400"
+            onClick={() => setProjectMenuOpen((value) => !value)}
+            className="flex items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-app)] px-2.5 py-1.5 text-xs hover:border-blue-400"
+            title={locale === "ru" ? "Открыть папку проекта или создать новый" : "Open a project folder or create a new one"}
           >
-            {t.donateBtn}
+            <span>📂</span>
+            <span className="max-w-[150px] truncate">{activeProjectName}</span>
+            <span className="text-[9px] opacity-60">▾</span>
           </button>
-          <button
-            type="button"
-            onClick={() => {
-              const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge;
-              bridge?.toggleOverlay?.();
-            }}
-            className={`rounded border px-2 py-1 text-xs ${overlayActive ? "border-[#3fb950] bg-[#23863633] text-white" : "border-[var(--border-default)] bg-[var(--bg-panel-alt)] hover:border-blue-400"}`}
-            title={locale === "ru" ? "Поверх всех окон (Ctrl+Shift+O)" : "Always on top (Ctrl+Shift+O)"}
-          >
-            📌 {locale === "ru" ? (overlayActive ? "Виджет активен" : "Виджет") : (overlayActive ? "Widget active" : "Widget")}
-          </button>
-          <button type="button" onClick={() => setOrchestratorOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
-            🤖 {locale === "ru" ? "Оркестратор" : "Orchestrator"}
-          </button>
-          <ThemeToggle />
-          <button type="button" onClick={() => void generateSystemReport()} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
-            📄 {locale === "ru" ? "Сформировать отчёт" : "Generate report"}
-          </button>
-          <button type="button" onClick={() => setSettingsOpen(true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-xs hover:border-blue-400">
-            ⚙️ {t.settings}
-          </button>
+          {projectMenuOpen ? (
+            <>
+              <button type="button" aria-label="close" onClick={() => setProjectMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
+              <div className="absolute left-0 z-50 mt-1 w-72 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2 shadow-2xl">
+                <p className="mb-2 truncate text-[10px] text-[var(--text-secondary)]" title={workspaceRootDraft || data?.settings.projectRoot}>
+                  {workspaceRootDraft || data?.settings.projectRoot || (locale === "ru" ? "Папка не выбрана" : "No folder selected")}
+                </p>
+                {recentProjects.length > 0 ? (
+                  <div className="mb-1">
+                    <p className="mb-1 text-[9px] uppercase tracking-wide text-[var(--text-secondary)]">{locale === "ru" ? "Недавние" : "Recent"}</p>
+                    {recentProjects.map((projectPath) => (
+                      <button key={projectPath} type="button" onClick={() => { setProjectMenuOpen(false); void connectWorkspaceFolder(projectPath); }} className="mb-0.5 w-full truncate rounded px-1 py-1 text-left text-[10px] hover:bg-[var(--bg-hover)]" title={projectPath}>
+                        {projectPath.split(/[\\/]/).filter(Boolean).pop() ?? projectPath}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                <button type="button" onClick={() => { setProjectMenuOpen(false); void pickWorkspaceFolder(); }} className="mb-1 w-full rounded bg-[#1d4ed8] px-2 py-2 text-left text-xs text-white">
+                  📂 {locale === "ru" ? "Открыть папку проекта…" : "Open project folder…"}
+                </button>
+                <button type="button" onClick={() => { setProjectMenuOpen(false); setTemplateOpen(true); }} className="mb-1 w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs">
+                  ✨ {locale === "ru" ? "Новый проект из пресета…" : "New project from preset…"}
+                </button>
+                <button type="button" onClick={() => { setProjectMenuOpen(false); setSettingsOpen(true); }} className="w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs">
+                  ⚙️ {locale === "ru" ? "Путь вручную в настройках" : "Set the path manually"}
+                </button>
+              </div>
+            </>
+          ) : null}
         </div>
+
+        <span className={"hidden rounded-full border px-2.5 py-1 text-[10px] lg:inline-flex " + (busy ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-emerald-500/30 bg-emerald-500/10 text-emerald-300")}>
+          {busy ? (locale === "ru" ? "🟡 Выполняется" : "🟡 Running") : (locale === "ru" ? "🟢 Синхронизировано" : "🟢 Synced")}
+        </span>
+        <span className="hidden rounded-full border border-[var(--border-default)] px-2.5 py-1 text-[10px] text-[var(--text-secondary)] xl:inline-flex">
+          {(data?.files.length ?? 0)} {(locale === "ru" ? "файлов" : "files")}
+        </span>
+
+        <div className="flex-1" />
+
+        <button type="button" onClick={() => setPreviewOpen(true)} className="shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2.5 py-1.5 text-xs hover:border-blue-400">
+          ▶ {locale === "ru" ? "Предпросмотр" : "Preview"}
+        </button>
+        <button type="button" onClick={() => setOrchestratorOpen(true)} className="shrink-0 rounded-lg bg-[#1d4ed8] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#2563eb]">
+          ⚡ {locale === "ru" ? "Оркестратор" : "Orchestrator"}
+        </button>
+        <button type="button" onClick={() => void generateSystemReport()} className="hidden shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2.5 py-1.5 text-xs hover:border-blue-400 sm:block">
+          📊 {locale === "ru" ? "Отчёт" : "Report"}
+        </button>
+        <button type="button" onClick={() => setSupportOpen(true)} className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-500/20">
+          ❤️ {locale === "ru" ? "Поддержать" : "Support"}
+        </button>
+
+        <div className="relative shrink-0">
+          <button type="button" onClick={() => setMoreMenuOpen((value) => !value)} className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1.5 text-xs hover:border-blue-400" title={locale === "ru" ? "Ещё" : "More"}>⋯</button>
+          {moreMenuOpen ? (
+            <>
+              <button type="button" aria-label="close" onClick={() => setMoreMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
+              <div className="absolute right-0 z-50 mt-1 w-60 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2 shadow-2xl">
+                <button type="button" onClick={() => { setMoreMenuOpen(false); void pushToGithub(); }} disabled={busy} className="mb-1 w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs disabled:opacity-50">🐙 {t.pushGithub}</button>
+                <button type="button" onClick={() => { const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge; bridge?.toggleOverlay?.(); }} className="mb-1 w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs">📌 {overlayActive ? (locale === "ru" ? "Виджет активен" : "Widget active") : (locale === "ru" ? "Виджет" : "Widget")}</button>
+                <div className="flex items-center justify-between rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-xs"><span>🎨 {locale === "ru" ? "Тема" : "Theme"}</span><ThemeToggle /></div>
+              </div>
+            </>
+          ) : null}
+        </div>
+
+        <button type="button" onClick={() => setSettingsOpen(true)} className="shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2.5 py-1.5 text-xs hover:border-blue-400" title={t.settings}>⚙</button>
       </header>
 
       {/* Main content area: flex column, top flex area + resizer + bottom area */}
@@ -4436,6 +4428,22 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         <span>{status}</span>
         <span>{busy ? t.busy : t.ready}</span>
       </div>
-    </main>
+    
+      <footer className="flex h-7 shrink-0 items-center gap-3 border-t px-3 text-[10.5px] text-[var(--text-secondary)]" style={{ borderColor: "var(--border-default)", background: "var(--bg-app)" }}>
+        <span className="text-emerald-300">● {locale === "ru" ? "Подключено" : "Connected"}</span>
+        <span className="max-w-[200px] truncate" title={workspaceTreeRoot || undefined}>{activeProjectName}</span>
+        {data?.settings.previewUrl ? (
+          <span className="max-w-[170px] truncate">{data.settings.previewUrl.replace("http://127.0.0.1", "")}</span>
+        ) : null}
+        <span>AUTO: <b className={autoApproveDraft ? "text-emerald-300" : ""}>{autoApproveDraft ? (locale === "ru" ? "вкл" : "on") : (locale === "ru" ? "выкл" : "off")}</b></span>
+        <span>Team: <b className={teamModeDraft ? "text-emerald-300" : ""}>{teamModeDraft ? (locale === "ru" ? "вкл" : "on") : (locale === "ru" ? "выкл" : "off")}</b></span>
+        <span>{locale === "ru" ? "Решение" : "Decision"}: <b>{decisionModeDraft === "vote" ? (locale === "ru" ? "голосование" : "vote") : (locale === "ru" ? "Главный" : "Lead")}</b></span>
+        <span>{locale === "ru" ? "Агентов" : "Agents"}: {data?.agents.length ?? 0}</span>
+        <span className="flex-1" />
+        {!data?.settings.telegramTokenConfigured ? (
+          <span className="text-amber-300">⚠ Telegram {locale === "ru" ? "не настроен" : "not configured"}</span>
+        ) : null}
+      </footer>
+</main>
   );
 }

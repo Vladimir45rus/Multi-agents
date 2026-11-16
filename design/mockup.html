@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<title>Multi-Agent Code Studio — макет</title>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 900px; width: 1440px; overflow: hidden;
+    font-family: "Segoe UI", system-ui, sans-serif; background: #0b1020; color: #e5edf7; }
+  .app { display: grid; grid-template-rows: 52px 1fr 200px 26px; height: 100%; }
+
+  /* ---------- header ---------- */
+  .topbar { display: flex; align-items: center; gap: 10px; padding: 0 12px;
+    background: linear-gradient(90deg,#0e1526,#111a2e); border-bottom: 1px solid #1f2a3c; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 13px; letter-spacing: .2px; }
+  .brand-mark { width: 26px; height: 26px; border-radius: 8px; background: linear-gradient(135deg,#4fc1ff,#a78bfa);
+    display: grid; place-items: center; color: #06101f; font-weight: 900; font-size: 13px; }
+  .project { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border: 1px solid #2a3a55;
+    border-radius: 9px; background: #131d31; font-size: 12px; cursor: pointer; }
+  .project .chev { color: #8fa3bf; font-size: 10px; }
+  .chip { font-size: 10px; padding: 3px 8px; border-radius: 999px; border: 1px solid #2a3a55; color: #9fb3d1; }
+  .chip.ok { color: #6ee7b7; border-color: #1f6f52; background: #0f2a22; }
+  .spacer { flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 7px 12px; border-radius: 9px;
+    border: 1px solid #2a3a55; background: #131d31; color: #dbe7f7; font-size: 12px; cursor: pointer; }
+  .btn.primary { background: #1d4ed8; border-color: #2563eb; color: #fff; font-weight: 600; }
+  .btn.ghost { background: transparent; }
+  .btn .k { font-size: 10px; color: #93a8c6; }
+  .btn.donate { border-color: #7c5a1a; background: #1e1808; color: #fcd34d; }
+  .btn.donate:hover { background: #2a2110; border-color: #a97c22; }
+
+  /* ---------- main ---------- */
+  .main { display: grid; grid-template-columns: 268px 1fr 400px; min-height: 0; }
+  .panel { display: flex; flex-direction: column; min-height: 0; background: #0f1626; }
+  .panel + .panel { border-left: 1px solid #1f2a3c; }
+
+  .ph { display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    height: 34px; padding: 0 10px; border-bottom: 1px solid #1f2a3c; background: #111a2e; }
+  .ph .t { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: #9fb3d1; font-weight: 600; }
+  .ph .acts { display: flex; align-items: center; gap: 2px; }
+  .icon { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 6px;
+    border: 1px solid transparent; color: #9fb3d1; font-size: 12px; cursor: pointer; }
+  .icon:hover { background: #1a2740; border-color: #2a3a55; color: #fff; }
+
+  .search { margin: 8px 10px; padding: 7px 9px; border-radius: 8px; border: 1px solid #26364f;
+    background: #0b1322; color: #7f93b0; font-size: 11px; }
+  .tree { padding: 2px 6px 10px; overflow: hidden; }
+  .row { display: flex; align-items: center; gap: 7px; padding: 4px 8px; border-radius: 6px; font-size: 12px; color: #c9d7ea; }
+  .row:hover { background: #16223a; }
+  .row.active { background: #1b2c4a; color: #fff; }
+  .row .caret { color: #7f93b0; font-size: 9px; width: 10px; }
+  .row .glyph { color: #4fc1ff; font-size: 11px; }
+  .row .glyph.dir { color: #fbbf24; }
+  .indent1 { padding-left: 22px; } .indent2 { padding-left: 38px; } .indent3 { padding-left: 54px; }
+
+  /* editor */
+  .tabs { display: flex; align-items: center; gap: 4px; padding: 0 8px; height: 36px; border-bottom: 1px solid #1f2a3c; background: #0d1524; }
+  .tab { display: flex; align-items: center; gap: 7px; padding: 6px 10px; border-radius: 8px 8px 0 0; font-size: 11.5px; color: #a9bcd6; }
+  .tab.active { background: #0f1626; color: #fff; border: 1px solid #1f2a3c; border-bottom-color: #0f1626; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #fbbf24; }
+  .breadcrumbs { display: flex; align-items: center; gap: 6px; padding: 7px 12px; font-size: 11px; color: #7f93b0; border-bottom: 1px solid #16223a; }
+  .code { flex: 1; padding: 10px 0 0; font-family: "Cascadia Code", Consolas, monospace; font-size: 12.5px; line-height: 1.65; overflow: hidden; }
+  .line { display: flex; }
+  .ln { width: 46px; text-align: right; padding-right: 14px; color: #3f5673; user-select: none; }
+  .code .sel { background: #14243c; }
+  .k { color: #c084fc; } .s { color: #86efac; } .c { color: #5d7595; font-style: italic; } .f { color: #7dd3fc; }
+  .editor-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+    padding: 8px 12px; border-top: 1px solid #1f2a3c; background: #0d1524; }
+  .hint { font-size: 11px; color: #7f93b0; }
+
+  /* chat */
+  .seg { display: flex; gap: 4px; padding: 6px; background: #0d1524; border-bottom: 1px solid #1f2a3c; }
+  .seg button { flex: 1; padding: 6px 8px; border-radius: 7px; border: 1px solid transparent; background: transparent;
+    color: #9fb3d1; font-size: 11.5px; cursor: pointer; }
+  .seg button.on { background: #1b2c4a; color: #fff; border-color: #2a3a55; font-weight: 600; }
+  .msgs { flex: 1; padding: 10px; display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
+  .msg { border-radius: 10px; padding: 8px 10px; font-size: 12px; line-height: 1.5; max-width: 92%; }
+  .msg.agent { background: #131d31; border: 1px solid #22314a; }
+  .msg.user { background: #1d4ed8; align-self: flex-end; color: #fff; }
+  .who { font-size: 10px; font-weight: 700; margin-bottom: 3px; letter-spacing: .02em; }
+  .who.design { color: #f472b6; } .who.skeptic { color: #f87171; } .who.main { color: #a78bfa; }
+  .composer { border-top: 1px solid #1f2a3c; padding: 8px; background: #0d1524; }
+  .composer textarea { width: 100%; height: 54px; resize: none; border-radius: 9px; border: 1px solid #26364f;
+    background: #0b1322; color: #dbe7f7; font-size: 12px; padding: 8px 10px; font-family: inherit; }
+  .composer .row2 { display: flex; align-items: center; gap: 6px; margin-top: 6px; }
+  .composer .send { margin-left: auto; }
+
+  /* bottom */
+  .bottom { display: grid; grid-template-columns: 1fr 1fr; border-top: 1px solid #1f2a3c; background: #0d1524; min-height: 0; }
+  .bottom .panel { background: #0b1322; }
+  .bottom .panel + .panel { border-left: 1px solid #1f2a3c; }
+  .term { padding: 8px 10px; font-family: "Cascadia Code", Consolas, monospace; font-size: 11.5px; line-height: 1.7; color: #b9cbe3; overflow: hidden; }
+  .term .cmd { color: #6ee7b7; }
+  .term .err { color: #fca5a5; }
+  .logs { padding: 6px 8px; display: flex; flex-direction: column; gap: 5px; overflow: hidden; }
+  .log { display: flex; gap: 8px; font-size: 11px; padding: 5px 7px; border-radius: 6px; background: #101a2c; border-left: 3px solid #34d399; }
+  .log.warn { border-left-color: #fbbf24; } .log.err { border-left-color: #f87171; }
+  .log .time { color: #6b809c; }
+
+  /* status */
+  .status { display: flex; align-items: center; gap: 14px; padding: 0 12px; font-size: 10.5px; color: #8fa3bf;
+    background: #0a1120; border-top: 1px solid #1f2a3c; }
+  .status .ok { color: #6ee7b7; } .status .warn { color: #fbbf24; }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- HEADER -->
+  <div class="topbar">
+    <div class="brand"><span class="brand-mark">M</span> Multi-Agent Code Studio</div>
+    <div class="project">📂 Perviy proekt <span class="chev">▾</span></div>
+    <span class="chip ok">● Синхронизировано</span>
+    <span class="chip">624 файла</span>
+    <div class="spacer"></div>
+    <button class="btn"><span>▶</span> Предпросмотр</button>
+    <button class="btn primary"><span>⚡</span> Оркестратор <span class="k">Ctrl+K</span></button>
+    <button class="btn"><span>📊</span> Отчёт</button>
+    <button class="btn donate" title="Поддержать проект"><span>❤️</span> Поддержать</button>
+    <button class="btn ghost" title="Ещё">⋯</button>
+    <button class="btn"><span>⚙</span></button>
+  </div>
+
+  <!-- MAIN -->
+  <div class="main">
+
+    <!-- explorer -->
+    <section class="panel">
+      <div class="ph">
+        <span class="t">Проект</span>
+        <div class="acts">
+          <div class="icon" title="Новый файл">＋</div>
+          <div class="icon" title="Обновить дерево">⟳</div>
+          <div class="icon" title="Свернуть панель">«</div>
+        </div>
+      </div>
+      <div class="search">Поиск по проекту (Ctrl+P)…</div>
+      <div class="tree">
+        <div class="row"><span class="caret">▾</span><span class="glyph dir">📁</span> src</div>
+        <div class="row indent1"><span class="caret">▾</span><span class="glyph dir">📁</span> components</div>
+        <div class="row indent2"><span class="glyph">＃</span> PasswordGenerator.tsx</div>
+        <div class="row indent2"><span class="glyph">＃</span> StrengthIndicator.tsx</div>
+        <div class="row indent2 active"><span class="glyph">＃</span> History.tsx <span class="dot"></span></div>
+        <div class="row indent1"><span class="caret">▸</span><span class="glyph dir">📁</span> hooks</div>
+        <div class="row indent1"><span class="caret">▸</span><span class="glyph dir">📁</span> utils</div>
+        <div class="row indent1"><span class="glyph">＃</span> main.tsx</div>
+        <div class="row indent1"><span class="glyph">＃</span> styles.css</div>
+        <div class="row"><span class="glyph">＃</span> index.html</div>
+        <div class="row"><span class="glyph">＃</span> package.json</div>
+        <div class="row"><span class="glyph">＃</span> README.md</div>
+      </div>
+    </section>
+
+    <!-- editor -->
+    <section class="panel">
+      <div class="ph">
+        <span class="t">Редактор</span>
+        <div class="acts">
+          <div class="icon" title="Свернуть панель">«</div>
+          <div class="icon" title="Развернуть на весь экран">⤢</div>
+        </div>
+      </div>
+      <div class="tabs">
+        <div class="tab">History.tsx <span class="dot"></span></div>
+        <div class="tab active">PasswordGenerator.tsx</div>
+        <div class="tab">styles.css</div>
+      </div>
+      <div class="breadcrumbs">src › components › PasswordGenerator.tsx</div>
+      <div class="code">
+        <div class="line"><span class="ln">1</span><span><span class="k">import</span> { useState } <span class="k">from</span> <span class="s">"react"</span>;</span></div>
+        <div class="line"><span class="ln">2</span><span><span class="k">import</span> { generate } <span class="k">from</span> <span class="s">"../utils/passwordGenerator"</span>;</span></div>
+        <div class="line"><span class="ln">3</span><span></span></div>
+        <div class="line"><span class="ln">4</span><span><span class="c">// Генератор пароля: длина, наборы символов, история</span></span></div>
+        <div class="line sel"><span class="ln">5</span><span><span class="k">export function</span> <span class="f">PasswordGenerator</span>() {</span></div>
+        <div class="line sel"><span class="ln">6</span><span>  <span class="k">const</span> [length, setLength] = <span class="f">useState</span>(<span class="s">16</span>);</span></div>
+        <div class="line"><span class="ln">7</span><span>  <span class="k">const</span> [value, setValue] = <span class="f">useState</span>(<span class="s">""</span>);</span></div>
+        <div class="line"><span class="ln">8</span><span></span></div>
+        <div class="line"><span class="ln">9</span><span>  <span class="k">return</span> (</span></div>
+        <div class="line"><span class="ln">10</span><span>    <span class="f">&lt;section</span> <span class="k">className</span>=<span class="s">"card"</span><span class="f">&gt;</span></span></div>
+        <div class="line"><span class="ln">11</span><span>      <span class="f">&lt;output</span> <span class="k">aria-live</span>=<span class="s">"polite"</span><span class="f">&gt;</span>{value}<span class="f">&lt;/output&gt;</span></span></div>
+        <div class="line"><span class="ln">12</span><span>    <span class="f">&lt;/section&gt;</span></span></div>
+        <div class="line"><span class="ln">13</span><span>  );</span></div>
+        <div class="line"><span class="ln">14</span><span>}</span></div>
+      </div>
+      <div class="editor-foot">
+        <span class="hint">● Не сохранено — 2 правки</span>
+        <div style="display:flex; gap:8px;">
+          <button class="btn ghost">Откатить</button>
+          <button class="btn primary">Сохранить <span class="k">Ctrl+S</span></button>
+        </div>
+      </div>
+    </section>
+
+    <!-- chat -->
+    <section class="panel">
+      <div class="ph">
+        <span class="t">Команда</span>
+        <div class="acts">
+          <div class="icon" title="Свернуть панель">«</div>
+          <div class="icon" title="Развернуть">⤢</div>
+        </div>
+      </div>
+      <div class="seg">
+        <button class="on">🤖 Главный</button>
+        <button>💬 Общий</button>
+        <button>📊 Состояние</button>
+      </div>
+      <div class="msgs">
+        <div class="msg user">Хочу приложение «расчёт калорий»: продукты, дневник, график.</div>
+        <div class="msg agent">
+          <div class="who design">UI/UX · Дизайнер</div>
+          Две колонки: слева поиск продуктов, справа дневник. На телефоне — одна колонка, нижняя навигация.
+        </div>
+        <div class="msg agent">
+          <div class="who skeptic">Фома неверующий</div>
+          [STANCE: blocker] Пустой дневник: если нет записей, экран пустой — нет пустого состояния. Файл src/components/Diary.tsx, строка 42.
+        </div>
+        <div class="msg agent">
+          <div class="who main">Главный агент</div>
+          Принял блокер: добавлю пустое состояние и guard на пустой список. План в ТЗ.
+        </div>
+      </div>
+      <div class="composer">
+        <textarea placeholder="Написать команде…">оформи ТЗ и запускай</textarea>
+        <div class="row2">
+          <div class="icon" title="Прикрепить файл">📎</div>
+          <div class="icon" title="Голос">🎙</div>
+          <div class="icon" title="Быстрые команды">/</div>
+          <button class="btn ghost">Стоп</button>
+          <button class="btn primary send">Отправить <span class="k">Ctrl+↵</span></button>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- BOTTOM -->
+  <div class="bottom">
+    <section class="panel">
+      <div class="ph">
+        <div style="display:flex; align-items:center; gap:6px;">
+          <span class="t">Терминал</span>
+          <span class="chip" style="padding:2px 7px;">1</span>
+        </div>
+        <div class="acts">
+          <div class="icon" title="Новая вкладка">＋</div>
+          <div class="icon" title="Очистить">🧹</div>
+          <div class="icon" title="Развернуть">⤢</div>
+          <div class="icon" title="Свернуть">«</div>
+        </div>
+      </div>
+      <div class="term">
+        <div><span class="cmd">$</span> npm run typecheck</div>
+        <div class="err">src/components/Diary.tsx(42,7): error TS2532: Object is possibly 'undefined'.</div>
+        <div><span class="cmd">$</span> npm run lint</div>
+        <div>✓ 0 problems</div>
+      </div>
+    </section>
+    <section class="panel">
+      <div class="ph">
+        <span class="t">Логи и события</span>
+        <div class="acts">
+          <div class="icon" title="Очистить логи">🧹</div>
+          <div class="icon" title="Свернуть">«</div>
+        </div>
+      </div>
+      <div class="logs">
+        <div class="log"><span class="time">18:41</span> Оркестратор: итерация 2 из 5 — проверки</div>
+        <div class="log warn"><span class="time">18:42</span> Тесты упали: 1 из 24 — Diary.test.tsx</div>
+        <div class="log"><span class="time">18:43</span> Фома: аудит пройден, возражений нет</div>
+        <div class="log"><span class="time">18:44</span> RELEASE_READY — отчёт сформирован</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- STATUS -->
+  <div class="status">
+    <span class="ok">● Подключено</span>
+    <span>Perviy proekt · Vite · :5173</span>
+    <span>AUTO: <b class="ok">вкл</b></span>
+    <span>Team mode: <b class="ok">вкл</b></span>
+    <span>Решение: <b>голосование</b></span>
+    <span>Агентов: 6 · онлайн 5</span>
+    <span class="warn">⚠ Telegram не настроен</span>
+  </div>
+
+</div>
+</body>
+</html>
