@@ -13,6 +13,7 @@ let child: ChildProcess | null = null;
 let output = "";
 let starting = false;
 let stopping = false;
+let detectedUrl = "";
 
 let failureReported = false;
 
@@ -35,29 +36,39 @@ function killProcessTree(target: ChildProcess) {
 }
 
 function appendOutput(chunk: Buffer | string) {
-  output = `${output}${chunk.toString()}`.slice(-MAX_OUTPUT);
+  const text = chunk.toString();
+  output = `${output}${text}`.slice(-MAX_OUTPUT);
+  // Dev servers print their real address (Vite: http://localhost:5173). Trust it
+  // over the configured port: a Vite project ignores PORT and would otherwise
+  // publish a URL where nothing listens.
+  if (!detectedUrl) {
+    const match = text.match(/https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0):(\d{2,5})/i);
+    if (match) {
+      detectedUrl = `http://127.0.0.1:${match[1]}`;
+      void db.update(workspaceSettings).set({ previewUrl: detectedUrl, updatedAt: new Date() })
+        .catch(() => undefined);
+    }
+  }
+}
+
+/** Waits until the dev server answers (configured port or an address it printed). */
+async function waitForPreview(port: number, timeoutMs = 25_000): Promise<string> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (detectedUrl) return detectedUrl;
+    const reachable = await new Promise<boolean>((resolve) => {
+      const socket = connect({ host: "127.0.0.1", port });
+      socket.once("connect", () => { socket.destroy(); resolve(true); });
+      socket.once("error", () => { socket.destroy(); resolve(false); });
+    });
+    if (reachable) return `http://127.0.0.1:${port}`;
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  return detectedUrl || "";
 }
 
 // Audit M8: a dev server needs a moment before it accepts connections; the URL
 // used to be published immediately and the proxy answered 502.
-function waitForPort(port: number, timeoutMs = 20_000): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  return new Promise((resolve) => {
-    const attempt = () => {
-      const socket = connect({ host: "127.0.0.1", port });
-      socket.once("connect", () => {
-        socket.destroy();
-        resolve(true);
-      });
-      socket.once("error", () => {
-        socket.destroy();
-        if (Date.now() >= deadline) resolve(false);
-        else setTimeout(attempt, 500);
-      });
-    };
-    attempt();
-  });
-}
 
 function looksFatal(text: string) {
   return /(syntaxerror|fatal error|module not found|cannot find module|failed to compile|compilation failed|unexpected token|address already in use)/i.test(text);
@@ -84,6 +95,7 @@ export async function startPreview() {
   starting = true;
   stopping = false;
   output = "";
+  detectedUrl = "";
   failureReported = false;
   try {
     const [settings] = await db.select().from(workspaceSettings).limit(1);
@@ -129,18 +141,19 @@ export async function startPreview() {
       child = null;
       await db.update(workspaceSettings).set({ previewUrl: "", updatedAt: new Date() });
     });
-    // Audit M8: publish the URL only when the dev server actually accepts
-    // connections — otherwise the proxy answered 502 for the first seconds.
-    const listening = await waitForPort(port);
+    // Audit M8: publish the URL only when the dev server actually answers —
+    // and prefer the address it printed (Vite ignores PORT and uses 5173).
+    const readyUrl = await waitForPreview(port);
     if (child !== spawned) return getPreviewStatus();
-    await db.update(workspaceSettings).set({ previewUrl: `http://127.0.0.1:${port}`, updatedAt: new Date() });
+    const publishedUrl = readyUrl || `http://127.0.0.1:${port}`;
+    await db.update(workspaceSettings).set({ previewUrl: publishedUrl, updatedAt: new Date() });
     starting = false;
     await recordSystemEvent(
-      listening ? "success" : "warning",
+      readyUrl ? "success" : "warning",
       "preview",
-      listening
-        ? `Preview started: http://127.0.0.1:${port}`
-        : `Preview process started, but port ${port} is not listening yet (check previewCommand/previewPort) — URLs below may be wrong`,
+      readyUrl
+        ? `Preview started: ${publishedUrl}`
+        : `Preview process started, but no address was detected (check previewCommand/previewPort)`,
     );
     return getPreviewStatus();
   } catch (error) {
