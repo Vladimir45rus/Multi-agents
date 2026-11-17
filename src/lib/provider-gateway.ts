@@ -7,9 +7,14 @@ export { extractJson };
 
 export type GatewayRole = "system" | "user" | "assistant";
 
+export type GatewayImage = { url: string; mimeType?: string };
+
 export type GatewayMessage = {
   role: GatewayRole;
   content: string;
+  // Vision input: data URLs of images attached by the user. Providers that
+  // do not support images simply ignore the extra parts.
+  images?: GatewayImage[];
 };
 
 export type ProviderRequest = {
@@ -177,11 +182,23 @@ function buildGeminiUrl(baseUrl: string, model: string) {
   return `${baseUrl}/models/${encodeURIComponent(model)}:streamGenerateContent?alt=sse`;
 }
 
+function anthropicContent(message: GatewayMessage) {
+  if (!message.images?.length) return message.content;
+  const parts: Array<Record<string, unknown>> = [];
+  if (message.content.trim()) parts.push({ type: "text", text: message.content });
+  for (const image of message.images.slice(0, 4)) {
+    const match = /^data:([^;]+);base64,(.+)$/.exec(image.url);
+    if (!match) continue;
+    parts.push({ type: "image", source: { type: "base64", media_type: match[1], data: match[2] } });
+  }
+  return parts.length > 0 ? parts : message.content;
+}
+
 function buildAnthropicBody(model: string, messages: GatewayMessage[]) {
   const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
   const conversation = messages
     .filter((message) => message.role !== "system")
-    .map((message) => ({ role: message.role === "assistant" ? "assistant" : "user", content: message.content }));
+    .map((message) => ({ role: message.role === "assistant" ? "assistant" : "user", content: anthropicContent(message) }));
 
   return {
     model,
@@ -198,7 +215,13 @@ function buildGeminiBody(messages: GatewayMessage[], jsonMode = false) {
     .filter((message) => message.role !== "system")
     .map((message) => ({
       role: message.role === "assistant" ? "model" : "user",
-      parts: [{ text: message.content }],
+      parts: [
+        { text: message.content },
+        ...(message.images ?? []).slice(0, 4).flatMap((image) => {
+          const match = /^data:([^;]+);base64,(.+)$/.exec(image.url);
+          return match ? [{ inlineData: { mimeType: match[1], data: match[2] } }] : [];
+        }),
+      ],
     }));
 
   return {
@@ -208,10 +231,20 @@ function buildGeminiBody(messages: GatewayMessage[], jsonMode = false) {
   };
 }
 
+function openAiContent(message: GatewayMessage) {
+  if (!message.images?.length) return message.content;
+  const images = message.images.filter((image) => image.url.startsWith("data:")).slice(0, 4);
+  if (images.length === 0) return message.content;
+  return [
+    ...(message.content.trim() ? [{ type: "text", text: message.content }] : []),
+    ...images.map((image) => ({ type: "image_url", image_url: { url: image.url } })),
+  ];
+}
+
 function buildOpenAiBody(model: string, messages: GatewayMessage[], jsonMode = false, tools?: Array<Record<string, unknown>>) {
   return {
     model,
-    messages,
+    messages: messages.map((message) => ({ role: message.role, content: openAiContent(message) })),
     stream: true,
     ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
     ...(tools?.length ? { tools, tool_choice: "auto" } : {}),

@@ -1693,9 +1693,20 @@ async function* streamAgentReply(
     ...history,
   ];
 
+  const imageAttachments = attachments
+    .filter((attachment) => attachment.type === "image" && attachment.url?.startsWith("data:"))
+    .map((attachment) => ({ url: attachment.url as string, name: attachment.name }))
+    .slice(0, 4);
+
   const latest = gatewayMessages[gatewayMessages.length - 1];
   if (!latest || latest.role !== "user" || latest.content !== prompt) {
-    gatewayMessages.push({ role: "user", content: prompt });
+    gatewayMessages.push({
+      role: "user",
+      content: prompt,
+      ...(imageAttachments.length > 0 ? { images: imageAttachments } : {}),
+    });
+  } else if (imageAttachments.length > 0) {
+    latest.images = imageAttachments;
   }
 
   const request = providerRequestFromAgent(effectiveAgent, apiKey, customMeta?.headers);

@@ -3705,6 +3705,11 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <input type="file" accept="image/*" className="hidden" onChange={onPickImageAttachment} />
                     </label>
                   </div>
+                  {pendingAttachments.some((att) => att.type === "image") ? (
+                    <p className="mb-1 text-[10px] text-emerald-300">
+                      {locale === "ru" ? "Картинку увидит модель — можно приложить скриншот и написать «сделай как здесь»." : "The model will see the picture — attach a screenshot and ask \"make it like this\"."}
+                    </p>
+                  ) : null}
                   {pendingAttachments.length > 0 ? (
                     <div className="mb-2 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2 text-xs">
                       {pendingAttachments?.map((att, i) => (
