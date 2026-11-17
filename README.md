@@ -41,6 +41,13 @@ Type in chat:
 - `/docs` — generate documentation
 - `@AgentName` — mention a specific agent
 
+### First-run experience (v1.6.1)
+- **Onboarding instead of an empty tree** — “What are we building?” asks for the idea, the platform and the folder, generates the scaffold, prefills the Lead chat and opens the preview. Shown once, skippable
+- **Ctrl+K palette** — preview, orchestrator, project folder, preset, settings, report, GitHub push, stop agents, clear terminal, overlay widget; arrows + Enter
+- **Flag language switcher** in the header (RU / EN now, 中文 / Deutsch / Français marked as coming soon)
+- **Status bar** — connection, project, preview URL, AUTO / Team / Decision states, agent count and a Telegram-not-configured warning
+- **Project menu** with the last five projects, an empty-state CTA when no folder is connected, and a compact icon-only header for the logs panel
+
 ### Verification & doubt (v1.6.0)
 - **“Фома неверующий” role** — a dedicated skeptic agent that is forbidden to agree without evidence: every objection needs a file, a line or reproduction steps, and it may not parrot the majority
 - **Two decision modes** (Settings → Decision): **Lead decides** (today's behaviour) or **team vote**, where verdicts are tallied, a single blocker forces the Lead to answer it explicitly with a forced retry, and the skeptic's blocker can never become an “everyone approves” majority
