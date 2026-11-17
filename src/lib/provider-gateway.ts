@@ -107,8 +107,8 @@ function validateRequest(request: ProviderRequest) {
     provider,
     model,
     // Custom registry providers may authenticate via user-defined headers
-    // instead of a bearer key, so an empty key is allowed there.
-    apiKey: provider.startsWith("custom:") ? compact(request.apiKey) : validateApiKey(request.apiKey),
+    // instead of a bearer key, and local Ollama needs no key at all.
+    apiKey: provider.startsWith("custom:") || provider === "ollama" ? compact(request.apiKey) : validateApiKey(request.apiKey),
     baseUrl: normalizeBaseUrl(provider, request.baseUrl),
     headers: request.headers,
   };

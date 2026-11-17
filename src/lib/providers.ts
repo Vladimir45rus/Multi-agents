@@ -114,6 +114,15 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     fallbackModels: ["deepseek-chat", "deepseek-reasoner"],
   },
   {
+    // Local models: Ollama exposes an OpenAI-compatible endpoint and needs no
+    // API key, so the same pipeline works fully offline.
+    id: "ollama",
+    label: "Ollama (локально)",
+    baseUrl: "http://127.0.0.1:11434/v1",
+    defaultModel: "qwen2.5-coder:7b",
+    fallbackModels: ["llama3.1:8b", "qwen2.5-coder:7b"],
+  },
+  {
     id: "google",
     label: "Google Gemini",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",

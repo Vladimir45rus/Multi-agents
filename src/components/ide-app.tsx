@@ -3824,6 +3824,25 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   <p className="text-xs font-semibold text-white">{provider.label}</p>
                   <p className="text-[11px] text-[var(--text-secondary)]">{t.baseUrl}: {provider.baseUrl}</p>
                   <p className="text-[11px] text-[var(--text-secondary)]">{t.defaultModel}: {provider.defaultModel}</p>
+                  {provider.id === "ollama" ? (
+                    <div className="mt-1 space-y-1">
+                      <p className="text-[10px] text-emerald-300">
+                        {locale === "ru" ? "Ключ не нужен: модель работает на вашем компьютере, запросы никуда не уходят." : "No key needed: the model runs on your machine, requests never leave it."}
+                      </p>
+                      <button
+                        type="button"
+                        onClick={() => void fetchModels("ollama", provider.baseUrl, undefined, true)}
+                        className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400"
+                      >
+                        {locale === "ru" ? "Проверить Ollama" : "Check Ollama"}
+                      </button>
+                      {modelOptions["ollama"]?.length ? (
+                        <p className="text-[10px] text-[var(--text-secondary)]">
+                          {locale === "ru" ? "Найдено моделей: " : "Models found: "}{modelOptions["ollama"].length}
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : (
                   <input
                     value={apiKeysDraft[provider.id] ?? ""}
                     onChange={(e) => {
@@ -3836,6 +3855,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                     placeholder={data?.settings.apiKeysConfigured?.[provider.id] ? `${provider.label} API key сохранён локально` : `${provider.label} API key`}
                   />
+                  )}
                   {data?.settings.apiKeysConfigured?.[provider.id] ? (
                     <button
                       type="button"
