@@ -236,6 +236,16 @@ const ROLE_COLORS: Record<string, string> = {
   observer: "#64748b",
 };
 
+// Language switcher: flags for the main page. Only ru/en are translated,
+// the rest are listed as upcoming so the roadmap is visible.
+const LANGUAGE_OPTIONS: Array<{ id: UiLocale | string; flag: string; label: string; ready: boolean }> = [
+  { id: "ru", flag: "🇷🇺", label: "Русский", ready: true },
+  { id: "en", flag: "🇺🇸", label: "English", ready: true },
+  { id: "zh", flag: "🇨🇳", label: "中文", ready: false },
+  { id: "de", flag: "🇩🇪", label: "Deutsch", ready: false },
+  { id: "fr", flag: "🇫🇷", label: "Français", ready: false },
+];
+
 const AGENT_COLOR_PALETTE = [
   "#4fc1ff", "#6a9955", "#ce9178", "#dcdcaa", "#c586c0",
   "#f48771", "#9da3b2", "#569cd6", "#d7ba7d", "#b5cea8",
@@ -694,6 +704,7 @@ export function IdeApp() {
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
@@ -3149,6 +3160,36 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           ) : null}
         </div>
 
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setLangMenuOpen((value) => !value)}
+            className="rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1.5 text-sm leading-none hover:border-blue-400"
+            title={locale === "ru" ? "Язык интерфейса" : "Interface language"}
+          >
+            {LANGUAGE_OPTIONS.find((item) => item.id === locale)?.flag ?? "🇷🇺"}
+          </button>
+          {langMenuOpen ? (
+            <>
+              <button type="button" aria-label="close" onClick={() => setLangMenuOpen(false)} className="fixed inset-0 z-40 cursor-default" />
+              <div className="absolute right-0 z-50 mt-1 w-52 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-1 shadow-2xl">
+                {LANGUAGE_OPTIONS.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    disabled={!item.ready}
+                    onClick={() => { setLangMenuOpen(false); if (item.ready) switchLocale(item.id as UiLocale); }}
+                    className={"flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-xs " + (item.ready ? "hover:bg-[var(--bg-hover)]" : "cursor-not-allowed opacity-45") + (item.id === locale ? " bg-[var(--bg-selection)] text-white" : "")}
+                  >
+                    <span className="text-base leading-none">{item.flag}</span>
+                    <span className="flex-1">{item.label}</span>
+                    {item.ready ? (item.id === locale ? <span className="text-[10px]">✓</span> : null) : <span className="text-[9px] opacity-70">{locale === "ru" ? "скоро" : "soon"}</span>}
+                  </button>
+                ))}
+              </div>
+            </>
+          ) : null}
+        </div>
         <button type="button" onClick={() => setSettingsOpen(true)} className="shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2.5 py-1.5 text-xs hover:border-blue-400" title={t.settings}>⚙</button>
       </header>
 
