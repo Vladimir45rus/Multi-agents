@@ -3686,9 +3686,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 <div className="panel-header flex items-center justify-between">
                   <span className="truncate">{t.logsTitle}</span>
                   <div className="flex items-center gap-0.5">
-                    <button type="button" onClick={() => toggleFullscreen("logs")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">{t.expand}</button>
-                    <button type="button" onClick={() => toggleCollapse("logs")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">{t.collapse}</button>
-                    <button type="button" onClick={() => void clearSystemEvents()} disabled={busy} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-red-400 disabled:opacity-50">{locale === "ru" ? "Очистить логи" : "Clear logs"}</button>
+                    <button type="button" onClick={() => toggleFullscreen("logs")} title={t.expand} className="rounded px-1.5 py-1 text-[11px] hover:bg-[#3a3d41]">⤢</button>
+                    <button type="button" onClick={() => toggleCollapse("logs")} title={t.collapse} className="rounded px-1.5 py-1 text-[11px] hover:bg-[#3a3d41]">«</button>
+                    <button type="button" onClick={() => void clearSystemEvents()} disabled={busy} title={locale === "ru" ? "Очистить логи" : "Clear logs"} className="rounded px-1.5 py-1 text-[11px] hover:bg-[#3a3d41] disabled:opacity-50">🧹</button>
                   </div>
                 </div>
                 <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3 text-xs">
