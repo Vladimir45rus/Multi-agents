@@ -5,6 +5,7 @@ import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/l
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { BrandMark } from "@/components/brand-mark";
+import { TeamMeeting, type MeetingLine, type MeetingStance } from "@/components/team-meeting";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { useVoiceInput, VoiceSettings, loadVoicePrefs, saveVoicePrefs, type VoicePrefs } from "@/components/voice-input";
@@ -2277,6 +2278,7 @@ export function IdeApp() {
   const [taskBaseline, setTaskBaseline] = useState<number | null>(null);
   const [taskChanges, setTaskChanges] = useState<string[]>([]);
   const [taskChangesOpen, setTaskChangesOpen] = useState(false);
+  const [meetingOpen, setMeetingOpen] = useState(false);
   async function captureTaskBaseline() {
     try {
       const response = await fetch("/api/workspace/task-rollback?sinceId=0&files=meta", { cache: "no-store" });
@@ -3063,6 +3065,33 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       ));
   }
 
+  // "Заседание команды": the last group-chat replies become a drawn scene.
+  const meetingLines = useMemo<MeetingLine[]>(() => {
+    const roleColors: Record<string, string> = {
+      main: "#8b5cf6", advisor: "#0ea5e9", architect: "#f59e0b", reviewer: "#22c55e",
+      tester: "#14b8a6", uiux: "#ec4899", security: "#ef4444", skeptic: "#e11d48",
+      observer: "#64748b", auto: "#a855f7",
+    };
+    const result: MeetingLine[] = [];
+    for (const message of data?.messages ?? []) {
+      if (message.chatChannel !== "group" || message.senderType !== "agent") continue;
+      const identity = message.metadata?.identity;
+      if (!identity) continue;
+      const stanceMatch = /\[STANCE:\s*(approve|change|blocker)\s*\]/i.exec(message.content);
+      const stance: MeetingStance = stanceMatch ? (stanceMatch[1].toLowerCase() as MeetingStance) : "none";
+      const agent = data?.agents.find((item) => item.id === identity.agentId);
+      result.push({
+        id: `meeting-${message.id}`,
+        agentId: identity.agentId,
+        name: identity.displayName,
+        role: identity.role,
+        color: agent?.color ?? roleColors[identity.role] ?? "#4fc1ff",
+        text: message.content.replace(/\[STANCE:\s*(?:approve|change|blocker)\s*\]/gi, "").trim(),
+        stance,
+      });
+    }
+    return result.slice(-24);
+  }, [data?.messages, data?.agents]);
   const paletteActions = [
     { id: "preview", icon: "▶", label: locale === "ru" ? "Запустить предпросмотр" : "Start preview", hint: "", run: () => setPreviewOpen(true) },
     { id: "orchestrator", icon: "⚡", label: locale === "ru" ? "Открыть оркестратор" : "Open orchestrator", hint: "", run: () => setOrchestratorOpen(true) },
@@ -3576,6 +3605,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                   <div className="chat-panel-actions relative">
                     <span className="text-[10px] text-[var(--text-secondary)]">Агентов: {data?.agents.length ?? 0} · Активны: {data?.agents.filter((agent) => agent.isActive && !agentRecentlyFailed(agent.name, data?.systemEvents)).length ?? 0}</span>
+                    <button type="button" onClick={() => setMeetingOpen(true)} title={locale === "ru" ? "Показать заседание команды картинкой" : "Show the team meeting as a drawing"} className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200 hover:border-amber-400">🎬 Заседание</button>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "group" ? null : "group")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("group")}
                     {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
@@ -4664,6 +4694,20 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
         ) : null}
       </footer>
 
+      {meetingOpen ? (
+        <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/80 p-3" onClick={() => setMeetingOpen(false)}>
+          <div className="w-full max-w-3xl overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[#171310] p-4" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-2 flex items-center justify-between">
+              <div>
+                <h2 className="text-sm font-bold text-white">{locale === "ru" ? "🎬 Заседание команды" : "🎬 Team meeting"}</h2>
+                <p className="text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Кто что сказал — нарисованное заседание по последним репликам." : "Who said what — a drawn session built from the latest replies."}</p>
+              </div>
+              <button type="button" onClick={() => setMeetingOpen(false)} className="rounded border border-[var(--border-default)] px-2 py-1 text-xs text-[var(--text-secondary)] hover:border-blue-400">✕</button>
+            </div>
+            <TeamMeeting lines={meetingLines} locale={locale === "en" ? "en" : "ru"} title={locale === "ru" ? "Заседание команды" : "Team meeting"} />
+          </div>
+        </div>
+      ) : null}
       {onboardingOpen ? (
         <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
           <section className="w-full max-w-2xl overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--bg-panel)] shadow-2xl">
