@@ -3885,8 +3885,32 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <button type="button" onClick={() => setSettingsOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
         </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto p-3 pb-10">
-          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+                  <nav className="sticky top-0 z-10 flex flex-wrap gap-1 border-b border-[var(--border-default)] bg-[var(--bg-panel)] px-2 py-1.5">
+          {([
+            ["project", locale === "ru" ? "Проект" : "Project"],
+            ["lang", locale === "ru" ? "Язык" : "Language"],
+            ["import", locale === "ru" ? "Импорт" : "Import"],
+            ["keys", locale === "ru" ? "Ключи" : "Keys"],
+            ["github", "GitHub"],
+            ["mobile", locale === "ru" ? "Телефон" : "Mobile"],
+            ["preview", locale === "ru" ? "Превью" : "Preview"],
+            ["telegram", "Telegram"],
+            ["fallback", locale === "ru" ? "Резерв" : "Fallback"],
+            ["agents", locale === "ru" ? "Агенты" : "Agents"],
+          ] as const).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => document.getElementById(`settings-${id}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
+              className="rounded-full border border-[var(--border-default)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)] hover:border-blue-400 hover:text-white"
+            >
+              {label}
+            </button>
+          ))}
+        </nav>
+
+<div className="min-h-0 flex-1 overflow-y-auto p-3 pb-10">
+          <section id="settings-project" className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <h3 className="mb-2 text-xs uppercase text-[var(--text-secondary)]">{t.projectFolder}</h3>
             <input
               value={workspaceRootDraft}
@@ -3905,7 +3929,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             <p className="mt-2 text-[11px] text-[var(--text-secondary)]">{workspaceRootDraft || t.noFile}</p>
           </section>
 
-          <section className="mb-5">
+          <section id="settings-lang" className="mb-5">
             <h3 className="mb-2 text-xs uppercase text-[var(--text-secondary)]">{t.lang}</h3>
             <div className="flex gap-2">
               <button type="button" onClick={() => switchLocale("ru")} className={`rounded px-2 py-1 text-sm ${locale === "ru" ? "bg-[#007acc]" : "bg-[var(--bg-panel-alt)]"}`}>🇷🇺</button>
@@ -3913,14 +3937,14 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
           </section>
 
-          <section className="mb-5">
+          <section id="settings-import" className="mb-5">
             <h3 className="mb-2 text-xs uppercase text-[var(--text-secondary)]">{t.importCode}</h3>
             <p className="mb-2 text-xs text-[var(--text-secondary)]">{t.importHint}</p>
             <input type="file" multiple onChange={onPickImportFiles} className="mb-2 block w-full text-xs" />
             <button type="button" onClick={importOwnFiles} className="rounded bg-[#0e639c] px-3 py-1 text-xs text-white">{t.importBtn}</button>
           </section>
 
-          <section className="mb-5">
+          <section id="settings-keys" className="mb-5">
             <button type="button" onClick={() => setProvidersOpen((open) => !open)} className="mb-2 flex w-full items-center justify-between text-left text-xs uppercase text-[var(--text-secondary)]"><span>{t?.apiKeys}</span><span className="text-sm">{providersOpen ? "▼" : "▶"}</span></button>
             {providersOpen ? <>
             <a href="https://openrouter.ai/keys" target="_blank" rel="noreferrer" className="mb-2 inline-block text-xs text-[var(--text-accent)] underline">
@@ -4075,7 +4099,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </> : null}
           </section>
 
-          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+          <section id="settings-github" className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-semibold">{locale === "ru" ? "Live Preview проекта" : "Project Live Preview"}</p>
@@ -4089,7 +4113,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
           </section>
 
-          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+          <section id="settings-mobile" className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-semibold">{locale === "ru" ? "Пресет проекта" : "Project preset"}</p>
@@ -4099,7 +4123,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
           </section>
 
-          <section className="mb-5">
+          <section id="settings-preview" className="mb-5">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs uppercase text-[var(--text-secondary)]">{locale === "ru" ? "Кастомные провайдеры" : "Custom providers"}</span>
               <button type="button" onClick={() => setCustomProviderForm({ id: null, providerId: "", name: "", baseUrl: "", apiKey: "", models: [{ id: "", name: "" }], headers: [] })} className="rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white">
@@ -4249,7 +4273,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
           ) : null}
 
-          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+          <section id="settings-telegram" className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">Telegram</p>
             <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Bot Token
               <input value={telegramTokenDraft} onChange={(e) => { setTelegramTokenDraft(e.target.value); if (e.target.value.trim()) setRemoveTelegramToken(false); }} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "Telegram token сохранён локально" : "123456:ABC..."} className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
@@ -4266,13 +4290,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "1) @BotFather → /newbot → скопируйте токен. 2) Напишите боту /start — он пришлёт chat id. 3) Сохраните настройки и нажмите «Проверить связь». Команды с телефона: /status, /task <текст>, /stop, /log." : "1) @BotFather → /newbot → copy the token. 2) Send /start to the bot — it replies with your chat id. 3) Save settings and press Test connection. Phone commands: /status, /task <text>, /stop, /log."}</p>
           </section>
 
-          <section className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+          <section id="settings-fallback" className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">{locale === "ru" ? "Fallback Chain моделей" : "Fallback model chain"}</p>
             <textarea value={fallbackModelsDraft} onChange={(e) => setFallbackModelsDraft(e.target.value)} placeholder={locale === "ru" ? "По одной модели на строку\nнапример: gpt-4o-mini\nclaude-3-5-haiku" : "One model per line\ne.g. gpt-4o-mini\nclaude-3-5-haiku"} className="min-h-16 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             <p className="mt-1 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Используется при 403, 429, 5xx и timeout." : "Used for 403, 429, 5xx and timeouts."}</p>
           </section>
 
-          <section className="mb-5">
+          <section id="settings-agents" className="mb-5">
             <div className="flex items-center justify-between mb-2">
               <span className="text-xs uppercase text-[var(--text-secondary)]">{locale === "ru" ? "ЭКСПОРТ / ИМПОРТ" : "EXPORT / IMPORT"}</span>
               <div className="flex gap-2">
