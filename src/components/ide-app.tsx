@@ -693,6 +693,9 @@ export function IdeApp() {
   const [workspaceRootDraft, setWorkspaceRootDraft] = useState("");
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
+  const [paletteQuery, setPaletteQuery] = useState("");
+  const [paletteIndex, setPaletteIndex] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
   const [recentProjects, setRecentProjects] = useState<string[]>(() => {
     if (typeof window === "undefined") return [];
@@ -850,6 +853,22 @@ export function IdeApp() {
       return next;
     });
   };
+
+  // Command palette (Ctrl+K): one entry point for every action.
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setPaletteOpen((value) => !value);
+        setPaletteQuery("");
+        setPaletteIndex(0);
+        return;
+      }
+      if (event.key === "Escape") setPaletteOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   // Collapse/expand helpers moved outside via useMemo render functions
   const renderCollapseButton = (name: PanelName) => {
@@ -2932,6 +2951,19 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       ));
   }
 
+  const paletteActions = [
+    { id: "preview", icon: "▶", label: locale === "ru" ? "Запустить предпросмотр" : "Start preview", hint: "", run: () => setPreviewOpen(true) },
+    { id: "orchestrator", icon: "⚡", label: locale === "ru" ? "Открыть оркестратор" : "Open orchestrator", hint: "", run: () => setOrchestratorOpen(true) },
+    { id: "open-folder", icon: "📂", label: locale === "ru" ? "Открыть папку проекта" : "Open project folder", hint: "", run: () => void pickWorkspaceFolder() },
+    { id: "new-project", icon: "✨", label: locale === "ru" ? "Новый проект из пресета" : "New project from preset", hint: "", run: () => setTemplateOpen(true) },
+    { id: "settings", icon: "⚙", label: locale === "ru" ? "Настройки" : "Settings", hint: "", run: () => setSettingsOpen(true) },
+    { id: "report", icon: "📊", label: locale === "ru" ? "Сформировать отчёт" : "Generate report", hint: "", run: () => void generateSystemReport() },
+    { id: "github", icon: "🐙", label: locale === "ru" ? "Отправить в GitHub" : "Push to GitHub", hint: "", run: () => void pushToGithub() },
+    { id: "stop-chat", icon: "⏹", label: locale === "ru" ? "Остановить ответ агентов" : "Stop the agents", hint: "", run: () => stopChat() },
+    { id: "clear-terminal", icon: "🧹", label: locale === "ru" ? "Очистить терминал" : "Clear terminal", hint: "", run: () => void clearTerminal() },
+    { id: "widget", icon: "📌", label: locale === "ru" ? "Виджет поверх окон" : "Overlay widget", hint: "", run: () => { const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge; bridge?.toggleOverlay?.(); } },
+  ].filter((action) => action.label.toLowerCase().includes(paletteQuery.trim().toLowerCase()));
+
   const activeProjectName =
     (workspaceTreeRoot ? workspaceTreeRoot.split(/[\\/]/).filter(Boolean).pop() : "")
     || data?.settings.workspaceName
@@ -4447,6 +4479,46 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <span className="text-amber-300">⚠ Telegram {locale === "ru" ? "не настроен" : "not configured"}</span>
         ) : null}
       </footer>
+
+      {paletteOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/60 p-4 pt-[12vh]" onClick={() => setPaletteOpen(false)}>
+          <div className="w-full max-w-xl overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--bg-panel)] shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <input
+              autoFocus
+              value={paletteQuery}
+              onChange={(event) => { setPaletteQuery(event.target.value); setPaletteIndex(0); }}
+              onKeyDown={(event) => {
+                const list = paletteActions;
+                if (event.key === "ArrowDown") { event.preventDefault(); setPaletteIndex((index) => Math.min(index + 1, list.length - 1)); }
+                if (event.key === "ArrowUp") { event.preventDefault(); setPaletteIndex((index) => Math.max(index - 1, 0)); }
+                if (event.key === "Enter" && list[paletteIndex]) { event.preventDefault(); setPaletteOpen(false); list[paletteIndex].run(); }
+              }}
+              placeholder={locale === "ru" ? "Что сделать? Например: превью, оркестратор, откат…" : "What to do? e.g. preview, orchestrator, rollback…"}
+              className="w-full border-b border-[var(--border-default)] bg-transparent px-4 py-3 text-sm outline-none"
+            />
+            <div className="max-h-[50vh] overflow-y-auto p-1">
+              {paletteActions.length === 0 ? (
+                <p className="px-3 py-4 text-xs text-[var(--text-secondary)]">{locale === "ru" ? "Ничего не найдено" : "Nothing found"}</p>
+              ) : paletteActions.map((action, index) => (
+                <button
+                  key={action.id}
+                  type="button"
+                  onMouseEnter={() => setPaletteIndex(index)}
+                  onClick={() => { setPaletteOpen(false); action.run(); }}
+                  className={"flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-xs " + (index === paletteIndex ? "bg-[var(--bg-selection)] text-white" : "text-[var(--text-secondary)]")}
+                >
+                  <span className="text-sm">{action.icon}</span>
+                  <span className="flex-1">{action.label}</span>
+                  {action.hint ? <span className="text-[10px] opacity-60">{action.hint}</span> : null}
+                </button>
+              ))}
+            </div>
+            <div className="border-t border-[var(--border-default)] px-3 py-2 text-[10px] text-[var(--text-secondary)]">
+              ↑↓ — выбор · Enter — выполнить · Esc — закрыть
+            </div>
+          </div>
+        </div>
+      ) : null}
 </main>
   );
 }
