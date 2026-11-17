@@ -4,7 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, stat, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
-import { asc, desc, eq } from "drizzle-orm";
+import { asc, desc, eq, gt } from "drizzle-orm";
 import { db } from "@/db";
 import { withSqliteTransaction } from "@/db";
 import { agents, projectFiles, workspaceFileHistory, workspaceSettings } from "@/db/schema";
@@ -575,4 +575,55 @@ export async function rollbackWorkspaceFile(actorAgentId: number, relativePath: 
   else await db.insert(projectFiles).values({ path: safePath, language: languageFromPath(safePath), content: history.previousContent, updatedAt: new Date() }).onConflictDoUpdate({ target: projectFiles.path, set: { content: history.previousContent, updatedAt: new Date() } });
   await db.delete(workspaceFileHistory).where(eq(workspaceFileHistory.id, history.id));
   return { path: safePath, restoredHistoryId: history.id };
+}
+
+// Task-level rollback (P0-3). A "task" is everything the agents wrote since a
+// checkpoint was taken; restoring means walking the history backwards so the
+// oldest snapshot wins for files touched more than once.
+export async function latestWorkspaceHistoryId() {
+  const [row] = await db.select({ id: workspaceFileHistory.id }).from(workspaceFileHistory).orderBy(desc(workspaceFileHistory.id)).limit(1);
+  return row?.id ?? 0;
+}
+
+export async function listHistorySince(sinceId: number) {
+  return db
+    .select({ id: workspaceFileHistory.id, filePath: workspaceFileHistory.filePath, operation: workspaceFileHistory.operation })
+    .from(workspaceFileHistory)
+    .where(gt(workspaceFileHistory.id, sinceId))
+    .orderBy(asc(workspaceFileHistory.id));
+}
+
+export async function rollbackWorkspaceTask(actorAgentId: number, sinceId: number) {
+  await assertMainAgent(actorAgentId);
+  const root = await getWorkspaceRoot();
+  const rows = await db
+    .select()
+    .from(workspaceFileHistory)
+    .where(gt(workspaceFileHistory.id, sinceId))
+    .orderBy(desc(workspaceFileHistory.id));
+  if (rows.length === 0) return { restored: [] as string[], skipped: [] as string[] };
+
+  const restored: string[] = [];
+  const skipped: string[] = [];
+  // Newest snapshot first: for a file written twice, the second restore puts
+  // back the state before the first write, which is exactly the task start.
+  for (const record of rows) {
+    try {
+      const { absolutePath } = await safeAbsolutePath(root, record.filePath);
+      if (record.operation === "create") {
+        await unlink(absolutePath).catch((error) => { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; });
+        await db.delete(projectFiles).where(eq(projectFiles.path, record.filePath));
+      } else {
+        await mkdir(path.dirname(absolutePath), { recursive: true });
+        await writeFile(absolutePath, record.previousContent, "utf8");
+        await db.insert(projectFiles).values({ path: record.filePath, language: languageFromPath(record.filePath), content: record.previousContent, updatedAt: new Date() }).onConflictDoUpdate({ target: projectFiles.path, set: { content: record.previousContent, updatedAt: new Date() } });
+      }
+      await db.delete(workspaceFileHistory).where(eq(workspaceFileHistory.id, record.id));
+      restored.push(record.filePath);
+    } catch {
+      skipped.push(record.filePath);
+    }
+  }
+
+  return { restored: [...new Set(restored)], skipped: [...new Set(skipped)] };
 }

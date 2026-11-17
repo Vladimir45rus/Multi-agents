@@ -2272,11 +2272,65 @@ export function IdeApp() {
   // Bridge button: push a Lead's spec (or any message) to the Orchestrator as
   // an explicit task. The chat contour itself never executes anything.
   const [pushingToOrchestrator, setPushingToOrchestrator] = useState(false);
+  // Task rollback (P0-3): baseline history id taken right before a run, and
+  // the files the run changed since then.
+  const [taskBaseline, setTaskBaseline] = useState<number | null>(null);
+  const [taskChanges, setTaskChanges] = useState<string[]>([]);
+  const [taskChangesOpen, setTaskChangesOpen] = useState(false);
+  async function captureTaskBaseline() {
+    try {
+      const response = await fetch("/api/workspace/task-rollback?sinceId=0&files=meta", { cache: "no-store" });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { latestId?: number };
+      setTaskBaseline(typeof payload.latestId === "number" ? payload.latestId : null);
+      setTaskChanges([]);
+    } catch {
+      /* baseline is best-effort: without it the rollback button stays hidden */
+    }
+  }
+
+  async function refreshTaskChanges() {
+    if (taskBaseline === null) return;
+    try {
+      const response = await fetch(`/api/workspace/task-rollback?sinceId=${taskBaseline}`, { cache: "no-store" });
+      if (!response.ok) return;
+      const payload = (await response.json()) as { files?: string[] };
+      setTaskChanges(Array.isArray(payload.files) ? payload.files : []);
+    } catch {
+      /* keep the previous list */
+    }
+  }
+
+  async function rollbackTask() {
+    if (taskBaseline === null || taskChanges.length === 0 || !mainAgent) return;
+    if (!window.confirm(locale === "ru" ? `Вернуть как было ${taskChanges.length} файл(ов) этой задачи?` : `Restore ${taskChanges.length} file(s) changed by this task?`)) return;
+    try {
+      const response = await fetch("/api/workspace/task-rollback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actorAgentId: mainAgent.id, sinceId: taskBaseline }),
+      });
+      const payload = (await response.json().catch(() => null)) as { restored?: string[]; skipped?: string[]; error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "Rollback failed");
+      setTaskChanges([]);
+      setTaskChangesOpen(false);
+      setStatus(locale === "ru" ? `Откатено файлов: ${payload?.restored?.length ?? 0}${payload?.skipped?.length ? `, не удалось: ${payload.skipped.length}` : ""}` : `Restored ${payload?.restored?.length ?? 0} file(s)${payload?.skipped?.length ? `, failed: ${payload.skipped.length}` : ""}`);
+      const snapshot = await fetch("/api/workspace?files=meta", { cache: "no-store" });
+      if (snapshot.ok) {
+        const snapshotPayload = (await snapshot.json()) as WorkspaceData;
+        setData((previous) => mergeSnapshot(previous, snapshotPayload));
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Rollback failed");
+    }
+  }
+
   async function sendToOrchestrator(content: string) {
     if (pushingToOrchestrator || !content.trim()) return;
     if (!window.confirm(locale === "ru" ? "Отправить это ТЗ в Оркестратор на исполнение?" : "Push this spec to the Orchestrator for execution?")) return;
     setPushingToOrchestrator(true);
     try {
+      await captureTaskBaseline();
       const response = await fetch("/api/orchestrate/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -2293,6 +2347,7 @@ export function IdeApp() {
         try { while (reader && !(await reader.read()).done) { /* drain */ } } catch { /* ignore */ }
       })();
       await loadWorkspace(selectedFileId, locale);
+      window.setTimeout(() => void refreshTaskChanges(), 3000);
       setStatus(locale === "ru" ? "🚀 ТЗ отправлено в Оркестратор" : "🚀 Spec pushed to the Orchestrator");
       setOrchestratorOpen(true);
     } catch (error) {
@@ -2306,6 +2361,7 @@ export function IdeApp() {
   async function sendVisualBrief(brief: string) {
     if (!brief.trim()) return;
     try {
+      await captureTaskBaseline();
       const response = await fetch("/api/orchestrate/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
@@ -3456,6 +3512,28 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   ))}
                   {renderStreamingMessages("lead")}
                   <div ref={leadChatEndRef} aria-hidden="true" />
+                {taskChanges.length > 0 ? (
+                  <div className="border-t border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-amber-200">
+                        {locale === "ru" ? `Агенты изменили файлов: ${taskChanges.length}` : `Agents changed ${taskChanges.length} file(s)`}
+                      </span>
+                      <button type="button" onClick={() => setTaskChangesOpen((open) => !open)} className="rounded border border-[var(--border-default)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)] hover:border-blue-400">
+                        {taskChangesOpen ? (locale === "ru" ? "Скрыть" : "Hide") : (locale === "ru" ? "Показать файлы" : "Show files")}
+                      </button>
+                      <button type="button" onClick={() => void rollbackTask()} className="rounded border border-red-400/50 px-2 py-0.5 text-[10px] text-red-200 hover:border-red-300">
+                        {locale === "ru" ? "↩ Откатить задачу" : "↩ Roll back task"}
+                      </button>
+                    </div>
+                    {taskChangesOpen ? (
+                      <ul className="mt-1 space-y-0.5 font-mono text-[10px] text-[var(--text-secondary)]">
+                        {taskChanges.map((filePath) => (
+                          <li key={`task-change-${filePath}`} className="truncate">± {filePath}</li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
+                ) : null}
                 </div>
                 <form onSubmit={(e) => { e.preventDefault(); void sendChat("lead", leadMessage); }} className="border-t border-[#2d2d30] p-3">
                   <div className="mb-1 flex flex-wrap gap-1">
