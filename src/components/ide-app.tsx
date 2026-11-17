@@ -705,6 +705,10 @@ export function IdeApp() {
   const [moreMenuOpen, setMoreMenuOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [langMenuOpen, setLangMenuOpen] = useState(false);
+  // First-run onboarding: shown only while no project is connected.
+  const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [onboardingIdea, setOnboardingIdea] = useState("");
+  const [onboardingTemplate, setOnboardingTemplate] = useState<"web" | "mobile" | "desktop">("web");
   const [paletteQuery, setPaletteQuery] = useState("");
   const [paletteIndex, setPaletteIndex] = useState(0);
   const [newProjectName, setNewProjectName] = useState("");
@@ -880,6 +884,45 @@ export function IdeApp() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // First run: guide the user instead of showing an empty tree.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const timer = window.setTimeout(() => {
+      if (!data?.settings) return;
+      if (data.settings.projectRoot && data.files.length > 0) return;
+      if (window.localStorage.getItem("ma-onboarding-done") === "true") return;
+      setOnboardingOpen(true);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [data?.settings, data?.files.length]);
+
+  async function startOnboarding() {
+    const idea = onboardingIdea.trim();
+    if (!workspaceRootDraft.trim()) {
+      await pickWorkspaceFolder();
+      if (!workspaceRootDraft.trim()) {
+        setStatus(locale === "ru" ? "Выберите папку для проекта" : "Choose a project folder");
+        return;
+      }
+    }
+    setTemplateId(onboardingTemplate);
+    try {
+      const created = await generateTemplate();
+      if (!created) return;
+      window.localStorage.setItem("ma-onboarding-done", "true");
+      setOnboardingOpen(false);
+      if (idea) setLeadMessage(idea);
+      setPreviewOpen(true);
+    } catch {
+      /* generateTemplate already reports the error via status */
+    }
+  }
+
+  function skipOnboarding() {
+    try { window.localStorage.setItem("ma-onboarding-done", "true"); } catch { /* ignore */ }
+    setOnboardingOpen(false);
+  }
 
   // Collapse/expand helpers moved outside via useMemo render functions
   const renderCollapseButton = (name: PanelName) => {
@@ -2635,7 +2678,7 @@ export function IdeApp() {
     const directory = workspaceRootDraft.trim();
     if (!directory) {
       setStatus(locale === "ru" ? "Сначала выберите папку проекта" : "Choose a project folder first");
-      return;
+      return false;
     }
     setBusy(true);
     try {
@@ -2649,8 +2692,10 @@ export function IdeApp() {
       setTemplateOpen(false);
       await loadWorkspace(null, locale);
       setStatus(locale === "ru" ? `Пресет создан: ${payload?.files?.length ?? 0} файлов` : `Preset created: ${payload?.files?.length ?? 0} files`);
+      return true;
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Template generation failed");
+      return false;
     } finally {
       setBusy(false);
     }
@@ -4520,6 +4565,61 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <span className="text-amber-300">⚠ Telegram {locale === "ru" ? "не настроен" : "not configured"}</span>
         ) : null}
       </footer>
+
+      {onboardingOpen ? (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/75 p-4 backdrop-blur-sm">
+          <section className="w-full max-w-2xl overflow-hidden rounded-2xl border border-[var(--border-default)] bg-[var(--bg-panel)] shadow-2xl">
+            <div className="flex items-center gap-3 border-b border-[var(--border-default)] px-5 py-4">
+              <BrandMark className="h-9 w-9" />
+              <div>
+                <h2 className="text-base font-bold">{locale === "ru" ? "Что строим?" : "What are we building?"}</h2>
+                <p className="text-[11px] text-[var(--text-secondary)]">{locale === "ru" ? "Опишите идею — команда агентов соберёт проект и запустит превью." : "Describe the idea — the agents will scaffold the project and open a preview."}</p>
+              </div>
+            </div>
+            <div className="space-y-4 px-5 py-4">
+              <textarea
+                autoFocus
+                value={onboardingIdea}
+                onChange={(event) => setOnboardingIdea(event.target.value)}
+                placeholder={locale === "ru" ? "Например: дневник калорий с поиском продуктов, графиком за неделю и тёмной темой" : "e.g. a calorie diary with food search, a weekly chart and a dark theme"}
+                className="min-h-[96px] w-full resize-none rounded-xl border border-[var(--border-input)] bg-[var(--bg-app)] px-3 py-2 text-sm outline-none focus:border-blue-400"
+              />
+              <div className="grid gap-2 sm:grid-cols-3">
+                {([
+                  ["web", "🌐 " + (locale === "ru" ? "Веб" : "Web")],
+                  ["mobile", "📱 " + (locale === "ru" ? "Мобильное" : "Mobile")],
+                  ["desktop", "💻 " + (locale === "ru" ? "Десктоп" : "Desktop")],
+                ] as const).map(([id, label]) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setOnboardingTemplate(id)}
+                    className={"rounded-xl border px-3 py-2 text-xs " + (onboardingTemplate === id ? "border-blue-400 bg-[#1b2c4a] text-white" : "border-[var(--border-default)] bg-[var(--bg-app)] text-[var(--text-secondary)]")}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[10px] text-[var(--text-secondary)]">
+                {workspaceRootDraft || (locale === "ru" ? "Папка ещё не выбрана — спросим при создании." : "No folder yet — we will ask when creating.")}
+              </p>
+              <p
+                className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-[10px] text-amber-200"
+              >
+                {locale === "ru" ? "Ключи провайдеров — только ваши и хранятся локально. Приложение никуда их не отправляет, кроме запросов к выбранному провайдеру." : "Provider keys are yours and stay local. The app sends them nowhere except to the provider you chose."}
+              </p>
+            </div>
+            <div className="flex items-center justify-between gap-2 border-t border-[var(--border-default)] px-5 py-3">
+              <button type="button" onClick={skipOnboarding} className="rounded-lg px-3 py-2 text-xs text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]">
+                {locale === "ru" ? "Пропустить" : "Skip"}
+              </button>
+              <button type="button" onClick={() => void startOnboarding()} disabled={busy} className="rounded-lg bg-[#1d4ed8] px-4 py-2 text-xs font-semibold text-white hover:bg-[#2563eb] disabled:opacity-50">
+                {busy ? (locale === "ru" ? "Создаю…" : "Creating…") : (locale === "ru" ? "Создать и запустить" : "Create and run")}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {paletteOpen ? (
         <div className="fixed inset-0 z-[70] flex items-start justify-center bg-black/60 p-4 pt-[12vh]" onClick={() => setPaletteOpen(false)}>
