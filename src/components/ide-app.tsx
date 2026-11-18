@@ -681,6 +681,7 @@ export function IdeApp() {
   const [removeTelegramToken, setRemoveTelegramToken] = useState(false);
   const [telegramChatIdDraft, setTelegramChatIdDraft] = useState("");
   const [fallbackModelsDraft, setFallbackModelsDraft] = useState("");
+  const [fallbackModelInput, setFallbackModelInput] = useState("");
   // Custom-provider support: per-agent API key drafts (plaintext only in
   // memory; the server stores them encrypted).
   const [agentKeyDrafts, setAgentKeyDrafts] = useState<Record<number, string>>({});
@@ -3524,6 +3525,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   changedFiles={taskChanges}
                   blockers={meetingLines.filter((line) => line.stance === "blocker").length}
                   lastCheck={data?.systemEvents?.find((event) => /release.?ready|проверк|check/i.test(event.message))?.message ?? null}
+                  lastUsage={data?.systemEvents?.find((event) => event.source === "tokens")?.message ?? null}
                   telegramReady={Boolean(data?.settings.telegramTokenConfigured && data?.settings.telegramChatId)}
                   onOpenSettings={() => { setTeamTab("lead"); setSettingsOpen(true); }}
                   onRollback={() => void rollbackTask()}
@@ -3989,7 +3991,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           }}
         >
         <div className="panel-header flex items-center justify-between">
-          <span className="flex items-center gap-2">{t.settings}{Object.entries(agentDrafts).some(([agentId, draft]) => {
+          <span className="flex items-center gap-2">{t.settings} <span className="text-[9px] font-normal text-[var(--text-muted)]">v1.6.0</span>{Object.entries(agentDrafts).some(([agentId, draft]) => {
             const agent = data?.agents.find((candidate) => candidate.id === Number(agentId));
             return agent ? isAgentDraftDirty(agent, draft) : false;
           }) ? <span className="text-[10px] text-amber-300">{t.unsaved}</span> : null}</span>
@@ -4089,9 +4091,26 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             <div className="space-y-3">
               {PROVIDER_PRESETS.filter((p) => p.id !== "mock")?.map((provider) => (
                 <div key={provider.id} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
-                  <p className="text-xs font-semibold text-white">{provider.label}</p>
-                  <p className="text-[11px] text-[var(--text-secondary)]">{t.baseUrl}: {provider.baseUrl}</p>
-                  <p className="text-[11px] text-[var(--text-secondary)]">{t.defaultModel}: {provider.defaultModel}</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-xs font-semibold text-white">{provider.label}</p>
+                    {provider.id === "ollama" ? (
+                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">
+                        {locale === "ru" ? "без ключа" : "no key"}
+                      </span>
+                    ) : data?.settings.apiKeysConfigured?.[provider.id] ? (
+                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">
+                        {locale === "ru" ? "ключ сохранён" : "key saved"}
+                      </span>
+                    ) : (
+                      <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[9px] text-rose-300">
+                        {locale === "ru" ? "не настроен" : "not set"}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mb-1 text-[10px] text-[var(--text-muted)]">
+                    {provider.baseUrl.replace(/^https?:\/\//, "")} · {provider.defaultModel}
+                  </p>
+
                   {provider.id === "ollama" ? (
                     <div className="mt-1 space-y-1">
                       <p className="text-[10px] text-emerald-300">
@@ -4229,6 +4248,45 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 })() : <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Без регистрации, токенов и VPN." : "No registration, tokens, or VPN required."}</p>}
               </div>
               </div>
+            </div>
+
+            <div className="mt-3 rounded-xl border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+              <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-[var(--text-muted)]">
+                {locale === "ru" ? "Резервные модели (fallback)" : "Fallback models"}
+              </p>
+              <div className="mb-1 flex flex-wrap gap-1">
+                {(fallbackModelsDraft.trim() ? fallbackModelsDraft.split(/[\r?\n,]/).map((value) => value.trim()).filter(Boolean) : ["openai/gpt-4o-mini", "anthropic/claude-3.5-haiku"]).map((model) => (
+                  <span key={model} className="flex items-center gap-1 rounded-full border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-0.5 text-[10px]">
+                    {model}
+                    {fallbackModelsDraft.length > 0 ? (
+                      <button type="button" onClick={() => setFallbackModelsDraft(fallbackModelsDraft.split(/[\r?\n,]/).map((value) => value.trim()).filter((value) => value && value !== model).join("\n"))} className="text-[var(--text-muted)] hover:text-rose-300" title={locale === "ru" ? "Убрать" : "Remove"}>✕</button>
+                    ) : null}
+                  </span>
+                ))}
+              </div>
+              <div className="flex gap-1">
+                <input
+                  value={fallbackModelInput}
+                  onChange={(event) => setFallbackModelInput(event.target.value)}
+                  placeholder={locale === "ru" ? "например, google/gemini-2.0-flash" : "e.g. google/gemini-2.0-flash"}
+                  className="min-w-0 flex-1 rounded border border-[var(--border-input)] bg-[var(--bg-app)] px-2 py-1 text-[11px]"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    const value = fallbackModelInput.trim();
+                    if (!value) return;
+                    setFallbackModelsDraft(fallbackModelsDraft.trim() ? `${fallbackModelsDraft.trim()}\n${value}` : value);
+                    setFallbackModelInput("");
+                  }}
+                  className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] hover:border-blue-400"
+                >
+                  {locale === "ru" ? "+ добавить" : "+ add"}
+                </button>
+              </div>
+              <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+                {locale === "ru" ? "Включается при 403, 404, 429, 5xx и таймауте — пайплайн не встаёт." : "Kicks in on 403, 404, 429, 5xx and timeouts, so the pipeline never stalls."}
+              </p>
             </div>
 
             <button type="button" onClick={saveApiKeys} disabled={busy || !settingsDirty} className="mt-2 rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.saveKeys}</button>
@@ -4698,6 +4756,21 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div> : null}
           </section>
         </div>
+        </div>
+        <div className="sticky bottom-0 z-10 flex items-center justify-between gap-2 border-t border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2">
+          <span className={"text-[10px] " + (settingsDirty ? "text-amber-300" : "text-emerald-300")}>
+            {settingsDirty
+              ? (locale === "ru" ? "• Есть несохранённые изменения" : "• Unsaved changes")
+              : (locale === "ru" ? "✓ Всё сохранено" : "✓ All saved")}
+          </span>
+          <div className="flex gap-1">
+            <button type="button" onClick={() => setSettingsOpen(false)} className="rounded-lg border border-[var(--border-default)] px-3 py-1.5 text-[11px] text-[var(--text-secondary)] hover:border-blue-400">
+              {locale === "ru" ? "Отмена" : "Cancel"}
+            </button>
+            <button type="button" onClick={() => void saveApiKeys()} disabled={busy || !settingsDirty} className="rounded-lg bg-[#1d4ed8] px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#2563eb] disabled:opacity-40">
+              {locale === "ru" ? "Сохранить" : "Save"}
+            </button>
+          </div>
         </div>
       </aside>
       ) : null}

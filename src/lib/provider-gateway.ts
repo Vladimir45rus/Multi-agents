@@ -2,6 +2,8 @@ import "server-only";
 
 import { getProviderPreset } from "@/lib/providers";
 import { extractJson } from "@/lib/json-extract";
+import { estimateCost, formatCost } from "@/lib/pricing";
+import { recordSystemEvent } from "@/lib/system-events";
 
 export { extractJson };
 
@@ -35,6 +37,8 @@ export type ProviderGatewayOptions = {
   tools?: Array<Record<string, unknown>>;
   fallbackModels?: string[];
   onFallback?: (model: string, error: ProviderGatewayError) => void | Promise<void>;
+  // Real token counts reported by the provider at the end of a stream.
+  onUsage?: (usage: { prompt: number; completion: number }, model: string) => void;
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
@@ -246,6 +250,8 @@ function buildOpenAiBody(model: string, messages: GatewayMessage[], jsonMode = f
     model,
     messages: messages.map((message) => ({ role: message.role, content: openAiContent(message) })),
     stream: true,
+    // Real numbers instead of guesses: the final SSE chunk carries usage.
+    stream_options: { include_usage: true },
     ...(jsonMode ? { response_format: { type: "json_object" } } : {}),
     ...(tools?.length ? { tools, tool_choice: "auto" } : {}),
   };
@@ -419,6 +425,16 @@ function extractText(provider: string, raw: string, tools?: ToolCallAccumulator)
   if (!payload || typeof payload !== "object") return { done: false, text: "" };
   const value = payload as Record<string, unknown>;
 
+  // OpenAI-compatible providers send usage on the last chunk.
+  if (value.usage && typeof value.usage === "object") {
+    const usage = value.usage as Record<string, unknown>;
+    const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
+    const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
+    if (Number.isFinite(prompt) || Number.isFinite(completion)) {
+      return { done: false, text: "", usage: { prompt: prompt || 0, completion: completion || 0 } };
+    }
+  }
+
   if (typeof value.error === "object" && value.error) {
     const errorMessage = (value.error as Record<string, unknown>).message;
     throw new ProviderGatewayError(typeof errorMessage === "string" ? errorMessage : "Provider returned an error", {
@@ -517,6 +533,16 @@ export async function* streamProviderResponse(
           resetIdleTimer();
           const parsed = extractText(normalized.provider, raw, toolStream);
           if (parsed.text) yield parsed.text;
+          if (parsed.usage) {
+            options.onUsage?.(parsed.usage, model);
+            // One line per provider response: real tokens and a price estimate.
+            const cost = estimateCost(model, parsed.usage);
+            void recordSystemEvent(
+              "info",
+              "tokens",
+              `${model} · ${parsed.usage.prompt}+${parsed.usage.completion} токенов ≈ ${formatCost(cost)}`,
+            ).catch(() => undefined);
+          }
           if (parsed.done) break;
         }
         for (const index of toolStream.order) {

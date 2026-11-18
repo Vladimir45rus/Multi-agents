@@ -1,0 +1,1 @@
+﻿var t=document.querySelector('.team-tabs'); t.querySelectorAll('button')[2].click(); setTimeout(function(){ var b=document.querySelectorAll('button'); for (var i=0;i<b.length;i++){ if(b[i].textContent.indexOf('Имена')>=0 || b[i].textContent.indexOf('Names')>=0){ b[i].click(); break; } } }, 300);

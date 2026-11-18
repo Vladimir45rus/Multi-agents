@@ -22,6 +22,7 @@ export type TeamStateProps = {
   changedFiles: string[];
   blockers: number;
   lastCheck: string | null;
+  lastUsage: string | null;
   telegramReady: boolean;
   onOpenSettings: () => void;
   onRollback: () => void;
@@ -119,6 +120,15 @@ export function TeamState(props: TeamStateProps) {
             </button>
           </>
         )}
+      </Card>
+
+      <Card title={ru ? "Токены и стоимость" : "Tokens and cost"}>
+        <p className="text-[11px] text-[var(--text-secondary)]">
+          {props.lastUsage ?? (ru ? "Пока не было запросов к провайдеру. Цифры появятся после первого ответа агента." : "No provider calls yet. Numbers appear after the first agent reply.")}
+        </p>
+        <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+          {ru ? "Считаются реальные prompt+completion токены из ответа провайдера, цена — по прайсу модели." : "Real prompt+completion tokens from the provider response; price uses the model list price."}
+        </p>
       </Card>
 
       <Card title="Telegram" tone={props.telegramReady ? "good" : "warn"}>
