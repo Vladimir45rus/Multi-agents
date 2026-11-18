@@ -8,6 +8,7 @@ import { BrandMark } from "@/components/brand-mark";
 import { TeamMeeting, type MeetingLine, type MeetingStance } from "@/components/team-meeting";
 import { TeamState } from "@/components/team-state";
 import { QuickStart } from "@/components/quick-start";
+import { AgentWorld } from "@/components/agent-world";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { useVoiceInput, VoiceSettings, loadVoicePrefs, saveVoicePrefs, type VoicePrefs } from "@/components/voice-input";
@@ -2283,7 +2284,7 @@ export function IdeApp() {
   const [meetingOpen, setMeetingOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState("keys");
   // Right column tabs: Главный / Общий / Состояние.
-  const [teamTab, setTeamTab] = useState<"lead" | "group" | "state">("lead");
+  const [teamTab, setTeamTab] = useState<"lead" | "group" | "world" | "state">("lead");
   const [quickStartOpen, setQuickStartOpen] = useState(false);
   async function captureTaskBaseline() {
     try {
@@ -2306,6 +2307,36 @@ export function IdeApp() {
       setTaskChanges(Array.isArray(payload.files) ? payload.files : []);
     } catch {
       /* keep the previous list */
+    }
+  }
+
+  // Renaming from the world panel: the name is the agent's real name, so the
+  // chat, the roster and the room stay in sync.
+  async function renameAgent(agentId: number, name: string) {
+    const agent = data?.agents.find((item) => item.id === agentId);
+    if (!agent || !name.trim() || name.trim() === agent.name) return;
+    try {
+      const response = await fetch(`/api/agents/${agentId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          provider: agent.provider,
+          baseUrl: agent.baseUrl,
+          model: agent.model,
+          role: agent.role,
+          description: agent.description,
+          skill: agent.skill ?? "",
+          systemPrompt: agent.systemPrompt ?? "",
+          color: agent.color,
+          locale,
+        }),
+      });
+      if (!response.ok) throw new Error("Rename failed");
+      setStatus(locale === "ru" ? `Агент теперь ${name.trim()}` : `Agent renamed to ${name.trim()}`);
+      await loadWorkspace(selectedFileId, locale);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Rename failed");
     }
   }
 
@@ -3466,6 +3497,21 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
+            {teamTab === "world" ? (
+              <div className="absolute inset-0 z-20 overflow-y-auto bg-[var(--bg-app)] p-3">
+                <AgentWorld
+                  locale={locale === "en" ? "en" : "ru"}
+                  agents={(data?.agents ?? []).map((agent) => ({ id: agent.id, name: agent.name, role: agent.role, color: agent.color ?? "#38bdf8", isActive: agent.isActive }))}
+                  lines={meetingLines}
+                  running={chatRunning || pushingToOrchestrator}
+                  blockers={meetingLines.filter((line) => line.stance === "blocker").length}
+                  task={[...(data?.messages ?? [])].reverse().find((message) => message.senderType === "user")?.content ?? null}
+                  onSelectAgent={() => setTeamTab("lead")}
+                  onRename={(id, name) => void renameAgent(id, name)}
+                  onQuickStart={() => setQuickStartOpen(true)}
+                />
+              </div>
+            ) : null}
             {teamTab === "state" ? (
               <div className="absolute inset-0 z-20 overflow-y-auto bg-[var(--bg-app)] p-3">
                 <TeamState
@@ -3489,6 +3535,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     {([
                       ["lead", locale === "ru" ? "Главный" : "Lead"],
                       ["group", locale === "ru" ? "Общий" : "Team"],
+                      ["world", locale === "ru" ? "Мир" : "World"],
                       ["state", locale === "ru" ? "Состояние" : "State"],
                     ] as const).map(([id, label]) => (
                       <button
@@ -3644,6 +3691,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     {([
                       ["lead", locale === "ru" ? "Главный" : "Lead"],
                       ["group", locale === "ru" ? "Общий" : "Team"],
+                      ["world", locale === "ru" ? "Мир" : "World"],
                       ["state", locale === "ru" ? "Состояние" : "State"],
                     ] as const).map(([id, label]) => (
                       <button

@@ -26,6 +26,14 @@ if (!fs.existsSync(projectStatic)) {
   throw new Error(`.next/static not found at ${projectStatic}. "next build" must produce static assets.`);
 }
 
+// A stale .next inside the standalone folder was shipped to users and produced
+// "Failed to load chunk /_next/static/chunks/... from module ..." after an
+// update: the server HTML came from the new build while old chunk files
+// lingered. Always start from a clean copy.
+for (const stale of [path.join(standalone, ".next", "static"), path.join(standalone, ".next", "server"), path.join(standalone, "public")]) {
+  fs.rmSync(stale, { recursive: true, force: true });
+}
+
 const copiedStatic = copyDir(projectStatic, path.join(standalone, ".next", "static"));
 const copiedPublic = copyDir(path.join(root, "public"), path.join(standalone, "public"));
 const copiedMigrations = copyDir(path.join(root, "drizzle"), path.join(standalone, "drizzle"));
@@ -35,3 +43,4 @@ if (!copiedStatic) {
 }
 
 console.log(`Standalone prepared: node_modules=ok, static=${copiedStatic}, public=${copiedPublic}, migrations=${copiedMigrations}`);
+console.log(`Build id: ${fs.readFileSync(path.join(standalone, ".next", "BUILD_ID"), "utf8").trim()}`);

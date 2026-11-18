@@ -15,8 +15,8 @@
     "test": "vitest run",
     "electron:open": "node scripts/electron-open.cjs",
     "build:standalone": "next build && node scripts/prepare-standalone.cjs",
-    "dist": "npm run build:standalone && electron-builder --win",
-    "package": "npm run build:standalone && electron-builder --win --dir",
+    "dist": "npm run build:standalone && node -e \"require('node:fs').rmSync('release/win-unpacked',{recursive:true,force:true})\" && electron-builder --win",
+    "package": "npm run build:standalone && node -e \"require('node:fs').rmSync('release/win-unpacked',{recursive:true,force:true})\" && electron-builder --win --dir",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate"
   },
