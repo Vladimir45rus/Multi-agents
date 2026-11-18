@@ -439,3 +439,8 @@ html * {
 .panel-accent-logs > .panel > .panel-header > span:first-child {
   color: var(--panel-accent);
 }
+
+/* Chat panels: long unbroken tokens used to push the bubble out of the
+   panel and cut the right edge of every message. */
+.chat-no-overflow { overflow-x: hidden; }
+.chat-no-overflow article { overflow-wrap: anywhere; word-break: break-word; }

@@ -7,6 +7,7 @@ import { ThemeToggle } from "@/components/theme-toggle";
 import { BrandMark } from "@/components/brand-mark";
 import { TeamMeeting, type MeetingLine, type MeetingStance } from "@/components/team-meeting";
 import { TeamState } from "@/components/team-state";
+import { QuickStart } from "@/components/quick-start";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { useVoiceInput, VoiceSettings, loadVoicePrefs, saveVoicePrefs, type VoicePrefs } from "@/components/voice-input";
@@ -2283,6 +2284,7 @@ export function IdeApp() {
   const [settingsSection, setSettingsSection] = useState("keys");
   // Right column tabs: Главный / Общий / Состояние.
   const [teamTab, setTeamTab] = useState<"lead" | "group" | "state">("lead");
+  const [quickStartOpen, setQuickStartOpen] = useState(false);
   async function captureTaskBaseline() {
     try {
       const response = await fetch("/api/workspace/task-rollback?sinceId=0&files=meta", { cache: "no-store" });
@@ -3324,6 +3326,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </>
           ) : null}
         </div>
+        <button type="button" onClick={() => setQuickStartOpen(true)} className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-200 hover:border-amber-400" title="Как начать">🎓</button>
         <button type="button" onClick={() => setSettingsOpen(true)} className="shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2.5 py-1.5 text-xs hover:border-blue-400" title={t.settings}>⚙</button>
       </header>
 
@@ -3500,7 +3503,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                 <div className="panel-header chat-panel-header">
                   <div className="chat-panel-title">
-                    <span className="truncate">{t.leadChat}</span>
+                    <span className="truncate text-[10px] font-normal text-[var(--text-muted)]">{locale === "ru" ? "диалог с Главным" : "Lead dialogue"}</span>
                     <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span>
                   </div>
                   <div className="chat-panel-actions relative">
@@ -3524,7 +3527,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     {renderExpandButton("lead")}
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3" style={{ zoom: chatFontScale }}>
+                <div className="chat-no-overflow min-h-0 flex-1 space-y-2 overflow-y-auto p-3" style={{ zoom: chatFontScale }}>
                   {leadMessages?.map((msg) => (
                     <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[var(--border-default)] bg-[var(--bg-panel)]"}`}>
                       <div className="flex items-center justify-between gap-2">
@@ -3655,7 +3658,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   </div>
                 <div className="panel-header chat-panel-header">
                   <div className="chat-panel-title">
-                    <span className="truncate">{t.allChat}</span>
+                    <span className="truncate text-[10px] font-normal text-[var(--text-muted)]">{locale === "ru" ? "обсуждение команды" : "team discussion"}</span>
                     <span className={`shrink-0 whitespace-nowrap rounded-full border px-1.5 py-0.5 text-[9px] ${contextStats.compressed ? "border-amber-500/40 bg-amber-500/10 text-amber-300" : "border-slate-600 text-slate-400"}`}>Память: {contextStats.percent}%{contextStats.compressed ? " | Сжато" : ""}</span>
                   </div>
                   <div className="chat-panel-actions relative">
@@ -3689,7 +3692,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     {renderExpandButton("group")}
                   </div>
                 </div>
-                <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3" style={{ zoom: chatFontScale }}>
+                <div className="chat-no-overflow min-h-0 flex-1 space-y-2 overflow-y-auto p-3" style={{ zoom: chatFontScale }}>
                   {groupMessages?.map((msg) => (
                     <article key={msg.id} className={`w-fit max-w-[92%] rounded border p-2 text-sm ${msg.senderType === "user" ? "ml-auto border-[#007acc] bg-[#0e639c] text-white" : "mr-auto border-[var(--border-default)] bg-[var(--bg-panel)]"}`}>
                       <div className="flex items-center justify-between gap-2">
@@ -4803,6 +4806,28 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           <span className="text-amber-300">⚠ Telegram {locale === "ru" ? "не настроен" : "not configured"}</span>
         ) : null}
       </footer>
+
+      {quickStartOpen ? (
+        <div className="fixed inset-0 z-[75] flex items-start justify-center overflow-y-auto bg-black/80 p-4" onClick={() => setQuickStartOpen(false)}>
+          <div className="w-full max-w-2xl" onClick={(event) => event.stopPropagation()}>
+            <QuickStart
+              locale={locale === "en" ? "en" : "ru"}
+              hasKey={Object.values(data?.settings.apiKeysConfigured ?? {}).some(Boolean)}
+              hasFolder={Boolean(data?.settings.projectRoot)}
+              hasFiles={(data?.files.length ?? 0) > 0}
+              onOpenSettings={() => { setQuickStartOpen(false); setSettingsSection("keys"); setSettingsOpen(true); }}
+              onPickFolder={() => { setQuickStartOpen(false); void pickWorkspaceFolder(); }}
+              onOpenPreset={() => { setQuickStartOpen(false); setTemplateOpen(true); }}
+              onAskAgents={() => { setQuickStartOpen(false); setTeamTab("lead"); }}
+            />
+            <div className="mt-2 text-center">
+              <button type="button" onClick={() => setQuickStartOpen(false)} className="rounded-lg border border-[var(--border-default)] px-3 py-1.5 text-xs text-[var(--text-secondary)] hover:border-blue-400">
+                {locale === "ru" ? "Закрыть" : "Close"}
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {meetingOpen ? (
         <div className="fixed inset-0 z-[75] flex items-center justify-center bg-black/80 p-3" onClick={() => setMeetingOpen(false)}>
