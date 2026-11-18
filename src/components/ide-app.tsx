@@ -6,6 +6,7 @@ import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { BrandMark } from "@/components/brand-mark";
 import { TeamMeeting, type MeetingLine, type MeetingStance } from "@/components/team-meeting";
+import { TeamState } from "@/components/team-state";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { useVoiceInput, VoiceSettings, loadVoicePrefs, saveVoicePrefs, type VoicePrefs } from "@/components/voice-input";
@@ -2280,6 +2281,8 @@ export function IdeApp() {
   const [taskChangesOpen, setTaskChangesOpen] = useState(false);
   const [meetingOpen, setMeetingOpen] = useState(false);
   const [settingsSection, setSettingsSection] = useState("keys");
+  // Right column tabs: Главный / Общий / Состояние.
+  const [teamTab, setTeamTab] = useState<"lead" | "group" | "state">("lead");
   async function captureTaskBaseline() {
     try {
       const response = await fetch("/api/workspace/task-rollback?sinceId=0&files=meta", { cache: "no-store" });
@@ -3456,10 +3459,45 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Lead Chat */}
-          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} panel-accent-lead ${panelClass("lead")}`} style={{ flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} panel-accent-lead ${panelClass("lead")}`} style={{ position: "relative", display: teamTab === "group" ? "none" : undefined, flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
+            {teamTab === "state" ? (
+              <div className="absolute inset-0 z-20 overflow-y-auto bg-[var(--bg-app)] p-3">
+                <TeamState
+                  locale={locale === "en" ? "en" : "ru"}
+                  agents={(data?.agents ?? []).map((agent) => ({ id: agent.id, name: agent.name, role: agent.role, provider: agent.provider, model: agent.model, color: agent.color, isActive: agent.isActive }))}
+                  offlineNames={(data?.agents ?? []).filter((agent) => agentRecentlyFailed(agent.name, data?.systemEvents)).map((agent) => agent.name)}
+                  decisionMode={data?.settings.decisionMode ?? "lead"}
+                  teamMode={Boolean(data?.settings.teamMode)}
+                  autoApprove={Boolean(data?.settings.autoApprove)}
+                  changedFiles={taskChanges}
+                  blockers={meetingLines.filter((line) => line.stance === "blocker").length}
+                  lastCheck={data?.systemEvents?.find((event) => /release.?ready|проверк|check/i.test(event.message))?.message ?? null}
+                  telegramReady={Boolean(data?.settings.telegramTokenConfigured && data?.settings.telegramChatId)}
+                  onOpenSettings={() => { setTeamTab("lead"); setSettingsOpen(true); }}
+                  onRollback={() => void rollbackTask()}
+                  onMeeting={() => setMeetingOpen(true)}
+                />
+              </div>
+            ) : null}
+                  <div className="team-tabs flex items-center gap-1 border-b border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1">
+                    {([
+                      ["lead", locale === "ru" ? "Главный" : "Lead"],
+                      ["group", locale === "ru" ? "Общий" : "Team"],
+                      ["state", locale === "ru" ? "Состояние" : "State"],
+                    ] as const).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setTeamTab(id)}
+                        className={"rounded-full px-2.5 py-1 text-[11px] " + (teamTab === id ? "bg-[#1b2c4a] text-white" : "text-[var(--text-secondary)] hover:text-white")}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 <div className="panel-header chat-panel-header">
                   <div className="chat-panel-title">
                     <span className="truncate">{t.leadChat}</span>
@@ -3595,10 +3633,26 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Group Chat */}
-          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} panel-accent-group ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} panel-accent-group ${panelClass("group")}`} style={{ display: teamTab === "group" ? undefined : "none", flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
             {collapsedStrip("group", t.allChat)}
             {!collapsedPanels.group && (
               <section className="panel h-full">
+                  <div className="team-tabs flex items-center gap-1 border-b border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1">
+                    {([
+                      ["lead", locale === "ru" ? "Главный" : "Lead"],
+                      ["group", locale === "ru" ? "Общий" : "Team"],
+                      ["state", locale === "ru" ? "Состояние" : "State"],
+                    ] as const).map(([id, label]) => (
+                      <button
+                        key={id}
+                        type="button"
+                        onClick={() => setTeamTab(id)}
+                        className={"rounded-full px-2.5 py-1 text-[11px] " + (teamTab === id ? "bg-[#1b2c4a] text-white" : "text-[var(--text-secondary)] hover:text-white")}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
                 <div className="panel-header chat-panel-header">
                   <div className="chat-panel-title">
                     <span className="truncate">{t.allChat}</span>
