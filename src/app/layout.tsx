@@ -12,23 +12,14 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
-    <html lang="ru" suppressHydrationWarning>
+    <html lang="ru" data-theme="dark" suppressHydrationWarning>
       <head>
         {/* Prevent white flash: set theme before first paint */}
         <Script id="theme-init" strategy="beforeInteractive">
 {`(function() {
-  try {
-    var t = localStorage.getItem('code-studio-theme');
-    if (t === 'light') {
-      document.documentElement.setAttribute('data-theme', 'light');
-    } else if (t === 'dark') {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    } else if (window.matchMedia('(prefers-color-scheme: light)').matches) {
-      document.documentElement.setAttribute('data-theme', 'light');
-    } else {
-      document.documentElement.setAttribute('data-theme', 'dark');
-    }
-  } catch(e) {}
+  // The studio ships one theme: dark. The light palette was never applied to
+  // every panel, so following the OS setting produced a half-white interface.
+  try { document.documentElement.setAttribute('data-theme', 'dark'); } catch (e) {}
 })();`}
         </Script>
       </head>
