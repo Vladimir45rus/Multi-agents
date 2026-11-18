@@ -41,7 +41,7 @@ const SPOTS: Record<string, Spot> = {
 };
 
 const DOOR: Spot = { x: 872, y: 300, label: "домой" };
-const COUCH: Spot = { x: 820, y: 392, label: "на диване" };
+const COUCH: Spot = { x: 726, y: 392, label: "на диване" };
 
 const ROLE_ICON: Record<string, string> = {
   main: "★", advisor: "?", architect: "△", reviewer: "☑", tester: "✓",
@@ -134,6 +134,13 @@ function Figure({ agent, spot, mood, index, speaking, onSelect }: {
       <rect x="-4" y="2" width="8" height="8" fill={skin} />
       <ellipse cx="0" cy="-8" rx="14" ry="15" fill={skin} />
       <path d="M-14 -10 q14 -17 28 0 q-6 -11 -14 -11 q-8 0 -14 11 z" fill={hair} />
+      {index % 3 === 0 ? <path d="M-11 2 q11 12 22 0 q-3 12 -11 12 q-8 0 -11 -12 z" fill={hair} opacity="0.9" /> : null}
+      {index % 3 === 1 ? (
+        <g stroke="#cbd5e1" strokeWidth="1.3" fill="none">
+          <circle cx="-5.5" cy="-8" r="4.2" /><circle cx="5.5" cy="-8" r="4.2" /><path d="M-1.3 -8 h2.6" />
+        </g>
+      ) : null}
+      {index % 3 === 2 ? <circle cx="12" cy="-18" r="4.6" fill={hair} /> : null}
       <circle cx="-5" cy="-8" r="1.6" fill="#23232a" />
       <circle cx="5" cy="-8" r="1.6" fill="#23232a" />
       {angry ? (
@@ -240,7 +247,7 @@ export function AgentWorld({
       : (ru ? "Тишина. Дайте задачу — и все вернутся" : "Quiet. Give a task and they come back");
 
   return (
-    <div className="space-y-2">
+    <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
           <h3 className="text-sm font-bold text-white">{ru ? "Студия: живые агенты" : "Studio: living agents"}</h3>
@@ -284,8 +291,8 @@ export function AgentWorld({
         </div>
       ) : null}
 
-      <div className="overflow-hidden rounded-xl border border-[var(--border-default)]">
-        <svg viewBox="0 0 920 430" style={{ display: "block", width: "100%", height: "auto" }}>
+      <div className="min-h-0 flex-1 overflow-hidden rounded-xl border border-[var(--border-default)]">
+        <svg viewBox="0 0 920 430" preserveAspectRatio="xMidYMid meet" style={{ display: "block", width: "100%", height: "100%" }}>
           <defs>
             <linearGradient id="wsky" x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={skyTop} />

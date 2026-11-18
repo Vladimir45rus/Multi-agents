@@ -3364,7 +3364,22 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
       {/* Main content area: flex column, top flex area + resizer + bottom area */}
       <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         {/* Full-height side panels with a central editor/terminal work area. */}
-        <div className="workspace-top-row flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
+        <div className="workspace-top-row relative flex min-h-0 min-w-0 flex-1 flex-row overflow-hidden">
+          {teamTab === "world" ? (
+            <div className="absolute inset-0 z-30 overflow-y-auto bg-[var(--bg-app)] p-3">
+              <AgentWorld
+                locale={locale === "en" ? "en" : "ru"}
+                agents={(data?.agents ?? []).map((agent) => ({ id: agent.id, name: agent.name, role: agent.role, color: agent.color ?? "#38bdf8", isActive: agent.isActive }))}
+                lines={meetingLines}
+                running={chatRunning || pushingToOrchestrator}
+                blockers={meetingLines.filter((line) => line.stance === "blocker").length}
+                task={[...(data?.messages ?? [])].reverse().find((message) => message.senderType === "user")?.content ?? null}
+                onSelectAgent={() => setTeamTab("lead")}
+                onRename={(id, name) => void renameAgent(id, name)}
+                onQuickStart={() => setQuickStartOpen(true)}
+              />
+            </div>
+          ) : null}
           {/* Explorer / File Tree */}
           <div className={`workspace-column ${collapsedPanels.explorer ? "workspace-column-collapsed" : ""} panel-accent-explorer ${panelClass("explorer")}`} style={{ flex: collapsedPanels.explorer ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[0]} 1 0%` }}>
             {collapsedStrip("explorer", t.explorer)}
@@ -3497,21 +3512,6 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
-            {teamTab === "world" ? (
-              <div className="absolute inset-0 z-20 overflow-y-auto bg-[var(--bg-app)] p-3">
-                <AgentWorld
-                  locale={locale === "en" ? "en" : "ru"}
-                  agents={(data?.agents ?? []).map((agent) => ({ id: agent.id, name: agent.name, role: agent.role, color: agent.color ?? "#38bdf8", isActive: agent.isActive }))}
-                  lines={meetingLines}
-                  running={chatRunning || pushingToOrchestrator}
-                  blockers={meetingLines.filter((line) => line.stance === "blocker").length}
-                  task={[...(data?.messages ?? [])].reverse().find((message) => message.senderType === "user")?.content ?? null}
-                  onSelectAgent={() => setTeamTab("lead")}
-                  onRename={(id, name) => void renameAgent(id, name)}
-                  onQuickStart={() => setQuickStartOpen(true)}
-                />
-              </div>
-            ) : null}
             {teamTab === "state" ? (
               <div className="absolute inset-0 z-20 overflow-y-auto bg-[var(--bg-app)] p-3">
                 <TeamState
