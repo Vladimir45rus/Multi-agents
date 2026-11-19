@@ -1,0 +1,1 @@
+﻿var t=document.querySelector('.team-tabs'); t.querySelectorAll('button')[3].click(); setTimeout(function(){ var b=document.querySelectorAll('button'); for (var i=0;i<b.length;i++){ if(b[i].textContent.indexOf('Пересобрать память')>=0){ b[i].click(); break; } } }, 800);

@@ -1,0 +1,1 @@
+﻿var b=document.querySelectorAll('header button'); b[b.length-1].click(); setTimeout(function(){ var n=document.querySelectorAll('nav button'); for(var i=0;i<n.length;i++){ if(n[i].textContent.indexOf('Поведение')>=0){ n[i].click(); break; } } }, 500);

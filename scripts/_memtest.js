@@ -1,0 +1,1 @@
+﻿fetch('/api/memory',{method:'POST'}).then(r=>r.json()).then(d=>{window.__mem=JSON.stringify({ok:d.ok,ready:d.ready,err:d.error,files:d.snapshot&&d.snapshot.files?d.snapshot.files.length:null,saved:d.snapshot&&d.snapshot.stats?d.snapshot.stats.savedTokens:null}).slice(0,400)}).catch(e=>{window.__mem='ERR '+e.message}); 'started'

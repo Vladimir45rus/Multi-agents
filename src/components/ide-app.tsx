@@ -4101,13 +4101,22 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <span className="leading-tight">Сеть и доступ</span>
             </button>
             <button
-              key="fallback"
+              key="behavior"
               type="button"
-              onClick={() => setSettingsSection("fallback")}
-              className={"mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[11px] " + (settingsSection === "fallback" ? "bg-[#1b2c4a] text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]")}
+              onClick={() => setSettingsSection("behavior")}
+              className={"mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[11px] " + (settingsSection === "behavior" ? "bg-[#1b2c4a] text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]")}
             >
               <span className="text-sm leading-none">⚙</span>
-              <span className="leading-tight">Поведение</span>
+              <span className="leading-tight">{locale === "ru" ? "Поведение" : "Behaviour"}</span>
+            </button>
+            <button
+              key="about"
+              type="button"
+              onClick={() => setSettingsSection("about")}
+              className={"mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[11px] " + (settingsSection === "about" ? "bg-[#1b2c4a] text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]")}
+            >
+              <span className="text-sm leading-none">ℹ</span>
+              <span className="leading-tight">{locale === "ru" ? "О программе" : "About"}</span>
             </button>
           </nav>
 
@@ -4429,7 +4438,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
           </section>
 
-          <section id="settings-mobile" style={{ display: settingsSection === "mobile" ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+          <section id="settings-mobile" style={{ display: settingsSection === "github" ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <div className="flex items-center justify-between gap-2">
               <div>
                 <p className="text-xs font-semibold">{locale === "ru" ? "Пресет проекта" : "Project preset"}</p>
@@ -4439,7 +4448,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
           </section>
 
-          <section id="settings-preview" style={{ display: settingsSection === "preview" ? undefined : "none" }} className="mb-5">
+          <section id="settings-preview" style={{ display: settingsSection === "github" ? undefined : "none" }} className="mb-5">
             <div className="mb-2 flex items-center justify-between">
               <span className="text-xs uppercase text-[var(--text-secondary)]">{locale === "ru" ? "Кастомные провайдеры" : "Custom providers"}</span>
               <button type="button" onClick={() => setCustomProviderForm({ id: null, providerId: "", name: "", baseUrl: "", apiKey: "", models: [{ id: "", name: "" }], headers: [] })} className="rounded bg-[#0e639c] px-2 py-1 text-[10px] text-white">
@@ -4589,7 +4598,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </div>
           ) : null}
 
-          <section id="settings-telegram" style={{ display: settingsSection === "telegram" ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+          <section id="settings-telegram" style={{ display: settingsSection === "github" ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">Telegram</p>
             <label className="mb-2 block text-[11px] text-[var(--text-secondary)]">Telegram Bot Token
               <input value={telegramTokenDraft} onChange={(e) => { setTelegramTokenDraft(e.target.value); if (e.target.value.trim()) setRemoveTelegramToken(false); }} type="password" autoComplete="off" placeholder={data?.settings.telegramTokenConfigured ? "Telegram token сохранён локально" : "123456:ABC..."} className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
