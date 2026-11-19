@@ -4071,7 +4071,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               className={"mb-1 flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-[11px] " + (settingsSection === "keys" ? "bg-[#1b2c4a] text-white" : "text-[var(--text-secondary)] hover:bg-[var(--bg-hover)]")}
             >
               <span className="text-sm leading-none">🔑</span>
-              <span className="leading-tight">Модели и ключи</span>
+              <span className="leading-tight">{locale === "ru" ? "Модели и ключи" : "Models & keys"}</span>
+              <span className="ml-auto rounded-full bg-[#1d4ed8] px-1.5 text-[9px] text-white">{Object.values(data?.settings.apiKeysConfigured ?? {}).filter(Boolean).length}</span>
             </button>
             <button
               key="project"
@@ -4163,83 +4164,51 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </a>
             <div className="space-y-3">
               {PROVIDER_PRESETS.filter((p) => p.id !== "mock")?.map((provider) => (
-                <div key={provider.id} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
-                  <div className="flex items-center justify-between gap-2">
+                <div key={provider.id} className="flex flex-wrap items-center gap-2 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel)] px-3 py-2">
+                  <div className="w-[140px] shrink-0">
                     <p className="text-xs font-semibold text-white">{provider.label}</p>
+                    <p className="text-[9px] text-[var(--text-muted)]">{provider.id === "ollama" ? (locale === "ru" ? "локально" : "local") : (locale === "ru" ? "основной" : "primary")}</p>
+                  </div>
+                  <div className="min-w-[160px] flex-1">
                     {provider.id === "ollama" ? (
-                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">
-                        {locale === "ru" ? "без ключа" : "no key"}
-                      </span>
-                    ) : providerHealth[provider.id] === "ok" ? (
-                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">
-                        {locale === "ru" ? "работает" : "online"}
-                      </span>
-                    ) : providerHealth[provider.id] === "fail" ? (
-                      <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-300">
-                        {locale === "ru" ? "нет связи" : "unreachable"}
-                      </span>
-                    ) : providerHealth[provider.id] === "checking" ? (
-                      <span className="rounded-full border border-[var(--border-default)] px-2 py-0.5 text-[9px] text-[var(--text-muted)]">
-                        {locale === "ru" ? "проверяю…" : "checking…"}
-                      </span>
-                    ) : data?.settings.apiKeysConfigured?.[provider.id] ? (
-                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">
-                        {locale === "ru" ? "ключ сохранён" : "key saved"}
-                      </span>
+                      <button type="button" onClick={() => void fetchModels("ollama", provider.baseUrl, undefined, true)} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">
+                        {locale === "ru" ? "Проверить Ollama" : "Check Ollama"}{modelOptions["ollama"]?.length ? ` · ${modelOptions["ollama"].length}` : ""}
+                      </button>
                     ) : (
-                      <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[9px] text-rose-300">
-                        {locale === "ru" ? "не настроен" : "not set"}
-                      </span>
+                      <input
+                        value={apiKeysDraft[provider.id] ?? ""}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          setApiKeysDraft((prev) => ({ ...prev, [provider.id]: value }));
+                          if (value.trim()) setApiKeysToRemove((prev) => ({ ...prev, [provider.id]: false }));
+                        }}
+                        type="password"
+                        autoComplete="off"
+                        className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                        placeholder={data?.settings.apiKeysConfigured?.[provider.id] ? "••••••••••••••••" : (locale === "ru" ? "Вставьте ключ…" : "Paste key…")}
+                      />
                     )}
                   </div>
-                  <p className="mb-1 text-[10px] text-[var(--text-muted)]">
-                    {provider.baseUrl.replace(/^https?:\/\//, "")} · {provider.defaultModel}
-                  </p>
-
-                  {provider.id === "ollama" ? (
-                    <div className="mt-1 space-y-1">
-                      <p className="text-[10px] text-emerald-300">
-                        {locale === "ru" ? "Ключ не нужен: модель работает на вашем компьютере, запросы никуда не уходят." : "No key needed: the model runs on your machine, requests never leave it."}
-                      </p>
-                      <button
-                        type="button"
-                        onClick={() => void fetchModels("ollama", provider.baseUrl, undefined, true)}
-                        className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400"
-                      >
-                        {locale === "ru" ? "Проверить Ollama" : "Check Ollama"}
+                  <div className="flex shrink-0 items-center gap-1">
+                    {provider.id === "ollama" ? (
+                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">{locale === "ru" ? "без ключа" : "no key"}</span>
+                    ) : providerHealth[provider.id] === "ok" ? (
+                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">{locale === "ru" ? "работает" : "online"}</span>
+                    ) : providerHealth[provider.id] === "fail" ? (
+                      <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-300">{locale === "ru" ? "нет связи" : "unreachable"}</span>
+                    ) : providerHealth[provider.id] === "checking" ? (
+                      <span className="rounded-full border border-[var(--border-default)] px-2 py-0.5 text-[9px] text-[var(--text-muted)]">{locale === "ru" ? "проверяю…" : "checking…"}</span>
+                    ) : data?.settings.apiKeysConfigured?.[provider.id] ? (
+                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">{locale === "ru" ? "ключ сохранён" : "key saved"}</span>
+                    ) : (
+                      <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 text-[9px] text-rose-300">{locale === "ru" ? "не настроен" : "not set"}</span>
+                    )}
+                    {data?.settings.apiKeysConfigured?.[provider.id] ? (
+                      <button type="button" onClick={() => { setApiKeysDraft((prev) => ({ ...prev, [provider.id]: "" })); setApiKeysToRemove((prev) => ({ ...prev, [provider.id]: true })); }} className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:border-blue-400">
+                        {locale === "ru" ? "Заменить" : "Replace"}
                       </button>
-                      {modelOptions["ollama"]?.length ? (
-                        <p className="text-[10px] text-[var(--text-secondary)]">
-                          {locale === "ru" ? "Найдено моделей: " : "Models found: "}{modelOptions["ollama"].length}
-                        </p>
-                      ) : null}
-                    </div>
-                  ) : (
-                  <input
-                    value={apiKeysDraft[provider.id] ?? ""}
-                    onChange={(e) => {
-                      const value = e.target.value;
-                      setApiKeysDraft((prev) => ({ ...prev, [provider.id]: value }));
-                      if (value.trim()) setApiKeysToRemove((prev) => ({ ...prev, [provider.id]: false }));
-                    }}
-                    type="password"
-                    autoComplete="off"
-                    className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
-                    placeholder={data?.settings.apiKeysConfigured?.[provider.id] ? `${provider.label} API key сохранён локально` : `${provider.label} API key`}
-                  />
-                  )}
-                  {data?.settings.apiKeysConfigured?.[provider.id] ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setApiKeysDraft((prev) => ({ ...prev, [provider.id]: "" }));
-                        setApiKeysToRemove((prev) => ({ ...prev, [provider.id]: true }));
-                      }}
-                      className="mt-1 rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400"
-                    >
-                      {locale === "ru" ? "Заменить" : "Replace"}
-                    </button>
-                  ) : null}
+                    ) : null}
+                  </div>
                 </div>
               ))}
             </div>
@@ -4362,7 +4331,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </> : null}
           </section>
 
-          <section id="settings-behavior" style={{ display: settingsSection === "behavior" ? undefined : "none" }} className="mb-5">
+          <section id="settings-behavior" style={{ display: (settingsSection === "behavior" || settingsSection === "keys") ? undefined : "none" }} className="mb-5">
             <h3 className="mb-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
               {locale === "ru" ? "Поведение пайплайна" : "Pipeline behaviour"}
             </h3>
@@ -4615,7 +4584,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "1) @BotFather → /newbot → скопируйте токен. 2) Напишите боту /start — он пришлёт chat id. 3) Сохраните настройки и нажмите «Проверить связь». Команды с телефона: /status, /task <текст>, /stop, /log." : "1) @BotFather → /newbot → copy the token. 2) Send /start to the bot — it replies with your chat id. 3) Save settings and press Test connection. Phone commands: /status, /task <text>, /stop, /log."}</p>
           </section>
 
-          <section id="settings-fallback" style={{ display: settingsSection === "behavior" ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+          <section id="settings-fallback" style={{ display: (settingsSection === "behavior" || settingsSection === "keys") ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">{locale === "ru" ? "Fallback Chain моделей" : "Fallback model chain"}</p>
             <textarea value={fallbackModelsDraft} onChange={(e) => setFallbackModelsDraft(e.target.value)} placeholder={locale === "ru" ? "По одной модели на строку\nнапример: gpt-4o-mini\nclaude-3-5-haiku" : "One model per line\ne.g. gpt-4o-mini\nclaude-3-5-haiku"} className="min-h-16 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             <p className="mt-1 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Используется при 403, 429, 5xx и timeout." : "Used for 403, 429, 5xx and timeouts."}</p>

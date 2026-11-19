@@ -322,14 +322,15 @@ body > div {
 
 .settings-drawer {
   position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
   z-index: 50;
-  width: 540px;
-  height: 100%;
+  width: min(1080px, calc(100vw - 32px));
+  height: min(760px, calc(100vh - 48px));
   background: #0f172a;
-  border-left: 1px solid #1e293b;
+  border: 1px solid #1e293b;
+  border-radius: 16px;
   box-shadow: 0 25px 50px -12px rgb(0 0 0 / 0.75);
   animation: settings-drawer-in 0.2s ease-out both;
 }
@@ -346,8 +347,8 @@ body > div {
 }
 
 @keyframes settings-drawer-in {
-  from { transform: translateX(100%); }
-  to { transform: translateX(0); }
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.98); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 }
 
 .truncate {
