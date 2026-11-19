@@ -2,6 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
+import { needsReplacement, pickReplacementModel } from "@/lib/model-sync";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { BrandMark } from "@/components/brand-mark";
@@ -1991,6 +1992,68 @@ export function IdeApp() {
     }
   }
 
+  // «Вставил ключ — и всё работает»: after a save we pull the live model list
+  // of every configured provider and quietly fix agents whose model vanished
+  // (renamed or retired by the provider). Only missing keys / limits remain.
+  async function autoSyncModels() {
+    const configured = Object.entries(data?.settings.apiKeysConfigured ?? {})
+      .filter(([, value]) => value)
+      .map(([id]) => id);
+    const ids = [...new Set(["ollama", ...configured])];
+    let healed = 0;
+    let pulled = 0;
+    for (const id of ids) {
+      try {
+        const response = await fetch("/api/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: id, baseUrl: getProviderPreset(id).baseUrl, force: true }),
+        });
+        const payload = (await response.json().catch(() => null)) as { models?: string[]; source?: string } | null;
+        const models = Array.isArray(payload?.models) ? payload.models : [];
+        if (models.length === 0) continue;
+        pulled += 1;
+        setModelOptions((prev) => ({ ...prev, [id]: models }));
+        setProviderHealth((prev) => ({ ...prev, [id]: payload?.source === "provider" ? "ok" : "fail" }));
+
+        for (const agent of data?.agents ?? []) {
+          if (agent.provider !== id || models.includes(agent.model)) continue;
+          if (!needsReplacement(agent.model, models)) continue;
+          const nextModel = pickReplacementModel(models, getProviderPreset(id).defaultModel);
+          if (!nextModel) continue;
+          try {
+            const saved = await fetch(`/api/agents/${agent.id}`, {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                provider: agent.provider,
+                baseUrl: agent.baseUrl,
+                model: nextModel,
+                role: agent.role,
+                description: agent.description,
+                skill: agent.skill ?? "",
+                systemPrompt: agent.systemPrompt ?? "",
+                color: agent.color,
+                locale,
+              }),
+            });
+            if (saved.ok) healed += 1;
+          } catch {
+            /* a single agent is not worth failing the whole sync */
+          }
+        }
+      } catch {
+        /* provider offline: the chip already shows it */
+      }
+    }
+    if (healed > 0) {
+      await loadWorkspace(selectedFileId, locale);
+      setStatus(locale === "ru" ? `Модели обновлены автоматически: ${healed} агент(ов) переключено на актуальную модель` : `Models refreshed: ${healed} agent(s) moved to a live model`);
+    } else if (pulled > 0) {
+      setStatus(locale === "ru" ? `Модели подтянуты: ${pulled} провайдер(ов)` : `Models pulled for ${pulled} provider(s)`);
+    }
+  }
+
   async function saveApiKeys() {
     if (!settingsDirty) {
       setStatus(locale === "ru" ? "Нет изменений для сохранения" : "No settings changes to save");
@@ -2055,6 +2118,7 @@ export function IdeApp() {
         throw new Error(payload?.error ?? "Settings update failed");
       }
       await loadWorkspace(selectedFileId, locale);
+      void autoSyncModels();
       setApiKeysDraft({});
       setApiKeysToRemove({});
       setGithubTokenDraft("");
