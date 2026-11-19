@@ -682,6 +682,12 @@ export function IdeApp() {
   const [telegramChatIdDraft, setTelegramChatIdDraft] = useState("");
   const [fallbackModelsDraft, setFallbackModelsDraft] = useState("");
   const [fallbackModelInput, setFallbackModelInput] = useState("");
+  // Live provider checks: "Проверить всё" asks each configured provider for
+  // its model list and shows a real ok/fail state instead of a promise.
+  const [providerHealth, setProviderHealth] = useState<Record<string, "ok" | "fail" | "checking">>({});
+  const [keyEditing, setKeyEditing] = useState<Record<string, boolean>>({});
+  const [memory, setMemory] = useState({ ready: false, files: 0, stack: 0, dependencies: 0, savedTokens: 0, updatedAt: null as string | null });
+  const [memoryBusy, setMemoryBusy] = useState(false);
   // Custom-provider support: per-agent API key drafts (plaintext only in
   // memory; the server stores them encrypted).
   const [agentKeyDrafts, setAgentKeyDrafts] = useState<Record<number, string>>({});
@@ -1940,6 +1946,51 @@ export function IdeApp() {
     }
   }
 
+  async function loadMemory(rebuild = false) {
+    setMemoryBusy(true);
+    try {
+      const response = await fetch("/api/memory", rebuild ? { method: "POST" } : { cache: "no-store" });
+      const payload = (await response.json().catch(() => null)) as {
+        ready?: boolean;
+        snapshot?: { files?: unknown[]; stack?: unknown[]; dependencies?: unknown[]; updatedAt?: string; stats?: { savedTokens?: number } };
+      } | null;
+      const snapshot = payload?.snapshot;
+      setMemory({
+        ready: Boolean(payload?.ready && snapshot),
+        files: snapshot?.files?.length ?? 0,
+        stack: snapshot?.stack?.length ?? 0,
+        dependencies: snapshot?.dependencies?.length ?? 0,
+        savedTokens: snapshot?.stats?.savedTokens ?? 0,
+        updatedAt: snapshot?.updatedAt ?? null,
+      });
+    } catch {
+      /* memory is optional: the UI simply stays empty */
+    } finally {
+      setMemoryBusy(false);
+    }
+  }
+
+  async function checkProviders() {
+    const ids = ["openrouter", "openai", "anthropic", "google", "deepseek", "groq", "ollama"];
+    for (const id of ids) {
+      const configured = Boolean(data?.settings.apiKeysConfigured?.[id]) || id === "ollama";
+      if (!configured) { setProviderHealth((prev) => ({ ...prev, [id]: "fail" })); continue; }
+      setProviderHealth((prev) => ({ ...prev, [id]: "checking" }));
+      try {
+        const response = await fetch("/api/models", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ provider: id, baseUrl: getProviderPreset(id).baseUrl, force: true }),
+        });
+        const payload = (await response.json().catch(() => null)) as { source?: string } | null;
+        const ok = payload?.source === "provider";
+        setProviderHealth((prev) => ({ ...prev, [id]: ok ? "ok" : "fail" }));
+      } catch {
+        setProviderHealth((prev) => ({ ...prev, [id]: "fail" }));
+      }
+    }
+  }
+
   async function saveApiKeys() {
     if (!settingsDirty) {
       setStatus(locale === "ru" ? "Нет изменений для сохранения" : "No settings changes to save");
@@ -2287,6 +2338,11 @@ export function IdeApp() {
   // Right column tabs: Главный / Общий / Состояние.
   const [teamTab, setTeamTab] = useState<"lead" | "group" | "world" | "state">("lead");
   const [quickStartOpen, setQuickStartOpen] = useState(false);
+  useEffect(() => {
+    if (teamTab !== "state") return;
+    const timer = window.setTimeout(() => void loadMemory(false), 0);
+    return () => window.clearTimeout(timer);
+  }, [teamTab]);
   async function captureTaskBaseline() {
     try {
       const response = await fetch("/api/workspace/task-rollback?sinceId=0&files=meta", { cache: "no-store" });
@@ -3530,6 +3586,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                   onOpenSettings={() => { setTeamTab("lead"); setSettingsOpen(true); }}
                   onRollback={() => void rollbackTask()}
                   onMeeting={() => setMeetingOpen(true)}
+                  memory={memory}
+                  memoryBusy={memoryBusy}
+                  onRebuildMemory={() => void loadMemory(true)}
                 />
               </div>
             ) : null}
@@ -3995,7 +4054,12 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             const agent = data?.agents.find((candidate) => candidate.id === Number(agentId));
             return agent ? isAgentDraftDirty(agent, draft) : false;
           }) ? <span className="text-[10px] text-amber-300">{t.unsaved}</span> : null}</span>
-          <button type="button" onClick={() => setSettingsOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => void checkProviders()} disabled={busy} className="rounded border border-[var(--border-default)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:border-blue-400 disabled:opacity-50">
+              {locale === "ru" ? "Проверить всё" : "Check all"}
+            </button>
+            <button type="button" onClick={() => setSettingsOpen(false)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">{t.close}</button>
+          </div>
         </div>
 
         <div className="flex min-h-0 flex-1">
@@ -4097,6 +4161,18 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">
                         {locale === "ru" ? "без ключа" : "no key"}
                       </span>
+                    ) : providerHealth[provider.id] === "ok" ? (
+                      <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">
+                        {locale === "ru" ? "работает" : "online"}
+                      </span>
+                    ) : providerHealth[provider.id] === "fail" ? (
+                      <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[9px] text-amber-300">
+                        {locale === "ru" ? "нет связи" : "unreachable"}
+                      </span>
+                    ) : providerHealth[provider.id] === "checking" ? (
+                      <span className="rounded-full border border-[var(--border-default)] px-2 py-0.5 text-[9px] text-[var(--text-muted)]">
+                        {locale === "ru" ? "проверяю…" : "checking…"}
+                      </span>
                     ) : data?.settings.apiKeysConfigured?.[provider.id] ? (
                       <span className="rounded-full border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 text-[9px] text-emerald-300">
                         {locale === "ru" ? "ключ сохранён" : "key saved"}
@@ -4152,7 +4228,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       }}
                       className="mt-1 rounded border border-red-500/40 px-2 py-1 text-[10px] text-red-300 hover:border-red-400"
                     >
-                      {locale === "ru" ? "Удалить сохранённый ключ" : "Remove saved key"}
+                      {locale === "ru" ? "Заменить" : "Replace"}
                     </button>
                   ) : null}
                 </div>
@@ -4197,25 +4273,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 />
                 {t.githubAutoPush}
               </label>
-              <label className="mt-2 flex items-center gap-2 text-xs text-[#c6ced8]">
-                <input
-                  type="checkbox"
-                  checked={autoApproveDraft}
-                  onChange={(e) => setAutoApproveDraft(e.target.checked)}
-                />
-                {locale === "ru" ? "Авто-утверждение (автономный цикл)" : "Auto-Approve (autonomous cycle)"}
-              </label>
-              <label className="mt-2 flex items-center gap-2 text-xs text-[#c6ced8]">
-                <input type="checkbox" checked={teamModeDraft} onChange={(e) => setTeamModeDraft(e.target.checked)} />
-                {locale === "ru" ? "Team mode — каждый агент пишет в своей зоне, Главный собирает" : "Team mode — each advisor writes in its own zone, the Lead assembles"}
-              </label>
-              <label className="mt-2 flex items-center gap-2 text-xs text-[#c6ced8]">
-                {locale === "ru" ? "Решение:" : "Decision:"}
-                <select value={decisionModeDraft} onChange={(e) => setDecisionModeDraft(e.target.value === "vote" ? "vote" : "lead")} className="rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs">
-                  <option value="lead">{locale === "ru" ? "решает Главный" : "the Lead decides"}</option>
-                  <option value="vote">{locale === "ru" ? "голосование команды (Фома может заблокировать)" : "team vote (the skeptic can block)"}</option>
-                </select>
-              </label>
+
+
+
               <div className="mt-2">
                 <p className="text-xs text-[var(--text-secondary)]">{locale === "ru" ? "Мобильный доступ (токен)" : "Mobile access token"}</p>
                 <div className="flex gap-2 mt-1">
@@ -4291,6 +4351,68 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
 
             <button type="button" onClick={saveApiKeys} disabled={busy || !settingsDirty} className="mt-2 rounded bg-[#0e639c] px-3 py-1 text-xs text-white disabled:bg-[#3a3d41] disabled:text-[#777]">{t.saveKeys}</button>
             </> : null}
+          </section>
+
+          <section id="settings-behavior" style={{ display: settingsSection === "behavior" ? undefined : "none" }} className="mb-5">
+            <h3 className="mb-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+              {locale === "ru" ? "Поведение пайплайна" : "Pipeline behaviour"}
+            </h3>
+            <div className="rounded-xl border border-[var(--border-default)] bg-[var(--bg-panel)] px-3">
+              <div key="auto" className="flex items-start justify-between gap-3 border-b border-[var(--border-default)] py-2 last:border-0">
+                <div>
+                  <p className="text-[12px] text-[var(--text-primary)]">{locale === "ru" ? "AUTO-режим" : "AUTO mode"}</p>
+                  <p className="text-[10px] text-[var(--text-muted)]">{locale === "ru" ? "Оркестратор применяет патчи и запускает проверки сам" : "The orchestrator applies patches and runs checks on its own"}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAutoApproveDraft(!autoApproveDraft)}
+                  className={"relative h-6 w-11 shrink-0 rounded-full transition " + (autoApproveDraft ? "bg-[#2563eb]" : "bg-[#334155]")}
+                  aria-pressed={autoApproveDraft}
+                >
+                  <span className={"absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all " + (autoApproveDraft ? "left-[22px]" : "left-0.5")} />
+                </button>
+              </div>
+              <div key="team" className="flex items-start justify-between gap-3 border-b border-[var(--border-default)] py-2 last:border-0">
+                <div>
+                  <p className="text-[12px] text-[var(--text-primary)]">{locale === "ru" ? "Team mode" : "Team mode"}</p>
+                  <p className="text-[10px] text-[var(--text-muted)]">{locale === "ru" ? "Агенты пишут в своих зонах: UI/UX — компоненты, архитектор — api/lib, тестер — тесты" : "Each agent writes in its own zone: UI/UX components, architect api/lib, tester tests"}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTeamModeDraft(!teamModeDraft)}
+                  className={"relative h-6 w-11 shrink-0 rounded-full transition " + (teamModeDraft ? "bg-[#2563eb]" : "bg-[#334155]")}
+                  aria-pressed={teamModeDraft}
+                >
+                  <span className={"absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all " + (teamModeDraft ? "left-[22px]" : "left-0.5")} />
+                </button>
+              </div>
+            </div>
+            <h3 className="mb-2 mt-4 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+              {locale === "ru" ? "Решение" : "Decision"}
+            </h3>
+            <div className="flex gap-1">
+              <button type="button" onClick={() => setDecisionModeDraft("lead")} className={"rounded-full px-3 py-1 text-[11px] " + (decisionModeDraft === "lead" ? "bg-[#1d4ed8] text-white" : "border border-[var(--border-default)] text-[var(--text-secondary)]")}>
+                {locale === "ru" ? "Решает Главный" : "The Lead decides"}
+              </button>
+              <button type="button" onClick={() => setDecisionModeDraft("vote")} className={"rounded-full px-3 py-1 text-[11px] " + (decisionModeDraft === "vote" ? "bg-[#1d4ed8] text-white" : "border border-[var(--border-default)] text-[var(--text-secondary)]")}>
+                {locale === "ru" ? "Голосование команды" : "Team vote"}
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-[var(--text-muted)]">
+              {locale === "ru" ? "При голосовании Фома может поставить блокер — Главный обязан ответить по пунктам." : "In a vote the skeptic can block, and the Lead must answer each point."}
+            </p>
+          </section>
+
+          <section id="settings-about" style={{ display: settingsSection === "about" ? undefined : "none" }} className="mb-5">
+            <h3 className="mb-2 text-[10px] uppercase tracking-wide text-[var(--text-muted)]">
+              {locale === "ru" ? "О программе" : "About"}
+            </h3>
+            <div className="space-y-1 rounded-xl border border-[var(--border-default)] bg-[var(--bg-panel)] p-3 text-[11px] text-[var(--text-secondary)]">
+              <p className="text-[13px] font-semibold text-white">Multi-Agent Code Studio <span className="text-[10px] font-normal text-[var(--text-muted)]">v1.6.0</span></p>
+              <p>{locale === "ru" ? "Мультиагентная мини-IDE: команда агентов обсуждает задачу, оркестратор пишет код и прогоняет проверки." : "A multi-agent mini IDE: the team discusses the task, the orchestrator writes code and runs checks."}</p>
+              <p>{locale === "ru" ? "Ключи провайдеров хранятся только на этом компьютере, в зашифрованном виде (AES-256-GCM). Наружу уходят только запросы к выбранному провайдеру." : "Provider keys stay on this machine, encrypted (AES-256-GCM). Only requests to the provider you chose leave the app."}</p>
+              <p className="pt-1 text-[10px] text-[var(--text-muted)]">{locale === "ru" ? "Палитра команд — Ctrl+K · Как начать — 🎓 в шапке" : "Command palette — Ctrl+K · Getting started — 🎓 in the header"}</p>
+            </div>
           </section>
 
           <section id="settings-github" style={{ display: settingsSection === "github" ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
@@ -4484,7 +4606,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             <p className="mt-2 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "1) @BotFather → /newbot → скопируйте токен. 2) Напишите боту /start — он пришлёт chat id. 3) Сохраните настройки и нажмите «Проверить связь». Команды с телефона: /status, /task <текст>, /stop, /log." : "1) @BotFather → /newbot → copy the token. 2) Send /start to the bot — it replies with your chat id. 3) Save settings and press Test connection. Phone commands: /status, /task <text>, /stop, /log."}</p>
           </section>
 
-          <section id="settings-fallback" style={{ display: settingsSection === "fallback" ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
+          <section id="settings-fallback" style={{ display: settingsSection === "behavior" ? undefined : "none" }} className="mb-5 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2">
             <p className="mb-2 text-xs font-semibold">{locale === "ru" ? "Fallback Chain моделей" : "Fallback model chain"}</p>
             <textarea value={fallbackModelsDraft} onChange={(e) => setFallbackModelsDraft(e.target.value)} placeholder={locale === "ru" ? "По одной модели на строку\nнапример: gpt-4o-mini\nclaude-3-5-haiku" : "One model per line\ne.g. gpt-4o-mini\nclaude-3-5-haiku"} className="min-h-16 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
             <p className="mt-1 text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Используется при 403, 429, 5xx и timeout." : "Used for 403, 429, 5xx and timeouts."}</p>

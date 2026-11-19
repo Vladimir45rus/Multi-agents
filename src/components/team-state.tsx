@@ -23,6 +23,16 @@ export type TeamStateProps = {
   blockers: number;
   lastCheck: string | null;
   lastUsage: string | null;
+  memory: {
+    ready: boolean;
+    files: number;
+    stack: number;
+    dependencies: number;
+    savedTokens: number;
+    updatedAt: string | null;
+  };
+  onRebuildMemory: () => void;
+  memoryBusy: boolean;
   telegramReady: boolean;
   onOpenSettings: () => void;
   onRollback: () => void;
@@ -120,6 +130,25 @@ export function TeamState(props: TeamStateProps) {
             </button>
           </>
         )}
+      </Card>
+
+      <Card title={ru ? "Контекстная память" : "Context memory"} tone={props.memory.ready ? "good" : "warn"}>
+        {props.memory.ready ? (
+          <ul className="space-y-1 text-[11px] text-[var(--text-secondary)]">
+            <li>{ru ? "Ключевых файлов" : "Key files"}: <span className="text-[var(--text-primary)]">{props.memory.files}</span></li>
+            <li>{ru ? "Технологий в стеке" : "Stack entries"}: <span className="text-[var(--text-primary)]">{props.memory.stack}</span></li>
+            <li>{ru ? "Связей в карте зависимостей" : "Dependency links"}: <span className="text-[var(--text-primary)]">{props.memory.dependencies}</span></li>
+            <li>{ru ? "Сэкономлено токенов" : "Tokens saved"}: <span className="text-emerald-300">~{props.memory.savedTokens}</span></li>
+            <li className="text-[10px] text-[var(--text-muted)]">{ru ? "Обновлено" : "Updated"}: {props.memory.updatedAt ? new Date(props.memory.updatedAt).toLocaleString(ru ? "ru-RU" : "en-US") : "—"}</li>
+          </ul>
+        ) : (
+          <p className="text-[11px] text-[var(--text-secondary)]">
+            {ru ? "Снапшот ещё не собран. Соберите — и агенты перестанут перечитывать проект заново." : "No snapshot yet. Build it and agents stop re-reading the project."}
+          </p>
+        )}
+        <button type="button" onClick={props.onRebuildMemory} disabled={props.memoryBusy} className="mt-2 rounded border border-[var(--border-default)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:border-blue-400 disabled:opacity-50">
+          {props.memoryBusy ? (ru ? "Собираю…" : "Building…") : (ru ? "⟳ Пересобрать память" : "⟳ Rebuild memory")}
+        </button>
       </Card>
 
       <Card title={ru ? "Токены и стоимость" : "Tokens and cost"}>

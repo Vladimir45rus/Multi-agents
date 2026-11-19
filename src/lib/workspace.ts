@@ -30,6 +30,7 @@ import { decryptSecret, hasElectronVault } from "@/lib/secret-vault";
 import { encryptSecret } from "@/lib/secret-cipher";
 import { mergeAsync } from "@/lib/async-merge";
 import { resolveFallbackModels } from "@/lib/provider-models";
+import { getSnapshotCached, refreshSnapshotInBackground, renderSnapshot } from "@/lib/context-memory";
 import { getCustomProviderKey, listCustomProviders, resolveCustomAgentRequest } from "@/lib/custom-providers";
 import { isPureToolCallChunk, isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
@@ -1317,7 +1318,7 @@ function summarizeChatMessages(messages: GatewayMessage[]) {
   return { text: lines.join(" | ").slice(0, 2200), tokens: messages.reduce((total, message) => total + estimateMessageTokens(message), 0) };
 }
 
-async function gatewayHistory(channel: ChatChannel, beforeMessageId?: number) {
+async function gatewayHistory(channel: ChatChannel, beforeMessageId?: number, recentLimit?: number) {
   // Parroting fix: agents answering the SAME user message must not see each
   // other's replies to it — otherwise the second agent parrots the first
   // agent's roll call ("3. Главный агент (я)" from the Advisor). The history
@@ -1333,9 +1334,10 @@ async function gatewayHistory(channel: ChatChannel, beforeMessageId?: number) {
     content: row.content,
   }));
 
-  if (messages.length <= CHAT_CONTEXT_MESSAGE_LIMIT) return messages;
+  const limit = recentLimit && recentLimit > 0 ? recentLimit : CHAT_CONTEXT_MESSAGE_LIMIT;
+  if (messages.length <= limit) return messages;
 
-  const splitAt = Math.max(0, messages.length - CHAT_CONTEXT_RECENT_MESSAGES);
+  const splitAt = Math.max(0, messages.length - Math.min(CHAT_CONTEXT_RECENT_MESSAGES, limit));
   const older = messages.slice(0, splitAt);
   const recent = messages.slice(splitAt);
   const summary = summarizeChatMessages(older);
@@ -1659,7 +1661,15 @@ async function* streamAgentReply(
   const apiKey = await getAgentProviderKey(agent);
   const customMeta = await resolveCustomAgentRequest(agent);
   const effectiveAgent = customMeta ? { ...agent, baseUrl: customMeta.baseUrl } : agent;
-  const history = await gatewayHistory(channel, options.beforeMessageId);
+  // Context memory (ТЗ): before a new task the agent reads the durable snapshot
+  // of the project instead of replaying the raw chat.
+  const [memorySettings] = await db.select({ projectRoot: workspaceSettings.projectRoot }).from(workspaceSettings).limit(1);
+  const memoryRoot = compact(memorySettings?.projectRoot);
+  const memorySnapshot = memoryRoot ? await getSnapshotCached(memoryRoot).catch(() => null) : null;
+  const memoryBlock = memorySnapshot ? `\n\n${renderSnapshot(memorySnapshot)}` : "";
+  // With a snapshot in place the raw history is only the last few turns:
+  // everything older lives in the memory block above.
+  const history = await gatewayHistory(channel, options.beforeMessageId, memorySnapshot ? 6 : undefined);
   const projectContext = await buildProjectContext(options.projectContext);
   const prompt = `${userText}${attachmentContext(locale, attachments)}\n\n${projectContext}`;
   const isMulti = Boolean(options.isMultiAgent);
@@ -1687,7 +1697,7 @@ async function* streamAgentReply(
   // into the conversation and a visible ⚠️ notice lands in the chat.
   const fallbackNotes: string[] = [];
   let fallbackInjected = false;
-  const refreshedSystemPrompt = `${baseSystemPrompt}\n\n=== CURRENT PROJECT CONTEXT (REFRESHED) ===\n${projectContext}`;
+  const refreshedSystemPrompt = `${baseSystemPrompt}\n\n=== CURRENT PROJECT CONTEXT (REFRESHED) ===\n${projectContext}${memoryBlock}`;
   const gatewayMessages: GatewayMessage[] = [
     { role: "system", content: templatePrompt ? `${refreshedSystemPrompt}\n\nPROJECT TEMPLATE SPECIALIZATION:\n${templatePrompt}` : refreshedSystemPrompt },
     ...history,
@@ -1710,6 +1720,17 @@ async function* streamAgentReply(
   }
 
   const request = providerRequestFromAgent(effectiveAgent, apiKey, customMeta?.headers);
+  // Background summarisation (ТЗ п.3): after each finished reply the snapshot
+  // absorbs the high-level conclusions, so the next task starts from memory.
+  if (memoryRoot) {
+    void refreshSnapshotInBackground({
+      projectRoot: memoryRoot,
+      messages: [
+        ...history.map((message) => ({ role: message.role, content: message.content })).slice(-40),
+        { role: "user", content: userText },
+      ],
+    }).catch(() => undefined);
+  }
   const identity = createAgentIdentity({
     agentId: agent.id,
     displayName: agent.name,
