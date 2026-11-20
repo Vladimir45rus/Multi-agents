@@ -52,6 +52,7 @@
   },
   "build": {
     "appId": "com.multiagent.codestudio",
+  "executableName": "MultiAgentCodeStudio",
     "forceCodeSigning": false,
     "productName": "Multi-Agent Code Studio",
     "asar": true,
@@ -116,7 +117,7 @@
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
-      "include": "build/installer.nsh",
+      "include": "installer.nsh",
       "artifactName": "${productName}-${version}-setup.${ext}",
       "oneClick": false,
       "perMachine": false,
