@@ -26,11 +26,13 @@ if (!fs.existsSync(projectStatic)) {
   throw new Error(`.next/static not found at ${projectStatic}. "next build" must produce static assets.`);
 }
 
-// A stale .next inside the standalone folder was shipped to users and produced
+// A stale .next/static inside the standalone folder produced
 // "Failed to load chunk /_next/static/chunks/... from module ..." after an
 // update: the server HTML came from the new build while old chunk files
-// lingered. Always start from a clean copy.
-for (const stale of [path.join(standalone, ".next", "static"), path.join(standalone, ".next", "server"), path.join(standalone, "public")]) {
+// lingered. Only the static assets and the public folder are replaced —
+// .next/server is produced by the build itself and must survive, otherwise the
+// embedded server cannot find its manifests (pages-manifest.json / ENOENT).
+for (const stale of [path.join(standalone, ".next", "static"), path.join(standalone, "public")]) {
   fs.rmSync(stale, { recursive: true, force: true });
 }
 
@@ -40,6 +42,19 @@ const copiedMigrations = copyDir(path.join(root, "drizzle"), path.join(standalon
 
 if (!copiedStatic) {
   throw new Error(`Failed to copy .next/static into standalone output (${path.join(standalone, ".next", "static")}).`);
+}
+
+// Hard gate: the embedded server needs these manifests at runtime. Shipping a
+// package without them produced "Embedded server exited before becoming ready".
+const requiredManifests = ["pages-manifest.json", "app-paths-manifest.json", "server-reference-manifest.json"];
+for (const manifest of requiredManifests) {
+  const target = path.join(standalone, ".next", "server", manifest);
+  if (!fs.existsSync(target)) {
+    throw new Error(
+      `Standalone output is missing .next/server/${manifest}. The app would fail with ` +
+      `"Embedded server exited before becoming ready". Re-run "next build" and retry.`,
+    );
+  }
 }
 
 console.log(`Standalone prepared: node_modules=ok, static=${copiedStatic}, public=${copiedPublic}, migrations=${copiedMigrations}`);
