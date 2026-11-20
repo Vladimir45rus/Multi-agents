@@ -65,6 +65,10 @@
     ],
     "extraResources": [
       {
+        "from": "build/icon.ico",
+        "to": "tray.ico"
+      },
+      {
         "from": ".next/standalone",
         "to": "standalone"
       },
@@ -112,6 +116,7 @@
       "artifactName": "${productName}-${version}-${arch}.${ext}"
     },
     "nsis": {
+      "include": "build/installer.nsh",
       "artifactName": "${productName}-${version}-setup.${ext}",
       "oneClick": false,
       "perMachine": false,

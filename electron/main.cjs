@@ -1,6 +1,6 @@
-const { app, BrowserWindow, Menu, dialog, ipcMain, session, safeStorage, shell, Notification, clipboard } = require("electron");
+const { app, BrowserWindow, Menu, Tray, nativeImage, dialog, ipcMain, session, safeStorage, shell, Notification, clipboard } = require("electron");
 const { autoUpdater } = require("electron-updater");
-const { fork } = require("node:child_process");
+const { fork, execFileSync } = require("node:child_process");
 const path = require("node:path");
 const fs = require("node:fs");
 const http = require("node:http");
@@ -17,12 +17,90 @@ let overlayWindow = null;
 // events must not overwrite the saved layout with the tiny strip size.
 let overlayPreCollapseBounds = null;
 let serverChild = null;
+let tray = null;
 let isQuitting = false;
 let serverRestarts = 0;
 let renderCrashes = 0;
 let recoveredFromCrash = false;
 let serverReady = false;
 
+// Only one studio per machine: a second launch would fight for the same
+// port and the same SQLite file.
+const singleInstance = app.requestSingleInstanceLock();
+if (!singleInstance) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (!mainWindow) return;
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+  });
+}
+
+// --- tray + reliable shutdown -------------------------------------------
+
+function trayIconPath() {
+  const packaged = path.join(process.resourcesPath, "tray.ico");
+  if (fs.existsSync(packaged)) return packaged;
+  const dev = path.join(__dirname, "..", "build", "icon.ico");
+  return fs.existsSync(dev) ? dev : "";
+}
+
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+// The tray is the thing the installer used to trip over: the app kept running
+// with no window and no icon. It is created once and always offers Quit.
+function createTray() {
+  if (tray) return;
+  const iconPath = trayIconPath();
+  if (!iconPath) {
+    log("tray", "Tray icon not found — skipping tray.");
+    return;
+  }
+  try {
+    const image = nativeImage.createFromPath(iconPath);
+    if (image.isEmpty()) {
+      log("tray", `Tray icon is empty: ${iconPath}`);
+      return;
+    }
+    tray = new Tray(image);
+    tray.setToolTip("Multi-Agent Code Studio");
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: "Открыть окно", click: () => showMainWindow() },
+      { label: "Свернуть в трей", click: () => mainWindow && mainWindow.hide() },
+      { type: "separator" },
+      { label: "Выход", click: () => { isQuitting = true; app.quit(); } },
+    ]));
+    tray.on("click", () => showMainWindow());
+    log("tray", "Tray created.");
+  } catch (error) {
+    log("tray", `Tray creation failed: ${error.message}`);
+    tray = null;
+  }
+}
+
+// Killing only the direct child left a Node process alive, so the installer
+// could not replace the app. On Windows the whole tree must go.
+function stopServerChild() {
+  if (!serverChild || !serverChild.pid) return;
+  const pid = serverChild.pid;
+  try {
+    if (process.platform === "win32") {
+      execFileSync("taskkill", ["/pid", String(pid), "/T", "/F"], { stdio: "ignore" });
+    } else {
+      serverChild.kill("SIGTERM");
+    }
+  } catch {
+    try { serverChild.kill(); } catch { /* already gone */ }
+  }
+  serverChild = null;
+}
 // --- logging ---
 
 function userDataDir() {
@@ -351,6 +429,13 @@ function createWindow(startUrl) {
   mainWindow.on("close", () => {
     clearTimeout(saveTimer);
     saveSessionState();
+    if (!isQuitting) {
+      // Hidden helper windows (overlay widget, chat pop-outs) used to keep
+      // the app alive invisibly — close them so the app really exits.
+      for (const window of BrowserWindow.getAllWindows()) {
+        if (window !== mainWindow && !window.isDestroyed()) window.destroy();
+      }
+    }
   });
 
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
@@ -826,6 +911,7 @@ app.whenReady().then(async () => {
   }
 
   createWindow(startUrl);
+  createTray();
 
   // Start checking for updates 10 s after window is ready.
   setTimeout(() => {
@@ -839,6 +925,7 @@ app.whenReady().then(async () => {
 
 app.on("before-quit", () => {
   isQuitting = true;
+  if (tray) { tray.destroy(); tray = null; }
   saveSessionState();
   try {
     fs.unlinkSync(markerPath());
@@ -848,13 +935,7 @@ app.on("before-quit", () => {
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.close();
   }
-  if (serverChild) {
-    try {
-      serverChild.kill();
-    } catch {
-      // ignore
-    }
-  }
+  stopServerChild();
 });
 
 app.on("window-all-closed", () => {
