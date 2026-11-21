@@ -18,6 +18,7 @@ let overlayWindow = null;
 let overlayPreCollapseBounds = null;
 let serverChild = null;
 let tray = null;
+let trayHintShown = false;
 let isQuitting = false;
 let serverRestarts = 0;
 let renderCrashes = 0;
@@ -78,6 +79,7 @@ function createTray() {
       { label: "Выход", click: () => { isQuitting = true; app.quit(); } },
     ]));
     tray.on("click", () => showMainWindow());
+    tray.on("double-click", () => showMainWindow());
     log("tray", "Tray created.");
   } catch (error) {
     log("tray", `Tray creation failed: ${error.message}`);
@@ -426,14 +428,18 @@ function createWindow(startUrl) {
   };
   mainWindow.on("resize", scheduleSave);
   mainWindow.on("move", scheduleSave);
-  mainWindow.on("close", () => {
+  mainWindow.on("close", (event) => {
     clearTimeout(saveTimer);
     saveSessionState();
     if (!isQuitting) {
-      // Hidden helper windows (overlay widget, chat pop-outs) used to keep
-      // the app alive invisibly — close them so the app really exits.
-      for (const window of BrowserWindow.getAllWindows()) {
-        if (window !== mainWindow && !window.isDestroyed()) window.destroy();
+      // Крестик сворачивает в трей, как в обычных приложениях. Полностью
+      // закрывает только «Выход» из меню трея.
+      event.preventDefault();
+      mainWindow.hide();
+      if (tray && !trayHintShown) {
+        trayHintShown = true;
+        tray.displayBalloon?.({ title: "Multi-Agent Code Studio", content: "Приложение свёрнуто в трей. Выход — правой кнопкой по иконке." });
+        log("tray", "Minimised to tray on close.");
       }
     }
   });

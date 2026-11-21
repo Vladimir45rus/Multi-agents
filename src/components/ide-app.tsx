@@ -708,6 +708,7 @@ export function IdeApp() {
   const [telegramTesting, setTelegramTesting] = useState(false);
   const [agentDrafts, setAgentDrafts] = useState<Record<number, AgentDraft>>({});
   const [newAgent, setNewAgent] = useState<NewAgentDraft>(emptyNewAgent());
+  const [modelsLoading, setModelsLoading] = useState<Record<string, boolean>>({});
   const [modelOptions, setModelOptions] = useState<Record<string, string[]>>({});
   const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
 
@@ -1502,6 +1503,7 @@ export function IdeApp() {
 
     if (!force && modelOptions[providerId]?.length) return;
 
+    setModelsLoading((prev) => ({ ...prev, [providerId]: true }));
     try {
       const res = await fetch("/api/models", {
         method: "POST",
@@ -1509,11 +1511,20 @@ export function IdeApp() {
         body: JSON.stringify({ provider: providerId, baseUrl: baseUrl ?? preset.baseUrl, apiKey, force }),
       });
 
-      const payload = (await res.json()) as { models?: string[] };
-      const models = payload.models && payload.models.length ? payload.models : preset.fallbackModels;
+      const payload = (await res.json()) as { models?: string[]; source?: string; error?: string };
+      const live = Array.isArray(payload.models) ? payload.models : [];
+      const models = live.length ? live : preset.fallbackModels;
       setModelOptions((prev) => ({ ...prev, [providerId]: models }));
-    } catch {
+      setStatus(
+        live.length
+          ? (locale === "ru" ? `Модели ${preset.label}: получено ${live.length}` : `${preset.label}: ${live.length} models loaded`)
+          : (locale === "ru" ? `Список не пришёл — показан резерв. ${payload.error ?? ""}` : `No live list — fallback shown. ${payload.error ?? ""}`),
+      );
+    } catch (error) {
       setModelOptions((prev) => ({ ...prev, [providerId]: preset.fallbackModels }));
+      setStatus(locale === "ru" ? `Не удалось обновить модели: ${error instanceof Error ? error.message : "ошибка сети"}` : `Model refresh failed`);
+    } finally {
+      setModelsLoading((prev) => ({ ...prev, [providerId]: false }));
     }
   }
 
@@ -4765,7 +4776,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                     />
 
-                    <div className="mb-1 flex gap-1">
+                    <div className="mb-1 grid grid-cols-[1fr_1fr_auto] gap-1">
                       <select
                         value={draft.manualModel ? "__manual__" : draft.model}
                         onChange={(e) => {
@@ -4775,7 +4786,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                             setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value, manualModel: false } }));
                           }
                         }}
-                        className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                        className="min-w-0 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                        title={locale === "ru" ? "Список моделей провайдера" : "Provider model list"}
                       >
                         {draft.provider.startsWith("custom:")
                           ? (data?.customProviders.find((cp) => `custom:${cp.id}` === draft.provider)?.models ?? [])
@@ -4789,13 +4801,23 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         {draft.model && !(modelOptions[draft.provider] ?? []).includes(draft.model) && !(draft.provider.startsWith("custom:") && (data?.customProviders.find((cp) => `custom:${cp.id}` === draft.provider)?.models ?? []).some((m) => m.id === draft.model)) ? <option value={draft.model}>{draft.model}</option> : null}
                         <option value="__manual__">{t.manualModel}</option>
                       </select>
-                      <button type="button" onClick={() => fetchModels(draft.provider, draft.baseUrl, apiKeysDraft[draft.provider], true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
-                        {t.loadModels}
+                      <input
+                        value={draft.manualModel ? draft.model : ""}
+                        onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value, manualModel: true } }))}
+                        placeholder={locale === "ru" ? "своя модель" : "custom model"}
+                        className="min-w-0 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                        title={locale === "ru" ? "Ввести название вручную" : "Type the model name"}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => void fetchModels(draft.provider, draft.baseUrl, apiKeysDraft[draft.provider], true)}
+                        disabled={Boolean(modelsLoading[draft.provider])}
+                        className="whitespace-nowrap rounded border border-[#2d6cdf] bg-[#1d4ed8] px-2 py-1 text-xs text-white hover:bg-[#2563eb] disabled:opacity-60"
+                      >
+                        {modelsLoading[draft.provider] ? (locale === "ru" ? "Обновляю…" : "Loading…") : (locale === "ru" ? "⟳ Обновить" : "⟳ Refresh")}
                       </button>
-                      <input value={modelSearch[`agent-${agent.id}`] ?? ""} onChange={(e) => setModelSearch((prev) => ({ ...prev, [`agent-${agent.id}`]: e.target.value }))} placeholder="free / coder / qwen" className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px]" />
                     </div>
-
-                    {draft.manualModel ? <input value={draft.model} onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value } }))} placeholder={t.model} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" /> : null}
+                    <input value={modelSearch[`agent-${agent.id}`] ?? ""} onChange={(e) => setModelSearch((prev) => ({ ...prev, [`agent-${agent.id}`]: e.target.value }))} placeholder={locale === "ru" ? "Фильтр по названию: free, coder, qwen…" : "Filter models: free, coder, qwen…"} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px]" />
 
                     <select value={draft.role} onChange={(e) => {
                       setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, ...rolePresetPatch(e.target.value) } }));

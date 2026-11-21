@@ -1,0 +1,1 @@
+﻿var b=document.querySelectorAll('header button'); b[b.length-1].click(); setTimeout(function(){ var n=[...document.querySelectorAll('nav button')]; var a=n.find(x=>x.textContent.indexOf('Агенты')>=0); a && a.click(); }, 500);
