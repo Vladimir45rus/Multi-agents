@@ -8,15 +8,19 @@
   "description": "Multi-agent AI code editor with orchestrator, auto-fix loop and desktop packaging.",
   "scripts": {
     "dev": "next dev -H 127.0.0.1",
+    "prebuild": "node scripts/clean-next.cjs",
     "build": "next build",
+    "prebuild:standalone": "node scripts/clean-next.cjs",
+    "build:standalone": "next build && node scripts/prepare-standalone.cjs",
     "start": "next start -H 127.0.0.1",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "electron:open": "node scripts/electron-open.cjs",
-    "build:standalone": "next build && node scripts/prepare-standalone.cjs",
-    "dist": "npm run build:standalone && node -e \"require('node:fs').rmSync('release/win-unpacked',{recursive:true,force:true})\" && electron-builder --win",
-    "package": "npm run build:standalone && node -e \"require('node:fs').rmSync('release/win-unpacked',{recursive:true,force:true})\" && electron-builder --win --dir",
+    "predist": "node scripts/clean-release.cjs",
+    "dist": "npm run build:standalone && electron-builder --win",
+    "prepackage": "node scripts/clean-release.cjs",
+    "package": "npm run build:standalone && electron-builder --win --dir",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "postinstall": "node scripts/patch-nsis.cjs"
@@ -72,7 +76,14 @@
       },
       {
         "from": ".next/standalone",
-        "to": "standalone"
+        "to": "standalone",
+        "filter": [
+          "**/*",
+          "!**/release/**",
+          "!**/release.broken/**",
+          "!**/win-unpacked/**",
+          "!**/linux-unpacked/**"
+        ]
       },
       {
         "from": ".next/standalone/node_modules",

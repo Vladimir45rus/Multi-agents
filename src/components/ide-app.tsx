@@ -1641,6 +1641,12 @@ export function IdeApp() {
 
   function toggleCollapse(name: PanelName) {
     if (fullscreenPanel === name) setFullscreenPanel(null);
+    // Нижний док — одна сущность: терминал и логи сворачиваются вместе,
+    // иначе один из них остаётся полоской во всю высоту.
+    if (name === "terminal" || name === "logs") {
+      toggleBottomDock();
+      return;
+    }
     setCollapsedPanels((prev) => ({ ...prev, [name]: !prev[name] }));
   }
 
@@ -1667,14 +1673,19 @@ export function IdeApp() {
   function topFlexGrow(index: number) {
     const panelNames: PanelName[] = ["explorer", "editor", "lead", "group"];
     const name = panelNames[index];
+    // Только одна чат-колонка существует в разметке: Главный или Общий.
+    const chatPanel: PanelName = teamTab === "group" ? "group" : "lead";
+    const mounted = panelNames.filter((n) => n === "explorer" || n === "editor" || n === chatPanel);
+    if (!mounted.includes(name)) return 0;
     if (collapsedPanels[name]) return 0;
-    const active = panelNames.filter((n) => !collapsedPanels[n]);
-    if (active.length === 0) return 1;
-    const idx = active.indexOf(name);
-    if (idx < 0) return 0;
-    const activeProps = active.map((n) => topProportions[panelNames.indexOf(n)]);
-    const sum = activeProps.reduce((a, b) => a + b, 0) || 1;
-    return activeProps[idx] / sum;
+    const visible = mounted.filter((n) => !collapsedPanels[n]);
+    if (visible.length === 0) return 1;
+    const idx = visible.indexOf(name);
+    const weights = visible.map((n) => topProportions[panelNames.indexOf(n)]);
+    const total = weights.reduce((a, b) => a + b, 0) || 1;
+    // Умножаем на число видимых панелей: иначе сумма flex-grow < 1 и
+    // справа остаётся пустая полоса (ровно то, что видел пользователь).
+    return (weights[idx] / total) * visible.length;
   }
 
   function bottomFlexGrow(index: number) {
@@ -1687,7 +1698,7 @@ export function IdeApp() {
     if (idx < 0) return 0;
     const activeProps = active.map((n) => bottomProportions[panelNames.indexOf(n)]);
     const sum = activeProps.reduce((a, b) => a + b, 0) || 1;
-    return activeProps[idx] / sum;
+    return (activeProps[idx] / sum) * active.length;
   }
 
   // --- File tree operations ---
@@ -2052,6 +2063,15 @@ export function IdeApp() {
     } else if (pulled > 0) {
       setStatus(locale === "ru" ? `Модели подтянуты: ${pulled} провайдер(ов)` : `Models pulled for ${pulled} provider(s)`);
     }
+  }
+
+  // Нижний док сворачивается целиком: две панели в ряд не могут висеть
+  // полосками по 32px — раньше они превращались в узкие колонки во всю высоту.
+  function toggleBottomDock() {
+    setCollapsedPanels((prev) => {
+      const next = !(prev.terminal && prev.logs);
+      return { ...prev, terminal: next, logs: next };
+    });
   }
 
   async function saveApiKeys() {
@@ -3629,7 +3649,8 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           )}
 
           {/* Lead Chat */}
-          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} panel-accent-lead ${panelClass("lead")}`} style={{ position: "relative", display: teamTab === "group" ? "none" : undefined, flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
+          {teamTab !== "group" ? (
+          <div className={`workspace-column ${collapsedPanels.lead ? "workspace-column-collapsed" : ""} panel-accent-lead ${panelClass("lead")}`} style={{ position: "relative", flex: collapsedPanels.lead ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[2]} 1 0%` }}>
             {collapsedStrip("lead", t.leadChat)}
             {!collapsedPanels.lead && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -3666,7 +3687,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <button
                         key={id}
                         type="button"
-                        onClick={() => setTeamTab(id)}
+                        onClick={() => { setTeamTab(id); if (id === "lead" || id === "group") setCollapsedPanels((prev) => ({ ...prev, [id]: false })); }}
                         className={"rounded-full px-2.5 py-1 text-[11px] " + (teamTab === id ? "bg-[#1b2c4a] text-white" : "text-[var(--text-secondary)] hover:text-white")}
                       >
                         {label}
@@ -3802,13 +3823,15 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             )}
           </div>
 
+          ) : null}
           {/* Column resizer 2->3 */}
           {!collapsedPanels.lead && !collapsedPanels.group && (
             <div className="z-10 w-1 cursor-col-resize bg-transparent hover:bg-[#007acc]" onPointerDown={(e) => startTopResize(2, e)} />
           )}
 
           {/* Group Chat */}
-          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} panel-accent-group ${panelClass("group")}`} style={{ display: teamTab === "group" ? undefined : "none", flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
+          {teamTab === "group" ? (
+          <div className={`workspace-column ${collapsedPanels.group ? "workspace-column-collapsed" : ""} panel-accent-group ${panelClass("group")}`} style={{ flex: collapsedPanels.group ? `0 0 ${COLLAPSED_SIDE}px` : `${topGrows[3]} 1 0%` }}>
             {collapsedStrip("group", t.allChat)}
             {!collapsedPanels.group && (
               <section className="panel h-full">
@@ -3822,7 +3845,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       <button
                         key={id}
                         type="button"
-                        onClick={() => setTeamTab(id)}
+                        onClick={() => { setTeamTab(id); if (id === "lead" || id === "group") setCollapsedPanels((prev) => ({ ...prev, [id]: false })); }}
                         className={"rounded-full px-2.5 py-1 text-[11px] " + (teamTab === id ? "bg-[#1b2c4a] text-white" : "text-[var(--text-secondary)] hover:text-white")}
                       >
                         {label}
@@ -3972,12 +3995,13 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               </section>
             )}
           </div>
+          ) : null}
         </div>
 
         {/* Bottom panel stays in the flex flow, so collapsing it cannot overlap the workspace. */}
-        <div className="logs-panel h-[200px] w-full shrink-0 overflow-y-auto relative z-10 flex border-t border-[var(--border-default)] bg-slate-950 shadow-[0_-12px_30px_rgba(0,0,0,0.24)]">
+        <div className="logs-panel w-full shrink-0 overflow-y-auto relative z-10 flex border-t border-[var(--border-default)] bg-slate-950 shadow-[0_-12px_30px_rgba(0,0,0,0.24)]" style={{ height: collapsedPanels.terminal && collapsedPanels.logs ? COLLAPSED_BOTTOM : 200 }}>
           {/* Terminal */}
-          <div className={`workspace-column ${collapsedPanels.terminal ? "workspace-column-collapsed" : ""} panel-accent-terminal ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[0]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.terminal ? "workspace-column-collapsed" : ""} panel-accent-terminal ${panelClass("terminal")}`} style={{ flex: collapsedPanels.terminal ? "1 1 0%" : `${bottomGrows[0]} 1 0%` }}>
             {collapsedStrip("terminal", t.terminal, false)}
             {!collapsedPanels.terminal && (
               <section className="panel h-full border-r" style={{ borderColor: "var(--border-default)" }}>
@@ -4023,7 +4047,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
           </div>
 
           {/* Logs / System Events */}
-          <div className={`workspace-column ${collapsedPanels.logs ? "workspace-column-collapsed" : ""} panel-accent-logs ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? `0 0 ${COLLAPSED_BOTTOM}px` : `${bottomGrows[1]} 1 0%` }}>
+          <div className={`workspace-column ${collapsedPanels.logs ? "workspace-column-collapsed" : ""} panel-accent-logs ${panelClass("logs")}`} style={{ flex: collapsedPanels.logs ? "1 1 0%" : `${bottomGrows[1]} 1 0%` }}>
             {collapsedStrip("logs", t.logsTitle, false)}
             {!collapsedPanels.logs && (
               <section className="panel h-full">

@@ -26,6 +26,22 @@ if (!fs.existsSync(projectStatic)) {
   throw new Error(`.next/static not found at ${projectStatic}. "next build" must produce static assets.`);
 }
 
+// Packaged artifacts must never survive inside the standalone tree. When a
+// previous release/win-unpacked got copied in, the paths grew recursively
+// (release\win-unpacked\resources\standalone\release\win-unpacked\...) up to
+// 2000+ characters. The NSIS installer copies files with CopyFiles, which
+// cannot create anything longer than MAX_PATH (260): it stopped at ~30 % of
+// "Копирование файлов", reported "Не удалось закрыть Multi-Agent Code Studio"
+// and left a half-installed app behind.
+const PACKAGED_ARTIFACTS = ["release", "release.broken", "win-unpacked", "linux-unpacked", "dist", "out"];
+for (const name of PACKAGED_ARTIFACTS) {
+  const junk = path.join(standalone, name);
+  if (fs.existsSync(junk)) {
+    fs.rmSync(junk, { recursive: true, force: true });
+    console.log(`[prepare-standalone] removed stray ${name}/ from the standalone output`);
+  }
+}
+
 // A stale .next/static inside the standalone folder produced
 // "Failed to load chunk /_next/static/chunks/... from module ..." after an
 // update: the server HTML came from the new build while old chunk files
@@ -57,5 +73,44 @@ for (const manifest of requiredManifests) {
   }
 }
 
+// Hard gate: "$INSTDIR + relative path" has to stay below MAX_PATH (260).
+// A default install lands in %LOCALAPPDATA%\Programs\MultiAgentCodeStudio and
+// adds resources\standalone (~86 characters), so anything above 170 here means
+// the installer will silently fail to copy that file.
+const MAX_RELATIVE_PATH = 170;
+
+function collectRelativePaths(dir, out = []) {
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name);
+    const rel = path.relative(standalone, full);
+    out.push(rel);
+    if (entry.isDirectory() && !entry.isSymbolicLink()) collectRelativePaths(full, out);
+  }
+  return out;
+}
+
+const relativePaths = collectRelativePaths(standalone);
+const tooLong = relativePaths
+  .filter((rel) => rel.length > MAX_RELATIVE_PATH)
+  .sort((a, b) => b.length - a.length);
+
+if (tooLong.length > 0) {
+  throw new Error(
+    `Standalone output has ${tooLong.length} path(s) longer than ${MAX_RELATIVE_PATH} characters ` +
+      `(longest: ${tooLong[0].length}). The NSIS installer copies files with CopyFiles, which cannot ` +
+      `create paths above MAX_PATH (260) — installation would fail with "Не удалось закрыть ` +
+      `Multi-Agent Code Studio". Offending path: ${tooLong[0]}`,
+  );
+}
+
+const leaked = relativePaths.find((rel) => /(^|[\\/])(win-unpacked|linux-unpacked)([\\/]|$)/.test(rel));
+if (leaked) {
+  throw new Error(
+    `Packaged artifacts leaked into the standalone output (${leaked}). ` +
+      `Run "node scripts/clean-release.cjs" and rebuild.`,
+  );
+}
+
 console.log(`Standalone prepared: node_modules=ok, static=${copiedStatic}, public=${copiedPublic}, migrations=${copiedMigrations}`);
+console.log(`Longest relative path: ${relativePaths.reduce((max, rel) => Math.max(max, rel.length), 0)} characters`);
 console.log(`Build id: ${fs.readFileSync(path.join(standalone, ".next", "BUILD_ID"), "utf8").trim()}`);

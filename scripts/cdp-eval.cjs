@@ -3,7 +3,8 @@ const url = process.argv[2] ?? "about:blank";
 
 (async () => {
   const targets = await (await fetch("http://127.0.0.1:9222/json/list")).json();
-  const page = targets.find((item) => item.type === "page");
+  const want = process.argv[3] || "";
+  const page = targets.find((item) => item.type === "page" && (!want || item.url.includes(want))) || targets.find((item) => item.type === "page");
   if (!page) throw new Error("no page target");
   const ws = new WebSocket(page.webSocketDebuggerUrl);
   await new Promise((resolve) => { ws.onopen = resolve; });
