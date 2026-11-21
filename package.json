@@ -18,7 +18,8 @@
     "dist": "npm run build:standalone && node -e \"require('node:fs').rmSync('release/win-unpacked',{recursive:true,force:true})\" && electron-builder --win",
     "package": "npm run build:standalone && node -e \"require('node:fs').rmSync('release/win-unpacked',{recursive:true,force:true})\" && electron-builder --win --dir",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate"
+    "db:migrate": "drizzle-kit migrate",
+    "postinstall": "node scripts/patch-nsis.cjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
