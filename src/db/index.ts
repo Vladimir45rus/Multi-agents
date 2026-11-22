@@ -73,6 +73,14 @@ export async function runMigrations() {
     { migrationsFolder },
   );
 
+  // Колонки, добавленные после первых сборок: drizzle-журнал их не знает,
+  // поэтому досоздаём идемпотентно (ошибка «duplicate column» игнорируется).
+  for (const statement of [
+    "ALTER TABLE agents ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'auto'",
+  ]) {
+    try { sqlite.exec(statement); } catch { /* уже есть */ }
+  }
+
   migrationsDone = true;
 }
 

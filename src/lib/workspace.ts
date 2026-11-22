@@ -31,6 +31,7 @@ import { encryptSecret } from "@/lib/secret-cipher";
 import { mergeAsync } from "@/lib/async-merge";
 import { resolveFallbackModels } from "@/lib/provider-models";
 import { getSnapshotCached, refreshSnapshotInBackground, renderSnapshot } from "@/lib/context-memory";
+import { normalizeEffort } from "@/lib/reasoning";
 import { getCustomProviderKey, listCustomProviders, resolveCustomAgentRequest } from "@/lib/custom-providers";
 import { isPureToolCallChunk, isTechnicalErrorText, parseToolCallDisplay, sanitizeChatContent } from "@/lib/chat-display";
 import { createAgentIdentity, type AgentIdentity } from "@/lib/agent-identity";
@@ -1042,6 +1043,7 @@ export async function updateAgentProfile(
     color?: string;
     apiKey?: string;
     removeApiKey?: boolean;
+    reasoningEffort?: string;
   },
   locale?: string,
 ) {
@@ -1077,6 +1079,7 @@ export async function updateAgentProfile(
       // Unified role-change handler: switching the role pulls the role's name,
       // skills and system context automatically — stale persona texts never
       // bleed through. Custom user texts still win when provided.
+      reasoningEffort: normalizeEffort(payload.reasoningEffort ?? agent.reasoningEffort),
       name: compact(payload.name) || (nextRole !== agent.role
         ? (nextRole === "main" ? "Главный агент" : roleDisplayName(nextRole, agent.name))
         : agent.name),

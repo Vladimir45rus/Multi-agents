@@ -3,6 +3,7 @@ import "server-only";
 import { getProviderPreset } from "@/lib/providers";
 import { extractJson } from "@/lib/json-extract";
 import { estimateCost, formatCost } from "@/lib/pricing";
+import { effortForRequest, normalizeEffort } from "@/lib/reasoning";
 import { recordSystemEvent } from "@/lib/system-events";
 
 export { extractJson };
@@ -27,6 +28,8 @@ export type ProviderRequest = {
   // Custom registry providers may define extra headers (merged last, after
   // the built-in auth headers).
   headers?: Record<string, string>;
+  // «Сила мозга»: low | medium | high | minimal (пусто — не передавать).
+  reasoningEffort?: string;
 };
 
 export type ProviderGatewayOptions = {
@@ -120,6 +123,7 @@ function validateRequest(request: ProviderRequest) {
     apiKey: provider.startsWith("custom:") || provider === "ollama" ? compact(request.apiKey) : validateApiKey(request.apiKey),
     baseUrl: normalizeBaseUrl(provider, request.baseUrl),
     headers: request.headers,
+    reasoningEffort: compact(request.reasoningEffort ?? ""),
   };
 }
 
@@ -303,11 +307,18 @@ async function fetchWithRetry(
         : isAnthropic(request.provider)
           ? buildAnthropicUrl(request.baseUrl)
           : buildOpenAiUrl(request.baseUrl);
+      const effort = compact(request.reasoningEffort ?? "");
       const body = nativeGemini
         ? buildGeminiBody(messages, options.jsonMode)
         : isAnthropic(request.provider)
           ? buildAnthropicBody(request.model, messages)
-          : buildOpenAiBody(request.model, messages, options.jsonMode, tools);
+          : {
+              ...buildOpenAiBody(request.model, messages, options.jsonMode, tools),
+              // Провайдеры, поддерживающие рассуждения, читают это поле.
+              ...(effort ? { reasoning_effort: effort } : {}),
+              // OpenRouter ждёт объект reasoning.effort.
+              ...(effort && request.provider === "openrouter" ? { reasoning: { effort } } : {}),
+            };
       const headers = nativeGemini
         ? { Accept: "text/event-stream", "Content-Type": "application/json", "x-goog-api-key": request.apiKey }
         : { ...headersFor(request.provider, request.apiKey), ...(request.headers ?? {}) };
@@ -606,12 +617,13 @@ export async function completeProviderJson<T>(
   return extractJson<T>(text);
 }
 
-export function providerRequestFromAgent(agent: { provider: string; baseUrl: string; model: string }, apiKey: string, headers?: Record<string, string>): ProviderRequest {
+export function providerRequestFromAgent(agent: { provider: string; baseUrl: string; model: string; reasoningEffort?: string }, apiKey: string, headers?: Record<string, string>): ProviderRequest {
   return {
     provider: agent.provider,
     baseUrl: agent.baseUrl,
     model: agent.model,
     apiKey,
+    reasoningEffort: effortForRequest(normalizeEffort(agent.reasoningEffort), agent.model),
     ...(headers && Object.keys(headers).length > 0 ? { headers } : {}),
   };
 }

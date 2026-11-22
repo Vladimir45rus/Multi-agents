@@ -44,6 +44,8 @@ export const agents = sqliteTable("agents", {
   skill: text("skill").notNull().default(""),
   systemPrompt: text("system_prompt").notNull().default(""),
   color: text("color").notNull().default(""),
+  // "Сила мозга": auto | off | low | medium | high | max (см. lib/reasoning.ts)
+  reasoningEffort: text("reasoning_effort").notNull().default("auto"),
   isActive: integer("is_active", { mode: "boolean" }).notNull().default(true),
   createdAt: integer("created_at", { mode: "timestamp_ms" }).notNull().defaultNow(),
 });

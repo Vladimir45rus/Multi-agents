@@ -26,6 +26,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
       description?: string;
       role?: string;
       color?: string;
+      reasoningEffort?: string;
       apiKey?: string;
       removeApiKey?: boolean;
       locale?: "ru" | "en";
@@ -43,6 +44,7 @@ export async function PUT(request: Request, { params }: { params: Promise<{ id: 
         description: body.description,
         role: body.role,
         color: body.color,
+        reasoningEffort: body.reasoningEffort,
         apiKey: body.apiKey,
         removeApiKey: body.removeApiKey,
       },

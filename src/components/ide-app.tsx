@@ -3,6 +3,7 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallback, lazy, Suspense } from "react";
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import { needsReplacement, pickReplacementModel } from "@/lib/model-sync";
+import { REASONING_OPTIONS, effortForRequest, normalizeEffort, supportsReasoning } from "@/lib/reasoning";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
 import { BrandMark } from "@/components/brand-mark";
 import { TeamMeeting, type MeetingLine, type MeetingStance } from "@/components/team-meeting";
@@ -171,6 +172,7 @@ type AgentDraft = {
   systemPrompt: string;
   color: string;
   manualModel: boolean;
+  reasoningEffort?: string;
 };
 
 type NewAgentDraft = {
@@ -1203,6 +1205,7 @@ export function IdeApp() {
           skill: agent.skill,
           systemPrompt: agent.systemPrompt,
           color: agent.color ?? ROLE_COLORS[agent.role] ?? "#4fc1ff",
+          reasoningEffort: (agent as { reasoningEffort?: string }).reasoningEffort ?? "auto",
           manualModel: false,
         },
       ]),
@@ -4782,7 +4785,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                           if (e.target.value === "__manual__") {
                             setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, manualModel: true } }));
                           } else {
-                            setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value, manualModel: false } }));
+                            setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value, manualModel: false, reasoningEffort: supportsReasoning(e.target.value) ? draft.reasoningEffort ?? "auto" : "auto" } }));
                           }
                         }}
                         className="min-w-0 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
@@ -4802,7 +4805,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       </select>
                       <input
                         value={draft.manualModel ? draft.model : ""}
-                        onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value, manualModel: true } }))}
+                        onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, model: e.target.value, manualModel: true, reasoningEffort: supportsReasoning(e.target.value) ? draft.reasoningEffort ?? "auto" : "auto" } }))}
                         placeholder={locale === "ru" ? "своя модель" : "custom model"}
                         className="min-w-0 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
                         title={locale === "ru" ? "Ввести название вручную" : "Type the model name"}
@@ -4817,6 +4820,27 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       </button>
                     </div>
                     <input value={modelSearch[`agent-${agent.id}`] ?? ""} onChange={(e) => setModelSearch((prev) => ({ ...prev, [`agent-${agent.id}`]: e.target.value }))} placeholder={locale === "ru" ? "Фильтр по названию: free, coder, qwen…" : "Filter models: free, coder, qwen…"} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px]" />
+                    <div className="mb-1 flex items-center gap-1">
+                      <span className="text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Усилие:" : "Effort:"}</span>
+                      <select
+                        value={normalizeEffort(draft.reasoningEffort)}
+                        onChange={(e) => setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, reasoningEffort: e.target.value } }))}
+                        disabled={!supportsReasoning(draft.model)}
+                        title={supportsReasoning(draft.model)
+                          ? (locale === "ru" ? "Глубина рассуждений модели" : "Model reasoning depth")
+                          : (locale === "ru" ? "Модель не поддерживает рассуждения — только авто" : "This model has no reasoning mode")}
+                        className="rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px] disabled:opacity-50"
+                      >
+                        {REASONING_OPTIONS.map((option) => (
+                          <option key={option.value} value={option.value}>{locale === "ru" ? option.ru : option.en}</option>
+                        ))}
+                      </select>
+                      <span className="text-[10px] text-[var(--text-muted)]">
+                        {supportsReasoning(draft.model)
+                          ? (effortForRequest(normalizeEffort(draft.reasoningEffort), draft.model) ? "→ " + effortForRequest(normalizeEffort(draft.reasoningEffort), draft.model) : (locale === "ru" ? "по умолчанию провайдера" : "provider default"))
+                          : (locale === "ru" ? "недоступно для этой модели" : "not available")}
+                      </span>
+                    </div>
 
                     <select value={draft.role} onChange={(e) => {
                       setAgentDrafts((prev) => ({ ...prev, [agent.id]: { ...draft, ...rolePresetPatch(e.target.value) } }));
