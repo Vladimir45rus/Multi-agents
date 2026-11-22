@@ -323,16 +323,32 @@ export function AgentWorld({
   // Позиция: рабочее место по роли, иначе свободное занятие. На каждом тике
   // двое «переезжают», поэтому комната не замирает.
   const layout = useMemo(() => {
+    // Свободные места раздаются по кругу и сдвигаются каждый тик — все стоят
+    // в разных точках. «Вышел» может быть только один человек за раз, и он
+    // реально исчезает за дверью, а не копится у неё с остальными.
+    const spots = IDLE_SPOTS;
+    const shift = tick % spots.length;
+    const rotated = [...spots.slice(shift), ...spots.slice(0, shift)];
+    const outIndex = visible.length > 0 ? Math.floor(tick / 2) % visible.length : -1;
     return visible.map((agent, index) => {
-      const work = WORK_SPOTS[index % WORK_SPOTS.length];
-      const idle = IDLE_SPOTS[(index + tick) % IDLE_SPOTS.length];
-      const away = (index + tick) % 7 === 0;
-      const mood: Mood = running ? moodOf(agent, current?.agentId ?? null, running, blockers) : away ? "away" : (index % 4 === 0 ? "coffee" : index % 4 === 1 ? "reading" : index % 4 === 2 ? "playing" : "idle");
-      const spot = running ? work : away ? DOOR : idle;
-      return { agent, mood, spot, walking: !running && (away || (index + tick) % 3 === 0) };
+      if (running) {
+        const mood: Mood = moodOf(agent, current?.agentId ?? null, running, blockers);
+        return { agent, mood, spot: WORK_SPOTS[index % WORK_SPOTS.length], walking: false, gone: false };
+      }
+      const isOut = index === outIndex;
+      const gone = isOut && tick % 4 >= 2;
+      const mood: Mood = isOut
+        ? "away"
+        : index % 4 === 0 ? "coffee" : index % 4 === 1 ? "reading" : index % 4 === 2 ? "playing" : "idle";
+      return {
+        agent,
+        mood,
+        spot: isOut ? DOOR : rotated[index % rotated.length],
+        walking: isOut || (index + tick) % 3 === 0,
+        gone,
+      };
     });
   }, [visible, tick, running, current?.agentId, blockers]);
-
   const selected = layout.find((item) => item.agent.id === selectedId) ?? null;
 
   return (
@@ -498,7 +514,7 @@ export function AgentWorld({
             <path d="M884 410 h64" stroke="#3f2c1c" strokeWidth="3" />
           </g>
 
-          {layout.map((item, index) => (
+          {layout.filter((item) => !item.gone).map((item, index) => (
             <Figure
               key={item.agent.id}
               agent={item.agent}

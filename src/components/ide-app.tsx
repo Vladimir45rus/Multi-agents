@@ -4,7 +4,6 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState, useCallba
 import { PROVIDER_PRESETS, getProviderPreset, normalizeProviderModel } from "@/lib/providers";
 import { needsReplacement, pickReplacementModel } from "@/lib/model-sync";
 import { OrchestratorPanel } from "@/components/orchestrator-panel";
-import { ThemeToggle } from "@/components/theme-toggle";
 import { BrandMark } from "@/components/brand-mark";
 import { TeamMeeting, type MeetingLine, type MeetingStance } from "@/components/team-meeting";
 import { TeamState } from "@/components/team-state";
@@ -3473,7 +3472,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
               <div className="absolute right-0 z-50 mt-1 w-60 rounded border border-[var(--border-default)] bg-[var(--bg-panel)] p-2 shadow-2xl">
                 <button type="button" onClick={() => { setMoreMenuOpen(false); void pushToGithub(); }} disabled={busy} className="mb-1 w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs disabled:opacity-50">🐙 {t.pushGithub}</button>
                 <button type="button" onClick={() => { const bridge = (window as unknown as { desktopBridge?: DesktopBridge }).desktopBridge; bridge?.toggleOverlay?.(); }} className="mb-1 w-full rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-left text-xs">📌 {overlayActive ? (locale === "ru" ? "Виджет активен" : "Widget active") : (locale === "ru" ? "Виджет" : "Widget")}</button>
-                <div className="flex items-center justify-between rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-xs"><span>🎨 {locale === "ru" ? "Тема" : "Theme"}</span><ThemeToggle /></div>
+                <div className="flex items-center justify-between rounded bg-[var(--bg-panel-alt)] px-2 py-2 text-xs"><span>🎨 {locale === "ru" ? "Тема" : "Theme"}</span><span className="text-[10px] text-[var(--text-muted)]">{locale === "ru" ? "тёмная (одна на всю студию)" : "dark (single)"}</span></div>
               </div>
             </>
           ) : null}
