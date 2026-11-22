@@ -39,11 +39,16 @@ export function MobileSettings({ onBack, agents, accessToken }: { onBack: () => 
     if (accessToken) headers.set("x-mobile-access-token", accessToken);
     const body: Record<string, unknown> = { apiKeys: keys };
     if (token.trim()) body.mobileAuthToken = token.trim();
-    const response = await fetch("/api/settings", {
-      method: "PATCH", headers,
-      body: JSON.stringify(body),
-    });
-    if (!response.ok) throw new Error("Не удалось сохранить настройки");
+    try {
+      const response = await fetch("/api/settings", {
+        method: "PATCH", headers,
+        body: JSON.stringify(body),
+      });
+      if (!response.ok) throw new Error("Не удалось сохранить настройки");
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Network error");
+      return;
+    }
     setError("");
     setSaved(true); setTimeout(() => setSaved(false), 2000);
   }
