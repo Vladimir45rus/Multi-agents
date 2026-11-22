@@ -3526,7 +3526,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 running={chatRunning || pushingToOrchestrator}
                 blockers={meetingLines.filter((line) => line.stance === "blocker").length}
                 task={[...(data?.messages ?? [])].reverse().find((message) => message.senderType === "user")?.content ?? null}
-                onSelectAgent={() => setTeamTab("lead")}
+                onOpenChat={() => setTeamTab("lead")}
                 onRename={(id, name) => void renameAgent(id, name)}
                 onQuickStart={() => setQuickStartOpen(true)}
               />
