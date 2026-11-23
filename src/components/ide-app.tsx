@@ -176,6 +176,7 @@ type AgentDraft = {
 };
 
 type NewAgentDraft = {
+  reasoningEffort?: string;
   name: string;
   provider: string;
   baseUrl: string;
@@ -571,6 +572,7 @@ const emptyNewAgent = (overrides: Partial<NewAgentDraft> = {}, existingColors: s
     systemPrompt: ROLE_TEMPLATES[role]?.systemPrompt ?? "",
     color: overrides.color ?? pickUniqueColor(existingColors, role),
     manualModel: false,
+    reasoningEffort: "auto",
     ...overrides,
   };
 };
@@ -1272,13 +1274,6 @@ export function IdeApp() {
     }
   }
 
-  useEffect(() => {
-    if (!data?.settings.localtunnelEnabled || localtunnelLoading || localtunnelAutoStartRef.current) return;
-    localtunnelAutoStartRef.current = true;
-    void toggleLocaltunnel(true);
-    // Start once after workspace settings are loaded.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [data?.settings.localtunnelEnabled]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => { if (searchQuery) searchFiles(); }, 200);
@@ -2619,27 +2614,6 @@ export function IdeApp() {
     setClarifySent((prev) => new Set(prev).add(messageId));
   }
 
-  async function toggleLocaltunnel(enabled: boolean) {
-    localtunnelAutoStartRef.current = enabled;
-    setLocaltunnelEnabledDraft(enabled);
-    setLocaltunnelLoading(true);
-    try {
-      const response = await fetch("/api/localtunnel", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: enabled ? "start" : "stop" }),
-      });
-      const payload = (await response.json().catch(() => null)) as { url?: string; error?: string } | null;
-      if (!response.ok) throw new Error(payload?.error ?? "Localtunnel error");
-      setLocaltunnelUrl(payload?.url ?? "");
-      await loadWorkspace(selectedFileId, locale);
-    } catch (error) {
-      setLocaltunnelEnabledDraft(false);
-      setStatus(error instanceof Error ? error.message : "Localtunnel error");
-    } finally {
-      setLocaltunnelLoading(false);
-    }
-  }
 
   async function sendChat(channel: ChatChannel, message: string, duplicate = false, attachmentsOverride?: ChatAttachment[]) {
     const outgoingAttachments = attachmentsOverride ?? pendingAttachments;
@@ -4362,15 +4336,11 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:{appPort}/mobile?token={mobileTokenDraft}</span> : null}
               </div>
               <div className="mt-3 border-t border-[#2d2d30] pt-3">
-                <label className="flex items-center justify-between gap-3 text-xs text-[#c6ced8]">
-                  <span>{locale === "ru" ? "Глобальный доступ (Localtunnel)" : "Global access (Localtunnel)"}</span>
-                  <input
-                    type="checkbox"
-                    checked={localtunnelEnabledDraft}
-                    disabled={localtunnelLoading}
-                    onChange={(e) => void toggleLocaltunnel(e.target.checked)}
-                  />
-                </label>
+                <p className="text-[11px] leading-snug text-[var(--text-secondary)]">
+                  {locale === "ru"
+                    ? "Внешний доступ: встроенный туннель отключён (в его зависимости была уязвимость). Для доступа из интернета поднимите свой туннель — cloudflared или ngrok — и откройте адрес вручную."
+                    : "Remote access: the built-in tunnel is disabled (its dependency had a vulnerability). Run your own tunnel (cloudflared or ngrok) and open the address manually."}
+                </p>
                 {localtunnelUrl ? (() => {
                   const mobileUrl = `${localtunnelUrl}/mobile${mobileTokenDraft ? `?token=${encodeURIComponent(mobileTokenDraft)}` : ""}`;
                   return (
@@ -4931,17 +4901,18 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                         </select>
                       </label>
                       <input value={newAgent.baseUrl} onChange={(e) => setNewAgent((p) => ({ ...p, baseUrl: e.target.value }))} placeholder={t.baseUrl} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" />
-                      <div className="mb-1 flex gap-1">
+                      <div className="mb-1 grid grid-cols-[1fr_1fr_auto] gap-1">
                         <select
                           value={newAgent.manualModel ? "__manual__" : newAgent.model}
                           onChange={(e) => {
                             if (e.target.value === "__manual__") {
                               setNewAgent((p) => ({ ...p, manualModel: true }));
                             } else {
-                              setNewAgent((p) => ({ ...p, model: e.target.value, manualModel: false }));
+                              setNewAgent((p) => ({ ...p, model: e.target.value, manualModel: false, reasoningEffort: supportsReasoning(e.target.value) ? p.reasoningEffort ?? "auto" : "auto" }));
                             }
                           }}
-                          className="w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                          className="min-w-0 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                          title={locale === "ru" ? "Список моделей провайдера" : "Provider model list"}
                         >
                           {newAgent.provider.startsWith("custom:")
                             ? (data?.customProviders.find((cp) => `custom:${cp.id}` === newAgent.provider)?.models ?? [])
@@ -4952,15 +4923,41 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                             : (modelOptions[newAgent.provider] ?? getProviderPreset(newAgent.provider).fallbackModels).filter((model) => model.toLowerCase().includes((modelSearch.new ?? "").toLowerCase())).map((model) => (
                                 <option key={model} value={model}>{model}</option>
                               ))}
-                          {newAgent.model && !(modelOptions[newAgent.provider] ?? []).includes(newAgent.model) && !(newAgent.provider.startsWith("custom:") && (data?.customProviders.find((cp) => `custom:${cp.id}` === newAgent.provider)?.models ?? []).some((m) => m.id === newAgent.model)) ? <option value={newAgent.model}>{newAgent.model}</option> : null}
+                          {newAgent.model && !(modelOptions[newAgent.provider] ?? []).includes(newAgent.model) ? <option value={newAgent.model}>{newAgent.model}</option> : null}
                           <option value="__manual__">{t.manualModel}</option>
                         </select>
-                        <button type="button" onClick={() => fetchModels(newAgent.provider, newAgent.baseUrl, apiKeysDraft[newAgent.provider], true)} className="rounded bg-[#3a3d41] px-2 py-1 text-xs">
-                          {t.loadModels}
+                        <input
+                          value={newAgent.manualModel ? newAgent.model : ""}
+                          onChange={(e) => setNewAgent((p) => ({ ...p, model: e.target.value, manualModel: true, reasoningEffort: supportsReasoning(e.target.value) ? p.reasoningEffort ?? "auto" : "auto" }))}
+                          placeholder={locale === "ru" ? "своя модель" : "custom model"}
+                          className="min-w-0 rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void fetchModels(newAgent.provider, newAgent.baseUrl, newAgentApiKey, true)}
+                          disabled={Boolean(modelsLoading[newAgent.provider])}
+                          className="whitespace-nowrap rounded border border-[#2d6cdf] bg-[#1d4ed8] px-2 py-1 text-xs text-white hover:bg-[#2563eb] disabled:opacity-60"
+                        >
+                          {modelsLoading[newAgent.provider] ? (locale === "ru" ? "Обновляю…" : "Loading…") : (locale === "ru" ? "⟳ Обновить" : "⟳ Refresh")}
                         </button>
-                        <input value={modelSearch.new ?? ""} onChange={(e) => setModelSearch((prev) => ({ ...prev, new: e.target.value }))} placeholder="free / coder / qwen" className="mt-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px]" />
                       </div>
-                      {newAgent.manualModel ? <input value={newAgent.model} onChange={(e) => setNewAgent((p) => ({ ...p, model: e.target.value }))} placeholder={t.model} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-xs" /> : null}
+                      <input value={modelSearch.new ?? ""} onChange={(e) => setModelSearch((prev) => ({ ...prev, new: e.target.value }))} placeholder={locale === "ru" ? "Фильтр по названию: free, coder, qwen…" : "Filter models"} className="mb-1 w-full rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px]" />
+                      <div className="mb-1 flex items-center gap-1">
+                        <span className="text-[10px] text-[var(--text-secondary)]">{locale === "ru" ? "Усилие:" : "Effort:"}</span>
+                        <select
+                          value={normalizeEffort((newAgent as { reasoningEffort?: string }).reasoningEffort)}
+                          onChange={(e) => setNewAgent((p) => ({ ...p, reasoningEffort: e.target.value }))}
+                          disabled={!supportsReasoning(newAgent.model)}
+                          className="rounded border border-[var(--border-default)] bg-[var(--bg-app)] px-2 py-1 text-[10px] disabled:opacity-50"
+                        >
+                          {REASONING_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>{locale === "ru" ? option.ru : option.en}</option>
+                          ))}
+                        </select>
+                        <span className="text-[10px] text-[var(--text-muted)]">
+                          {supportsReasoning(newAgent.model) ? (locale === "ru" ? "глубина рассуждений" : "reasoning depth") : (locale === "ru" ? "недоступно для этой модели" : "not available")}
+                        </span>
+                      </div>
                       <input
                         type="password"
                         autoComplete="off"
