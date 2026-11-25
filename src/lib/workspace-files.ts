@@ -11,6 +11,7 @@ import { agents, projectFiles, workspaceFileHistory, workspaceSettings } from "@
 import { ensureWorkspaceBootstrap } from "@/lib/workspace";
 import { assertRelativePath, compact, resolveWithinRoot, toPosix } from "@/lib/workspace-paths";
 import { IGNORED_DIRECTORIES, isIgnoredFile, isTextPath } from "@/lib/workspace-file-policy";
+import { planRollback } from "@/lib/rollback-plan";
 
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_PATCH_BYTES = 8 * 1024 * 1024;
@@ -596,18 +597,22 @@ export async function listHistorySince(sinceId: number) {
 export async function rollbackWorkspaceTask(actorAgentId: number, sinceId: number) {
   await assertMainAgent(actorAgentId);
   const root = await getWorkspaceRoot();
-  const rows = await db
+  const historyRows = await db
     .select()
     .from(workspaceFileHistory)
     .where(gt(workspaceFileHistory.id, sinceId))
     .orderBy(desc(workspaceFileHistory.id));
-  if (rows.length === 0) return { restored: [] as string[], skipped: [] as string[] };
+  if (historyRows.length === 0) return { restored: [] as string[], skipped: [] as string[] };
 
+  // Порядок и разделение «удалить/восстановить» проверяются юнит-тестом
+  // (src/lib/rollback-plan.test.ts), здесь только исполнение.
+  const plan = planRollback(historyRows.map((row) => ({ id: row.id, filePath: row.filePath, operation: row.operation })));
+  const byId = new Map(historyRows.map((row) => [row.id, row]));
   const restored: string[] = [];
   const skipped: string[] = [];
-  // Newest snapshot first: for a file written twice, the second restore puts
-  // back the state before the first write, which is exactly the task start.
-  for (const record of rows) {
+  for (const step of plan.order) {
+    const record = byId.get(step.id);
+    if (!record) continue;
     try {
       const { absolutePath } = await safeAbsolutePath(root, record.filePath);
       if (record.operation === "create") {
