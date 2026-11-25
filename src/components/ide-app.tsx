@@ -3849,6 +3849,9 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                     <button type="button" onClick={() => setMeetingOpen(true)} title={locale === "ru" ? "Показать заседание команды картинкой" : "Show the team meeting as a drawing"} className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200 hover:border-amber-400">🎬 Заседание</button>
                     <button type="button" onClick={() => setTemplateMenu((current) => current === "group" ? null : "group")} className="rounded border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2 py-1 text-[10px] hover:border-blue-400">📚 Шаблоны задач</button>
                     {renderTaskTemplates("group")}
+                    <details className="relative">
+                      <summary className="cursor-pointer list-none rounded border border-[var(--border-default)] px-2 py-1 text-[10px] text-[var(--text-secondary)] hover:border-blue-400" title={locale === "ru" ? "Ещё: фильтры, AUTO, шрифт, отдельное окно" : "More: filters, AUTO, font, pop-out"}>⋯</summary>
+                        <div className="absolute right-0 z-20 mt-1 flex w-max max-w-[520px] flex-wrap items-center gap-1 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel)] p-2 shadow-xl">
                     {(["all", "tester", "uiux", "architect"] as GroupRoleFilter[]).map((filter) => (
                       <button key={filter} type="button" onClick={() => setGroupRoleFilter(filter)} className={`rounded-full border px-1.5 py-0.5 text-[9px] ${groupRoleFilter === filter ? "border-blue-400 bg-blue-500/20 text-blue-200" : "border-[var(--border-default)] text-[var(--text-muted)] hover:text-white"}`}>
                         {filter === "all" ? "Все" : filter === "tester" ? "QA" : filter === "uiux" ? "UI/UX" : "Архитектор"}
@@ -3870,6 +3873,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                       title={locale === "ru" ? "Вынести общий чат в отдельное окно" : "Pop the group chat out to its own window"}
                       className={`rounded border px-1.5 py-1 text-[10px] ${chatWindowOpen ? "border-[#3fb950] bg-[#23863633] text-white" : "border-[var(--border-default)] text-[var(--text-secondary)] hover:border-blue-400"}`}
                     >⧉</button>
+                    </div></details>
                     <button type="button" onClick={() => void clearHistory("group")} title={locale === "ru" ? "Очистить историю" : "Clear history"} className="rounded px-1.5 py-1 text-xs hover:bg-[var(--bg-panel-alt)]">🗑️</button>
                     {renderCollapseButton("group")}
                     {renderExpandButton("group")}
