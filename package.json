@@ -30,6 +30,7 @@
     "dotenv": "17.3.1",
     "drizzle-orm": "0.45.2",
     "electron-updater": "^6.8.9",
+    "localtunnel": "^2.0.2",
     "monaco-editor": "^0.58.0",
     "next": "16.4.6",
     "qrcode": "^1.5.4",
@@ -39,7 +40,8 @@
   },
   "overrides": {
     "js-yaml": "^4.3.2",
-    "source-map-js": "^1.2.4"
+    "source-map-js": "^1.2.4",
+    "axios": "^1.13.2"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "4.1.17",
