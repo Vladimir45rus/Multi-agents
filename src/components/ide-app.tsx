@@ -10,6 +10,7 @@ import { TeamMeeting, type MeetingLine, type MeetingStance } from "@/components/
 import { TeamState } from "@/components/team-state";
 import { QuickStart } from "@/components/quick-start";
 import { AgentWorld } from "@/components/agent-world";
+import { ThemeToggle } from "@/components/theme-toggle";
 import { hasSseData, parseSseJson } from "@/lib/sse-json";
 import type { AgentIdentity } from "@/lib/agent-identity";
 import { useVoiceInput, VoiceSettings, loadVoicePrefs, saveVoicePrefs, type VoicePrefs } from "@/components/voice-input";
@@ -2082,6 +2083,25 @@ export function IdeApp() {
     });
   }
 
+  async function toggleTunnel() {
+    setLocaltunnelLoading(true);
+    try {
+      const response = await fetch("/api/localtunnel", {
+        method: localtunnelUrl ? "DELETE" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ port: appPort }),
+      });
+      const payload = (await response.json().catch(() => null)) as { url?: string; error?: string } | null;
+      if (!response.ok) throw new Error(payload?.error ?? "Tunnel failed");
+      setLocaltunnelUrl(payload?.url ?? "");
+      setStatus(localtunnelUrl ? (locale === "ru" ? "Туннель остановлен" : "Tunnel stopped") : (locale === "ru" ? `Туннель: ${payload?.url}` : `Tunnel: ${payload?.url}`));
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tunnel failed");
+    } finally {
+      setLocaltunnelLoading(false);
+    }
+  }
+
   async function saveApiKeys() {
     if (!settingsDirty) {
       setStatus(locale === "ru" ? "Нет изменений для сохранения" : "No settings changes to save");
@@ -3485,6 +3505,7 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
             </>
           ) : null}
         </div>
+        <ThemeToggle />
         <button type="button" onClick={() => setQuickStartOpen(true)} className="shrink-0 rounded-lg border border-amber-500/40 bg-amber-500/10 px-2.5 py-1.5 text-xs text-amber-200 hover:border-amber-400" title="Как начать">🎓</button>
         <button type="button" onClick={() => setSettingsOpen(true)} className="shrink-0 rounded-lg border border-[var(--border-default)] bg-[var(--bg-panel-alt)] px-2.5 py-1.5 text-xs hover:border-blue-400" title={t.settings}>⚙</button>
       </header>
@@ -4340,11 +4361,21 @@ ${lines.length > 0 ? lines.join("\n") : "_Системных событий не
                 {mobileTokenDraft ? <span className="text-[10px] self-center truncate max-w-[240px]" style={{ color: "var(--text-accent)" }}>🌐 http://IP-ПК:{appPort}/mobile?token={mobileTokenDraft}</span> : null}
               </div>
               <div className="mt-3 border-t border-[#2d2d30] pt-3">
-                <p className="text-[11px] leading-snug text-[var(--text-secondary)]">
-                  {locale === "ru"
-                    ? "Внешний доступ: встроенный туннель отключён (в его зависимости была уязвимость). Для доступа из интернета поднимите свой туннель — cloudflared или ngrok — и откройте адрес вручную."
-                    : "Remote access: the built-in tunnel is disabled (its dependency had a vulnerability). Run your own tunnel (cloudflared or ngrok) and open the address manually."}
-                </p>
+                <div>
+                  <button
+                    type="button"
+                    onClick={() => void toggleTunnel()}
+                    disabled={localtunnelLoading}
+                    className="rounded border border-[var(--border-default)] px-2 py-1 text-[11px] hover:border-blue-400 disabled:opacity-50"
+                  >
+                    {localtunnelLoading ? (locale === "ru" ? "Поднимаю…" : "Starting…") : localtunnelUrl ? (locale === "ru" ? "Выключить туннель" : "Stop tunnel") : (locale === "ru" ? "Включить внешний доступ" : "Start tunnel")}
+                  </button>
+                  {localtunnelUrl ? (
+                    <p className="mt-1 break-all text-[10px] text-emerald-300">{localtunnelUrl}</p>
+                  ) : (
+                    <p className="mt-1 text-[10px] text-[var(--text-muted)]">{locale === "ru" ? "Открывает доступ из интернета через localtunnel. Каждый API-запрос требует токен доступа." : "Exposes the app through localtunnel. Every API call requires the access token."}</p>
+                  )}
+                </div>
                 {localtunnelUrl ? (() => {
                   const mobileUrl = `${localtunnelUrl}/mobile${mobileTokenDraft ? `?token=${encodeURIComponent(mobileTokenDraft)}` : ""}`;
                   return (
