@@ -4,6 +4,17 @@
 
 [🇷🇺 Русская версия ниже](#русский)
 
+### Что нового в 1.6.0
+
+- **«Мир»** — живая комната команды: агенты ходят, пьют кофе, читают, играют в настолку, уходят в дверь и возвращаются; клик по человеку открывает карточку, а не закрывает сцену
+- **Контекстная память** — снапшот проекта (стек, ключевые файлы, карта зависимостей, решения) в `~/.multi-agent-studio/context/`; сырая история чата сокращается, экономия ~255k токенов на реальном проекте
+- **Фома неверующий** — девятая роль: только читает и обязан найти, что сломается; блокер нельзя «заапрувить»
+- **Откат задачи** — панель «изменено N файлов» и одна кнопка возврата к состоянию до запуска; порядок отката покрыт тестами
+- **Выбор модели** — список моделей провайдера, ручной ввод и «Обновить» с реальной обратной связью; при исчезновении модели агент сам переключается на живую
+- **«Усилие» модели** — auto/off/low/medium/high/max с проверкой поддержки: для моделей без рассуждений переключатель заблокирован
+- **Telegram-пульт** — `/status`, `/task`, `/log`, `/stop`, `/help`; токен пользователя хранится локально и зашифрован
+- **Безопасность** — Next.js 16.4.6 (закрыт обход middleware), localtunnel удалён, `npm audit` по прод-зависимостям: 0 уязвимостей
+
 ---
 
 ## 🇬🇧 Features
@@ -25,7 +36,7 @@ All agents communicate in a shared chat, discussing solutions before the Lead Ag
 - **Confirmation mode**: Lead Agent forms a plan, waits for your approval before coding
 
 ### VS Code-like Features
-- **Monaco Editor** — syntax highlighting for 30+ languages
+- **Monaco Editor 0.58** — syntax highlighting for 30+ languages
 - **File tabs** — open multiple files, switch between them
 - **Project tree** — browse, create, rename, delete files/folders
 - **Search across files** — instant project-wide code search
@@ -72,7 +83,7 @@ Type in chat:
 - **Edits are saved** — every change is stored in the local database (selector, DOM path, offsets, styles), so layout decisions survive a restart
 - **One click to the team** — “Send to agents” turns the collected edits into a structured brief with human-readable description **and a ready CSS line**; the Lead agent turns it into real code
 
-### What's New in v1.5.20
+### What's New in v1.6.0
 - **Independent agents with isolated contexts** — every agent keeps its own identity, provider/model pair and role-restricted toolset; advisors are limited to read-only inspection while only the Lead Agent can modify files
 - **Live streaming everywhere** — token-level SSE streaming in both chat windows and in the orchestrator panel, with resilient parsing of fragmented provider chunks and automatic fallback between models
 - **Context awareness** — a memory gauge per chat window shows how much of the context window is used and when compaction kicked in
@@ -97,7 +108,7 @@ This is an open-source project. Source code: [github.com/Vladimir45rus/Multi-age
 
 ## 🔧 Tech Stack
 
-- **Frontend**: Next.js 16, React 19, Tailwind CSS v4, Monaco Editor
+- **Frontend**: Next.js 16, React 19, Tailwind CSS v4, Monaco Editor 0.58
 - **Backend**: Next.js API routes, Drizzle ORM, SQLite (node:sqlite)
 - **Desktop**: Electron
 - **AI**: OpenRouter, OpenAI, Anthropic, Google Gemini, Groq, Together AI
@@ -134,7 +145,7 @@ npm run electron:open
 
 ## 🚀 Install from Installer (.exe)
 
-1. Download `Multi-Agent Code Studio-1.5.20-setup.exe` from [GitHub Releases](https://github.com/Vladimir45rus/Multi-agents/releases)
+1. Download `Multi-Agent Code Studio-1.6.0-setup.exe` from [GitHub Releases](https://github.com/Vladimir45rus/Multi-agents/releases)
 2. Run the installer and follow the wizard (installation directory can be changed)
 3. Launch the app — it starts the embedded local server automatically (127.0.0.1, not exposed to the network)
 4. Open **Settings → API keys** and add your provider key(s)
@@ -149,7 +160,7 @@ npm run electron:open
 Multi-Agent Code Studio is designed as a **local-only** application and ships with layered protections:
 
 - **CSRF protection** — cross-site browser requests against the localhost API are blocked via `Origin` / `Sec-Fetch-Site` validation
-- **Hardened mobile access** — when the optional localtunnel/mobile mode is enabled, every API route requires a secret access token; spoofed `X-Forwarded-For` / `Host` headers are never trusted
+- **Hardened mobile access** — when the optional mobile mode (LAN only) is enabled, every API route requires a secret access token; spoofed `X-Forwarded-For` / `Host` headers are never trusted
 - **SSRF filtering** — link previews sent to agents are validated server-side: private networks (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.169.254 cloud metadata), localhost names and DNS-resolved private addresses are rejected, redirects are re-validated per hop
 - **Electron isolation** — `contextIsolation`, `sandbox`, no `nodeIntegration`; navigation away from the app origin is blocked; external links open in the system browser; preview content runs inside a sandboxed iframe without same-origin access
 - **Terminal sandboxing** — an allowlist of vetted development commands only; package-smuggling flags (`npx --package=...`) and lifecycle scripts are rejected
@@ -195,13 +206,13 @@ MIT
 - **Режим с подтверждением**: Главный формирует план и ждёт одобрения перед кодингом
 
 ### Возможности редактора
-- **Monaco Editor** — подсветка синтаксиса для 30+ языков
+- **Monaco Editor 0.58** — подсветка синтаксиса для 30+ языков
 - **Табы файлов** — открывайте несколько файлов, переключайтесь между ними
 - **Дерево проекта** — просмотр, создание, переименование, удаление файлов/папок
 - **Поиск по файлам** — мгновенный поиск по всему проекту
 - **GitHub интеграция** — пуш изменений в один клик
 - **Терминал** — запуск команд прямо в IDE
-- **Тёмная и светлая темы** — переключатель в верхней панели
+- *- __Одна тёмная тема__ — светлая палитра убрана: половина панелей была жёстко тёмной и интерфейс выглядел сломанным
 
 ### Быстрые команды
 Введите в чате:
@@ -212,7 +223,7 @@ MIT
 - `/docs` — сгенерировать документацию
 - `@ИмяАгента` — обратиться к конкретному агенту
 
-### Что нового в v1.5.20
+### Что нового в v1.6.0
 - **Независимые агенты с изолированным контекстом** — у каждого агента своя идентичность, связка провайдер/модель и ограниченный ролью набор инструментов: советникам доступно только чтение, изменять файлы может лишь Главный агент
 - **Живой стриминг везде** — потоковый вывод на уровне токенов в обоих чатах и в панели оркестратора, устойчивая сборка фрагментированных ответов провайдера и автоматический fallback между моделями
 - **Контекст-индикация** — счётчик заполнения контекста в каждом чате показывает, сколько окна занято и когда включилось сжатие
@@ -237,7 +248,7 @@ Multi-Agent Code Studio использует сторонние AI-сервис�
 
 ## 🔧 Технологии
 
-- **Фронтенд**: Next.js 16, React 19, Tailwind CSS v4, Monaco Editor
+- **Фронтенд**: Next.js 16, React 19, Tailwind CSS v4, Monaco Editor 0.58
 - **Бэкенд**: Next.js API routes, Drizzle ORM, SQLite (node:sqlite)
 - **Десктоп**: Electron
 - **AI**: OpenRouter, OpenAI, Anthropic, Google Gemini, Groq, Together AI
@@ -289,7 +300,7 @@ npm run electron:open
 Multi-Agent Code Studio — **локальное** приложение с многоуровневой защитой:
 
 - **CSRF-защита** — межсайтовые запросы браузера к localhost API блокируются проверкой `Origin` / `Sec-Fetch-Site`
-- **Безопасный мобильный доступ** — при включении опционального режима localtunnel каждый API-маршрут требует секретный токен доступа; подделка заголовков `X-Forwarded-For` / `Host` бесполезна
+- **Безопасный мобильный доступ** — при включении опционального режима доступа по локальной сети каждый API-маршрут требует секретный токен доступа; подделка заголовков `X-Forwarded-For` / `Host` бесполезна
 - **SSRF-фильтр** — ссылки для превью проверяются на сервере: приватные сети (127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, облачные метаданные 169.254.169.254), localhost-имена и DNS-адреса приватных диапазонов отклоняются, редиректы перепроверяются на каждом хопе
 - **Изоляция Electron** — `contextIsolation`, `sandbox`, без `nodeIntegration`; навигация за пределы origin приложения заблокирована; внешние ссылки открываются в системном браузере; превью работает в изолированном iframe без same-origin доступа
 - **Песочница терминала** — только белый список проверенных команд разработки; флаги-обходчики (`npx --package=...`) и lifecycle-скрипты отклоняются
